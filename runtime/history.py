@@ -99,16 +99,6 @@ class HistoryStore:
             },
         )
 
-    # --- cross-team-read log -----------------------------------------------
-
-    def log_cross_team_read(self, role_id: str, path: str, reason: str) -> str:
-        """Log a cross-team read (a role reading a sibling team directory in
-        the same department — the duplication-check purpose)."""
-        return self._append(
-            "cross_team_reads.jsonl",
-            {"role": role_id, "path": path, "reason": reason},
-        )
-
     # --- halt-event log ----------------------------------------------------
 
     def log_halt(self, department: str, scope: str, reason: str) -> str:

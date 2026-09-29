@@ -8,6 +8,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.pytest_tmp/
+.test_basetemp/
+pytest-cache-files-*/
 .mypy_cache/
 
 # generated state (audit trail, archives, runtime artifacts) — ignore the

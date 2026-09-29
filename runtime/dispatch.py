@@ -43,6 +43,9 @@ from runtime.pods import (
     form_pod,
     run_pod,
     write_decision_artifact,
+    write_transcripts,
+    senior_member,
+    chained_pod,
 )
 
 
@@ -173,6 +176,7 @@ def _check_pod_triggers(
     pods_out: Optional[List[Pod]],
     history: Optional[HistoryStore],
     artifacts_dir: str,
+    transcripts_dir: str = "pods/transcripts",
     starter_in_members: bool = True,
 ) -> None:
     """The pods A/B/C multi-trigger — form a pod when any trigger fires:
@@ -226,6 +230,9 @@ def _check_pod_triggers(
     except PodMembershipError:
         return
     run_pod(backend, pod)
+    # Write the pod's transcript (pods/transcripts/) + its decision artifact
+    # (pods/artifacts/).
+    write_transcripts(pod, transcripts_dir=transcripts_dir)
     base = write_decision_artifact(pod, artifacts_dir=artifacts_dir)
     if history is not None:
         history.log_decision(
@@ -235,6 +242,30 @@ def _check_pod_triggers(
         )
     if pods_out is not None:
         pods_out.append(pod)
+    # The most senior member shares the outcome up the line.
+    senior = senior_member(pod)
+    backend.invoke(
+        senior,
+        f"POD {pod.id} outcome to share up the line — decision: {pod.decision}. "
+        "Produce an upward report of the pod's decision.",
+    )
+    # Chained-pod escalation: the starter's boss forms a second pod carrying
+    # the first pod's decision artifact up the line (the §2.8 worked example).
+    boss_id = starter.reports_to
+    if boss_id and boss_id in roles:
+        boss = roles[boss_id]
+        try:
+            chained = chained_pod(
+                pod, roles, boss.id, [boss.id, starter.id],
+                f"escalation of {pod.topic}",
+                first_artifact_path=base + ".md",
+            )
+        except PodMembershipError:
+            chained = None
+        if chained is not None:
+            run_pod(backend, chained)
+            write_transcripts(chained, transcripts_dir=transcripts_dir)
+            write_decision_artifact(chained, artifacts_dir=artifacts_dir)
     # Seed the members' memory with the cross-team `pod:<id>` entry (what
     # `RoleMemory.cross_team()` filters on). A no-op for a plain stub.
     seed = getattr(backend, "seed_cross_team", None)

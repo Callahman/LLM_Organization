@@ -16,7 +16,7 @@ Token counting is a deterministic whitespace-token estimate (no model needed).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 
@@ -122,16 +122,3 @@ def bounded_assembly(
 
     parts = [agenda_text] + included
     return "\n".join(parts)
-
-
-def pod_context(
-    agenda: str,
-    prior_speakers: List[Tuple[str, str, str]],
-    budget_tokens: int = 4000,
-) -> str:
-    """An isolated pod context for the next speaker: the agenda + prior
-    speakers' outputs (each `(speaker_id, name, summary)`), bounded by
-    `budget_tokens`. This is how a pod conversation builds on itself without
-    spilling into other pods' contexts."""
-    summaries = [(f"{name} ({sid})", summary) for sid, name, summary in prior_speakers]
-    return bounded_assembly(agenda, summaries, budget_tokens=budget_tokens)

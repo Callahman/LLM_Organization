@@ -16,7 +16,6 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, Tuple
 
-from roles.base import validate_envelope
 from runtime.context import RoleMemory, assemble_prompt
 
 
@@ -84,13 +83,6 @@ class StubBackend(LLMBackend):
         self.calls.append((role.id, context))
         self.reasoning_log.append(reasoning)
         return self._next(role.id)
-
-
-def check_output(role, output: Dict[str, Any]) -> List[str]:
-    """Validate a backend output against the shared envelope. Returns a list
-    of problems (empty if valid). The session runtime uses this to drive
-    bounded retries on malformed output."""
-    return validate_envelope(output)
 
 
 class LLMTimeoutError(RuntimeError):

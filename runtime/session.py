@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from roles.base import Role, validate_envelope
-from runtime.llm import LLMBackend, MemoryBackend
+from runtime.llm import LLMBackend, MemoryBackend, TimeoutBackend
 from runtime.intake import run_intake, IntakeResult
 from runtime.mission import run_mission, MissionResult
 from runtime.org import OrgState, bootstrap
@@ -56,6 +56,11 @@ class Session:
         self.config = config or {}
         self.org = OrgState(history_dir=history_dir)
         self.history = HistoryStore(history_dir=history_dir)
+        # Bound the actual backend call: a per-invoke timeout (a visible
+        # LLMTimeoutError, never silent) guards the real LLM call.
+        timed = TimeoutBackend(
+            backend, timeout_seconds=self.config.get("timeout_seconds", 60.0)
+        )
         # Complexity routing: wrap the backend so every invoke is routed by
         # task complexity (complex -> thinking on, simple -> off) and bounded
         # by a per-session thinking budget.
@@ -63,7 +68,7 @@ class Session:
             max_high=self.config.get("thinking_budget", 10)
         )
         routing = RoutingBackend(
-            backend, self.thinking_budget, self.history
+            timed, self.thinking_budget, self.history
         )
         # Wrap with per-role isolated memory: each role's past conversations /
         # work are folded into its OWN prompt (and only its own), so reasoning
@@ -263,6 +268,7 @@ class Session:
             history=self.history,
             routing_rules=self.config.get("pod_routing_rules", []),
             artifacts_dir=self.config.get("pod_artifacts_dir", "pods/artifacts"),
+            transcripts_dir=self.config.get("pod_transcripts_dir", "pods/transcripts"),
         )
         self.phases.append(4)
 
@@ -365,6 +371,7 @@ class Session:
                 history=self.history,
                 routing_rules=self.config.get("pod_routing_rules", []),
                 artifacts_dir=self.config.get("pod_artifacts_dir", "pods/artifacts"),
+                transcripts_dir=self.config.get("pod_transcripts_dir", "pods/transcripts"),
             )
             self.phases.append(4)
 

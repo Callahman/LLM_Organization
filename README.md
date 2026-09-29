@@ -6,8 +6,8 @@ bounded pipeline of intake → mission → org bootstrap → execution → synth
 strict visibility/communication/pod invariants enforced by construction.
 
 The design is specified in `Organization_Outline.md`; the build is tracked in
-`EXECUTION_CHECKLIST.md`; the deployment steps (on your machine) are in
-`ROLLOUT_STEPS.md`.
+`EXECUTION_CHECKLIST.md`; the initial setup and deployment steps (on your
+machine) are in `SETUP.md`.
 
 ## The pipeline (Phases 1–6)
 
@@ -62,5 +62,5 @@ wired behind the same `LLMBackend` interface (see `SETUP.md`).
 
 ## Quick start
 
-See `ROLLOUT_STEPS.md` for the full deployment (git, venv, deps, tests) and
-`SETUP.md` for wiring a real LLM backend.
+See `SETUP.md` for the full deployment (git, venv, deps, tests) and for
+wiring a real LLM backend.

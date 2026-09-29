@@ -87,14 +87,6 @@ class Role:
 
     # --- Convenience -------------------------------------------------------
 
-    @property
-    def is_leader(self) -> bool:
-        return self.architype == "leader"
-
-    @property
-    def is_head(self) -> bool:
-        return self.architype == "department_head"
-
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -105,16 +97,6 @@ class Role:
 
 
 # --- Shared output envelope -------------------------------------------------
-
-def empty_envelope() -> Dict[str, Any]:
-    """A valid (empty) shared output envelope."""
-    return {
-        "summary": "",
-        "findings": [],
-        "recommendation": "",
-        "confidence": 0.0,
-    }
-
 
 def validate_envelope(output: Dict[str, Any]) -> List[str]:
     """Return a list of problems with a structured output (empty if valid).
