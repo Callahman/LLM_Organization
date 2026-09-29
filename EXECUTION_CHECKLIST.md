@@ -52,7 +52,7 @@ Note: Epics 1–2 run with only the Leader active; Epic 3 brings in HR; Epics
 
 ### Story 0.1 — Repository & environment
 
-- [ ] Create the repo (`git init`) — **needs shell** (see ROLLOUT_STEPS.md)
+- [x] Create the repo (`git init`) — **done in Run 8** (initial commit + the `.gitignore` marker fix)
 - [x] Add `.gitignore` (`.env`, `.venv/`, `__pycache__/`, `history/`, `archives/`, generated state)
 - [x] Add `.env.example` (confidence threshold, question budget, mission re-ask budget, pod size/rounds, direct-IC cap, context budget, history window, archive cap, LLM backend)
 - [x] Pin `requirements.txt`
@@ -466,7 +466,14 @@ Invariants checked against while working through the relevant epics:
 
   **Result: 70 passed, 0 failed** (66 original + 4 new). The Definitions of
   Done for Epics 0–8 are now ticked (their tests have been run and pass);
-  Epic 9's DoD (fresh deployment + unattended operation) remains open. Note:
-  `git init` / venv / `pip install` were not needed for this run (system
-  Python 3.11 + pytest 8.4.1 were already present); the repo is still not a
-  Git repository — see `ROLLOUT_STEPS.md` Step 1.
+  Epic 9's DoD (fresh deployment + unattended operation) remains open.
+
+  **Rollout Step 1 completed**: `git init` + initial commit (57 files).
+  **`.gitignore` bug found + fixed**: the `dir/` + `!**/.gitkeep` form never
+  tracked the state-dir markers (git cannot re-include a file inside an
+  excluded directory), so `history/`, `archives/`, `state/role_memory/`,
+  `pods/transcripts|artifacts/`, `reports/offloading|evaluation/` `.gitkeep`
+  files were silently untracked. Switched to `dir/*` + `!dir/.gitkeep` and
+  committed the 6 markers. Note: tests ran on the system Python 3.11 +
+  pytest 8.4.1 (no venv / `pip install` needed); the venv task remains open
+  as an environment preference.
