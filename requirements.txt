@@ -3,5 +3,5 @@
 python-dotenv>=1.0        # load .env (optional; code has defaults)
 pytest>=8.0               # test runner
 
-# A real LLM backend (Epic 1, later task) would add, e.g.:
+# A real LLM backend (a later task, see SETUP.md) would add, e.g.:
 # httpx>=0.27             # for an API client

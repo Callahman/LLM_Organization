@@ -45,8 +45,9 @@ here.
 Get-ChildItem
 ```
 
-You should see `README.md`, `SETUP.md`, `runtime/`, `org/`, `roles/`,
-`tests/`, `departments/`, `requirements.txt`, `.env.example`.
+You should see `README.md`, `SETUP.md`, `EXECUTION_CHECKLIST.md`,
+`Organization_Outline.md`, `MISSION.md`, `requirements.txt`, `.env.example`,
+and the `runtime/`, `org/`, `roles/`, `tests/`, `departments/` directories.
 
 ---
 
@@ -176,9 +177,11 @@ knob; the important ones:
 | `POD_MAX_ROUNDS` | `5` | Max deliberation rounds per pod |
 | `DIRECT_IC_CAP` | `3` | Max ICs a non-manager may have as direct reports |
 | `CONTEXT_BUDGET_TOKENS` | `4000` | Bounded-assembly token budget |
+| `ROLE_MEMORY_MAX_ENTRIES` | `20` | Max entries in a role's short-term memory |
 | `HISTORY_WINDOW_SESSIONS` | `50` | Rolling window before archiving |
 | `ARCHIVE_CAP_MB` | `1024` | Archive size cap (oldest deleted beyond this) |
 | `LLM_BACKEND` | `stub` | `stub` (offline) or `api` (real) |
+| `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` | (empty) | Credentials for a real backend (`LLM_BACKEND=api`) |
 
 ---
 
