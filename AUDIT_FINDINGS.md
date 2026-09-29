@@ -143,6 +143,56 @@ findings themselves are fully documented in this file regardless.
 
 ---
 
+## Secondary pass — repo cleanup review
+
+A second, **read-only** pass over the repo looking for code that can be deleted
+(unused or redundant), consolidated, or otherwise edited. **No edits were made**
+— this is a review. Findings are grouped by action.
+
+### A. Dead code — delete candidates (defined, never called — not even in tests)
+
+| Symbol | Location | Note |
+|---|---|---|
+| `check_output` | `runtime/llm.py:89` | Redundant pass-through around `validate_envelope`; never called. |
+| `empty_envelope` | `roles/base.py:109` | Never called. |
+| `pod_context` | `runtime/context.py:127` | Redundant with `pods._pod_ctx`; never called. |
+| `log_cross_team_read` | `runtime/history.py:104` | Never invoked — **cross-team reads are never actually logged** (outline §2.4 requires the audit trail). |
+| `Role.is_leader` (property) | `roles/base.py:91` | Never used — the code calls `tiers.is_leader(role)` instead. |
+| `Role.is_head` (property) | `roles/base.py:95` | Never used — the code calls `tiers.is_head(role)` instead. |
+
+### B. Built + tested but **not wired into the pipeline** (gaps)
+
+These capabilities exist and are unit-tested, but the dispatch/session never call
+them — so the pipeline does not actually exercise them. The checklist marks the
+corresponding behaviors as done; the gap is that they are not wired in.
+
+| Symbol | Location | What the pipeline is missing |
+|---|---|---|
+| `TimeoutBackend` | `runtime/llm.py:101` | The per-invoke timeout guard is **not active in the session** (the session wraps `RoutingBackend` + `MemoryBackend` only). Epic 9.1 "Timeouts" is built + tested but not wired in. |
+| `chained_pod` | `runtime/pods.py:77` | The chained-pod escalation (§2.8 worked example) is **not used by the dispatch** (it calls `form_pod` directly). Epic 5.4 is built + tested but not wired in. |
+| `senior_member` | `runtime/pods.py:101` | The "senior member shares the outcome up the line" (§2.8) is **not used by the dispatch**. Epic 5.2 is built + tested but not wired in. |
+| `write_transcripts` | `runtime/pods.py:180` | Pod **transcripts** (`pods/transcripts/`) are **never written in the pipeline** — the dispatch calls `write_decision_artifact` only. Epic 5.3 + the Epic 5 DoD ("both transcripts + artifacts land in `pods/transcripts/` and `pods/artifacts/`") are only half-realized: artifacts yes, transcripts no. |
+
+### C. Consolidation opportunities
+
+- `pod_context` (`runtime/context.py`) and `_pod_ctx` (`runtime/pods.py`) are both
+  pod-context builders; one is dead (A). Consolidate to a single builder.
+- `check_output` (`runtime/llm.py`) and `validate_envelope` (`roles/base.py`) —
+  `check_output` is a redundant pass-through; delete it (A).
+- `Role.is_leader` / `Role.is_head` (properties) duplicate `tiers.is_leader` /
+  `tiers.is_head`; pick one canonical location (A).
+
+### D. Notes
+
+- **No redundant files**: every module (`roles/`, `org/`, `runtime/`) is used;
+  the layout is clean. There are no files that are purely redundant.
+- The dead code in A and the gaps in B are the main cleanup targets. Deleting A
+  is safe (nothing references them). Closing B requires wiring the tested
+  capabilities into the dispatch/session (or removing them if they are not
+  intended to be part of the pipeline).
+
+---
+
 ## Concluded to-do list
 
 **Done in this audit**
