@@ -10,14 +10,21 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# generated state (audit trail, archives, runtime artifacts)
-history/
-archives/
-state/role_memory/
-pods/transcripts/
-pods/artifacts/
-reports/offloading/
-reports/evaluation/
-
-# keep the directory markers
-!**/.gitkeep
+# generated state (audit trail, archives, runtime artifacts) — ignore the
+# contents, keep the directory markers. (A `dir/` pattern excludes the whole
+# directory, so a `!**/.gitkeep` re-include inside it would never apply; the
+# `dir/*` + `!dir/.gitkeep` form is required.)
+history/*
+!history/.gitkeep
+archives/*
+!archives/.gitkeep
+state/role_memory/*
+!state/role_memory/.gitkeep
+pods/transcripts/*
+!pods/transcripts/.gitkeep
+pods/artifacts/*
+!pods/artifacts/.gitkeep
+reports/offloading/*
+!reports/offloading/.gitkeep
+reports/evaluation/*
+!reports/evaluation/.gitkeep
