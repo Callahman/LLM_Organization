@@ -259,6 +259,23 @@ session = Session(backend=backend, leader=make_leader(),
 
 > This is a later task — the offline tests do not require it.
 
+### The permission layer (self-mod)
+
+When the agents gain the ability to edit their own code (a later task), their
+writes must go through `runtime/permissions.write_file(role, path, content)`.
+That module enforces three invariants, each covered by `tests/test_permissions.py`:
+
+- **Sandbox** — a path that resolves outside the workspace (e.g. `..` or a
+  symlink escape) is refused, so an agent cannot break out of
+  `D:\LLM\LLM_Organization`.
+- **Mission lock** — `MISSION.md` is writable only by the `leader`.
+- **Meta-rule lock** — the permission module itself (plus `org/tiers.py` and
+  `roles/base.py`, which encode the org invariants and the role contract) is
+  read-only for *every* role, including the leader. An agent can never edit the
+  rules that bound it.
+
+Everything else follows the normal scoping (department policy, team dirs).
+
 ---
 
 ## Step 6 — First commit

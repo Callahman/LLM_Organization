@@ -18,6 +18,9 @@ The interface + a worked example are in `SETUP.md` ("The LLM backend").
 - [ ] Implement `LLMBackend.invoke` (call your model, return the shared output
       envelope) and select it where the `Session` is constructed.
 - [ ] Set `LLM_BACKEND=api` in `.env` (plus the model's `base_url` / `api_key`).
+- [ ] Route the agents' code edits through `runtime/permissions.write_file`
+      (the permission layer enforces the workspace sandbox, the mission lock,
+      and the meta-rule lock - see `tests/test_permissions.py`).
 - [ ] Hand-run a deliberately vague intake against the real model and confirm
       the clarifying Q&A loop resolves it - confidence climbs across rounds,
       the mission is approved, the org bootstraps, and the work flows up.
