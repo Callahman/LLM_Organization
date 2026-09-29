@@ -1,0 +1,23 @@
+# environment
+.env
+.venv/
+venv/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# generated state (audit trail, archives, runtime artifacts)
+history/
+archives/
+state/role_memory/
+pods/transcripts/
+pods/artifacts/
+reports/offloading/
+reports/evaluation/
+
+# keep the directory markers
+!**/.gitkeep

@@ -1,0 +1,97 @@
+"""Unit tests for `runtime/dispatch.py` — Phase 4 top-down dispatch (Epic 4).
+
+The leader decomposes the mission into department objectives -> department
+heads into team objectives -> managers into IC tasks -> ICs do the work in
+their team directories. Work propagates **up** in structured reports (bounded
+summaries + artifact pointers); no tier is skipped.
+"""
+
+from roles.base import Role
+from roles.leader import make_leader
+from runtime.llm import StubBackend
+from runtime.org import OrgState
+from runtime.dispatch import dispatch, mission_digest
+
+
+def _role(rid, architype, department="", team="", reports_to=None):
+    return Role(id=rid, architype=architype, department=department, team=team,
+                reports_to=reports_to)
+
+
+def _org():
+    """A full chain: leader -> head (analytics) -> manager (pipelines) -> IC."""
+    org = OrgState(history_dir="history")
+    leader = make_leader()
+    head = _role("head_analytics", "department_head", "analytics")
+    mgr = _role("mgr1", "manager", "analytics", "pipelines", "head_analytics")
+    ic = _role("ic1", "ic", "analytics", "pipelines", "mgr1")
+    for r in (leader, head, mgr, ic):
+        org.add_role(r)
+    return org, leader, head, mgr, ic
+
+
+def test_dispatch_propagates_up(tmp_path):
+    org, leader, head, mgr, ic = _org()
+    backend = StubBackend()
+    backend.set_script("leader", [
+        {"decomposition": {"department_objectives": [
+            {"head_id": "head_analytics", "objective": "build the pipeline"},
+        ]}},
+    ])
+    backend.set_script("head_analytics", [
+        {"decomposition": {"team_objectives": [
+            {"manager_id": "mgr1", "objective": "build the ETL"},
+        ]}},
+    ])
+    backend.set_script("mgr1", [
+        {"decomposition": {"ic_tasks": [
+            {"ic_id": "ic1", "task": "write the extractor"},
+        ]}},
+    ])
+    backend.set_script("ic1", [
+        {"summary": "extractor done",
+         "work_path": "departments/analytics/pipelines/extractor.md"},
+    ])
+
+    mission = {"purpose": "a data pipeline", "success_criteria": ["works"],
+               "scope": ["ETL"]}
+    reports = dispatch(backend, org, leader, mission)
+
+    # The leader's view: one department report, carrying a **bounded** chain up
+    # (each level reports a bounded summary of the level below; the leader
+    # never sees the full work, only summaries + pointers).
+    assert len(reports) == 1
+    assert reports[0]["head"] == "head_analytics"
+    dept = reports[0]["report"]
+    assert dept["from"] == "head_analytics"
+    # The department report carries the team report (from the manager) as a
+    # bounded {from, summary}.
+    team = dept["children"][0]
+    assert team["from"] == "mgr1"
+    # The manager's report carries a bounded summary of the IC work below it.
+    assert "unit(s) reported up" in team["summary"]
+
+
+def test_dispatch_skips_missing_roles(tmp_path):
+    # A department objective that references a head not in the org is skipped
+    # (no tier is fabricated).
+    org, leader, head, mgr, ic = _org()
+    backend = StubBackend()
+    backend.set_script("leader", [
+        {"decomposition": {"department_objectives": [
+            {"head_id": "ghost_head", "objective": "nobody owns this"},
+        ]}},
+    ])
+    reports = dispatch(backend, org, leader, {"purpose": "x"})
+    assert reports == []
+
+
+def test_mission_digest_is_bounded():
+    mission = {"purpose": "a pipeline", "success_criteria": ["works", "fast"],
+               "scope": ["ETL"], "constraints": ["no new deps"]}
+    digest = mission_digest(mission)
+    # The digest includes purpose + success criteria + scope (bounded), not the
+    # full markdown.
+    assert "a pipeline" in digest
+    assert "works" in digest
+    assert "ETL" in digest
