@@ -7,7 +7,11 @@ set KOBOLD_PORT=5001
 set ORG_DIR=D:\LLM\LLM_Organization
 
 echo Starting KoboldCpp server...
-start "KoboldCpp Server" cmd /k "cd /d %KOBOLDCPP_DIR% && koboldcpp.exe --model ""%MODEL_PATH%"" --usecublas --gpulayers 99 --contextsize 100000 --flashattention --quantkv q4_0 --jinja --jinjatools --port %KOBOLD_PORT%"
+REM Launch koboldcpp.exe directly (start /d sets the working directory). No
+REM cmd /k wrapper and no nested quotes: a nested-quoted start line corrupts
+REM cmd's batch-file position tracking, which makes the "goto waitloop" below
+REM fail with "The system cannot find the batch label specified".
+start "KoboldCpp Server" /d %KOBOLDCPP_DIR% koboldcpp.exe --model %MODEL_PATH% --usecublas --gpulayers 99 --contextsize 100000 --flashattention --quantkv q4_0 --jinja --jinjatools --port %KOBOLD_PORT%
 
 echo Waiting for the model to finish loading...
 :waitloop
