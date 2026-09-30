@@ -25,7 +25,11 @@ echo Starting the observability dashboard (http://127.0.0.1:8090)...
 start "Observability Dashboard" cmd /k "cd /d %ORG_DIR% && python observability\dashboard.py --port 8090"
 timeout /t 2 >nul
 
-python run_session.py
+REM === The pipeline runs in THIS window, so you can interact with it ===
+REM --interactive prompts you at the Leader's clarifying questions and the
+REM mission approval. To run unattended (auto-answer / auto-approve), remove
+REM the --interactive flag.
+python run_session.py --interactive
 
 echo.
 echo Organization run ended. The KoboldCpp server window is still running separately.

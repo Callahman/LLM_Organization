@@ -10,6 +10,10 @@
 
 let state = null;
 const $ = (id) => document.getElementById(id);
+// expanded pod ids — survives the 1-second re-render (the pod list is
+// rebuilt on every SSE push, so the open state must be tracked here or the
+// <details> dropdowns would collapse on every tick).
+const expandedPods = new Set();
 
 function setStatus(text, live) {
   const el = $('status');
@@ -298,6 +302,11 @@ function renderPodList() {
   for (const p of closed.slice(-10).reverse()) {
     const li = document.createElement('li');
     const det = document.createElement('details');
+    det.open = expandedPods.has(p.id);
+    det.addEventListener('toggle', () => {
+      if (det.open) expandedPods.add(p.id);
+      else expandedPods.delete(p.id);
+    });
     const sum = document.createElement('summary');
     const closeE = p.entries.find((e) => e.kind === 'close');
     sum.textContent = 'pod ' + p.id

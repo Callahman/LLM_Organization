@@ -58,11 +58,17 @@ class OpenAIBackend(LLMBackend):
     """
 
     def __init__(self, model: str, base_url: str, api_key: str = "",
-                 structured: str = "tools"):
+                 structured: str = "tools", max_tokens: int = 8192):
         self.model = model
         self.base_url = (base_url or "").rstrip("/")
         self.api_key = api_key or "not-needed"
         self.structured = (structured or "tools").strip().lower()
+        # Generation budget for the model's reply. Must be large enough for
+        # the model's chain-of-thought **plus** the submit_output tool call —
+        # a too-small cap truncates the tool call's JSON mid-string (an
+        # "Unterminated string" parse error). KoboldCpp's server-side default
+        # is 2048, which is too small for a thinking model; 8192 is safe.
+        self.max_tokens = int(max_tokens or 8192)
         # Optional per-call stats callback (observability): called with
         # ``{ts, role, mode, outcome, error, latency}`` after every invoke.
         # The pipeline wires it to ``history/tool_calls.jsonl``; it must
@@ -91,6 +97,7 @@ class OpenAIBackend(LLMBackend):
         if self.structured == "json":
             return {
                 "model": self.model,
+                "max_tokens": self.max_tokens,
                 "response_format": {"type": "json_object"},
                 "messages": [
                     {"role": "system",
@@ -102,6 +109,7 @@ class OpenAIBackend(LLMBackend):
             }
         return {
             "model": self.model,
+            "max_tokens": self.max_tokens,
             "tools": [self._tool_for(role)],
             "tool_choice": {"type": "function",
                             "function": {"name": TOOL_NAME}},
@@ -210,7 +218,8 @@ def make_backend() -> LLMBackend:
     ``LLM_BACKEND=stub`` (default) -> offline ``StubBackend``.
     ``LLM_BACKEND=api`` -> ``OpenAIBackend`` from ``LLM_MODEL`` /
     ``LLM_BASE_URL`` / ``LLM_API_KEY`` (structured-output mode from
-    ``LLM_STRUCTURED``: ``tools`` (default) or ``json``).
+    ``LLM_STRUCTURED``: ``tools`` (default) or ``json``; generation budget
+    from ``LLM_MAX_TOKENS``: default ``8192``).
     """
     kind = os.getenv("LLM_BACKEND", "stub").strip().lower()
     if kind == "api":
@@ -219,5 +228,6 @@ def make_backend() -> LLMBackend:
             base_url=os.getenv("LLM_BASE_URL", ""),
             api_key=os.getenv("LLM_API_KEY", ""),
             structured=os.getenv("LLM_STRUCTURED", "tools"),
+            max_tokens=os.getenv("LLM_MAX_TOKENS", "8192"),
         )
     return StubBackend()

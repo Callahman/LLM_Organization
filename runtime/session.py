@@ -318,11 +318,14 @@ class Session:
 
     def _phase(self, phase: int, cycle: int, fn, *args, **kwargs):
         """Run one phase and record its duration to ``history/cycles.jsonl``
-        (the dashboard's "uptime per iteration" metric)."""
+        (the dashboard's "uptime per iteration" metric). The duration is
+        logged even if the phase fails (a visible, measurable crash), and the
+        original exception still propagates."""
         started = time.time()
-        result = fn(*args, **kwargs)
-        self.history.log_cycle(phase, cycle, started, time.time())
-        return result
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            self.history.log_cycle(phase, cycle, started, time.time())
 
     def run(
         self,

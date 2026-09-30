@@ -181,6 +181,7 @@ knob; the important ones:
 | `LLM_BACKEND` | `stub` (code) / `api` (`.env.example`) | `api` (real — the shipped default) or `stub` (offline) |
 | `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` | (empty) | Credentials for a real backend (`LLM_BACKEND=api`) |
 | `LLM_STRUCTURED` | `tools` | api backend's structured-output mode: `tools` (tool calls) or `json` (`json_object`) |
+| `LLM_MAX_TOKENS` | `8192` | api backend's reply budget (the model's thinking **plus** the tool call); `2048` (KoboldCpp's server default) truncates a thinking model's tool call |
 
 ---
 
@@ -217,7 +218,11 @@ Two implementations ship in the repo:
   tool's JSON arguments — the path that needs the server's tool-call support
   (KoboldCpp's `--jinja --jinjatools`, which `run_org.bat` passes). Set
   `LLM_STRUCTURED=json` for the legacy `response_format: json_object`
-  request on servers without tool support.
+  request on servers without tool support. The reply budget is
+  `LLM_MAX_TOKENS` (default `8192`): it must cover the model's chain-of-thought
+  **plus** the `submit_output` tool call — KoboldCpp's server-side default of
+  `2048` truncates a thinking model's tool call mid-JSON (an "Unterminated
+  string" parse error).
 - **`StubBackend`** (`LLM_BACKEND=stub`) — the offline fallback:
   deterministic, scripted per role. Every loop/budget/schema check runs
   without a live model. This is what the tests use; set
@@ -333,7 +338,16 @@ Two entry points ship in the repo; the shipped `.env` default
 2. **Observability dashboard** — `python observability\dashboard.py
    --port 8090` (read-only, stdlib-only); watch it at
    `http://127.0.0.1:8090`.
-3. **The pipeline** — `python run_session.py` against the live model.
+3. **The pipeline** — `python run_session.py --interactive` in the batch
+   file's own window, so you can interact with it.
+
+The pipeline runs **interactively** by default: it prompts you at the two
+user-facing gates — the Leader's clarifying questions (intake) and the
+mission approval (it prints the proposed `MISSION.md` draft; answer `y` to
+approve, `n` to reject with feedback). HR resourcing is internal and
+auto-approved (watch it on the dashboard). To run **unattended** instead
+(auto-answer / auto-approve, a bounded smoke run), remove the `--interactive`
+flag from `run_org.bat`, or run `python run_session.py` directly.
 
 Adjust the paths at the top of the file for your setup (model path, port,
 directories):
@@ -353,8 +367,7 @@ the files the dashboard tails. The KoboldCpp server and dashboard windows
 stay open afterwards.
 
 **What to look for:** a clean completion (or a visible verdict/escalation)
-with no exceptions, and live data on the dashboard. To skip the batch file,
-start the server yourself and run `python run_session.py` directly.
+with no exceptions, and live data on the dashboard.
 
 ### Offline smoke run (no model needed)
 
@@ -384,6 +397,7 @@ with no exceptions.
 | `pytest` not found | The venv isn't active (no `( .venv )` prefix). Re-run `.venv\Scripts\Activate.ps1`. |
 | A test fails | Read the assertion diff; the failure is deterministic and points at one branch in `runtime/` or `org/`. Fix and re-run. |
 | `run_session.py` fails with a connection error | The local KoboldCpp server isn't running (the shipped `.env` says `LLM_BACKEND=api`). Use `run_org.bat` (starts the server), start `koboldcpp.exe` manually on port 5001 with `--jinja --jinjatools`, or set `LLM_BACKEND=stub` for offline. |
+| `OpenAIOutputError: submit_output arguments are not valid JSON` (an "Unterminated string") | The model's reply hit the generation cap and its `submit_output` tool call was truncated mid-JSON. Raise `LLM_MAX_TOKENS` in `.env` (default `8192`; KoboldCpp's server-side default is `2048`, too small for a thinking model). |
 
 ---
 
@@ -396,10 +410,11 @@ When you're finished, you should have:
 3. `pytest -v` reporting **all tests passed, 0 failed**.
 4. An initial commit in `git log`.
 5. A smoke run **against the real model** (the shipped default:
-   `LLM_BACKEND=api` in `.env`): `run_org.bat` (or `python run_session.py`
-   with the local server up) completing one bounded end-to-end cycle, with
-   the observability dashboard live at `http://127.0.0.1:8090` showing
-   agents, edits, tool calls, cycles, and the active pod.
+   `LLM_BACKEND=api` in `.env`): `run_org.bat` (interactive — it prompts at
+   the Leader's clarifying questions and the mission approval) completing
+   one bounded end-to-end cycle, with the observability dashboard live at
+   `http://127.0.0.1:8090` showing agents, edits, tool calls, cycles, and
+   the active pod.
 6. (Offline fallback) `LLM_BACKEND=stub` set in `.env` and
    `python run_session.py` completing the same cycle without a live model.
 
