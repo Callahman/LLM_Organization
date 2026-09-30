@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from org import tiers
 from roles.base import Role
@@ -122,7 +122,8 @@ def _pod_ctx(pod: Pod, kind: str, prior: str = "") -> str:
     return "\n".join(parts)
 
 
-def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3) -> Pod:
+def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
+            transcripts_dir: Optional[str] = None) -> Pod:
     """Run a pod's conversation:
 
     1. the **starter** sets the agenda (it manages the conversation);
@@ -130,6 +131,10 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3) -> Pod:
        is a **deadlock** and closes the pod; a round with **disagreement**
        (conflicting recommendations) uses "thinking" (HIGH);
     3. the **starter** always closes, producing the decision.
+
+    When ``transcripts_dir`` is given, the transcript file is (re)written
+    after the agenda and after each deliberation round, so the file grows
+    **live** (the observability dashboard tails it for the active-pod view).
     """
     # 1. The starter sets the agenda.
     out = backend.invoke(pod.starter, _pod_ctx(pod, "agenda"))
@@ -138,6 +143,8 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3) -> Pod:
         "kind": "agenda", "role": pod.starter.id,
         "summary": str(out.get("summary", "")),
     })
+    if transcripts_dir:
+        write_transcripts(pod, transcripts_dir)
 
     # 2. Deliberation rounds (deadlock detection + disagreement routing).
     prev: List[tuple] | None = None
@@ -157,6 +164,8 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3) -> Pod:
                 "summary": summary, "output": out,
             })
         pod.rounds = round
+        if transcripts_dir:
+            write_transcripts(pod, transcripts_dir)
         if prev is not None and this_round == prev:
             pod.closed_reason = "deadlock: no progress between rounds"
             break

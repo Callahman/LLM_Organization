@@ -17,6 +17,7 @@ drives the pipeline, and applies:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -56,6 +57,11 @@ class Session:
         self.config = config or {}
         self.org = OrgState(history_dir=history_dir)
         self.history = HistoryStore(history_dir=history_dir)
+        # Tool-call observability: if the raw backend supports per-call stats
+        # (OpenAIBackend), record each call's outcome to
+        # history/tool_calls.jsonl (the dashboard's "tool calls" metric).
+        if hasattr(backend, "on_call"):
+            backend.on_call = self.history.log_tool_call
         # Bound the actual backend call: a per-invoke timeout (a visible
         # LLMTimeoutError, never silent) guards the real LLM call.
         timed = TimeoutBackend(
@@ -226,7 +232,7 @@ class Session:
         self.phases = []
 
         # --- Phase 1: intake ---
-        intake = run_intake(
+        intake = self._phase(1, self.cycles, run_intake,
             self.backend,
             self.leader,
             initial_prompt,
@@ -238,7 +244,7 @@ class Session:
         self.phases.append(1)
 
         # --- Phase 2: mission (permission flow) ---
-        mission = run_mission(
+        mission = self._phase(2, self.cycles, run_mission,
             self.backend,
             self.leader,
             intake,
@@ -252,7 +258,8 @@ class Session:
         mission_draft = mission.edits[-1]["draft"]
 
         # --- Phase 3: org bootstrap + resourcing ---
-        bootstrap(self.org, self.backend, self.leader, mission, approver_fn)
+        self._phase(3, self.cycles, bootstrap,
+            self.org, self.backend, self.leader, mission, approver_fn)
         self.org.write_events()
         self.phases.append(3)
 
@@ -261,7 +268,7 @@ class Session:
         # onto (the full heads->managers->ICs chain). Pods A/B/C form as an
         # add-on; the formed pods accumulate in `self.pods` so their decisions
         # carry up to the leader's Phase 5 synthesis.
-        dispatch_results = dispatch.dispatch(
+        dispatch_results = self._phase(4, self.cycles, dispatch.dispatch,
             self.backend, self.org, self.leader, mission_draft,
             approver_fn=approver_fn,
             pods_out=self.pods,
@@ -282,11 +289,11 @@ class Session:
                 self.queue_user_input({"kind": "safety_morality_halt", **halt})
 
         # --- Phase 5: synthesis ---
-        verdict = self._synthesis()
+        verdict = self._phase(5, self.cycles, self._synthesis)
         self.phases.append(5)
 
         # --- Phase 6: evaluation + continue/complete ---
-        evaluation, status = self._evaluate(
+        evaluation, status = self._phase(6, self.cycles, self._evaluate,
             intake, mission, dispatch_results, verdict, max_iterations
         )
         self.phases.append(6)
@@ -309,6 +316,14 @@ class Session:
 
     # --- The self-improving loop (bounded) ---------------------------------
 
+    def _phase(self, phase: int, cycle: int, fn, *args, **kwargs):
+        """Run one phase and record its duration to ``history/cycles.jsonl``
+        (the dashboard's "uptime per iteration" metric)."""
+        started = time.time()
+        result = fn(*args, **kwargs)
+        self.history.log_cycle(phase, cycle, started, time.time())
+        return result
+
     def run(
         self,
         initial_prompt: str,
@@ -328,7 +343,7 @@ class Session:
         self.cycles = 0
 
         # --- Phase 1: intake (once) ---
-        intake = run_intake(
+        intake = self._phase(1, 0, run_intake,
             self.backend, self.leader, initial_prompt, user_answer_fn,
             confidence_threshold=self.config.get("confidence_threshold", 0.8),
             question_budget=self.config.get("question_budget", 5),
@@ -337,7 +352,7 @@ class Session:
         self.phases.append(1)
 
         # --- Phase 2: mission (once) ---
-        mission = run_mission(
+        mission = self._phase(2, 0, run_mission,
             self.backend, self.leader, intake, user_permission_fn,
             history_dir=self.org.history_dir,
             reask_budget=self.config.get("mission_reask_budget", 3),
@@ -348,7 +363,8 @@ class Session:
         mission_draft = mission.edits[-1]["draft"]
 
         # --- Phase 3: org bootstrap (once) ---
-        bootstrap(self.org, self.backend, self.leader, mission, approver_fn)
+        self._phase(3, 0, bootstrap,
+            self.org, self.backend, self.leader, mission, approver_fn)
         self.org.write_events()
         self.phases.append(3)
 
@@ -364,7 +380,7 @@ class Session:
             # A/B/C form as an add-on; the formed pods accumulate in
             # `self.pods` so their decisions carry up to the leader's
             # Phase 5 synthesis.
-            dispatch_results = dispatch.dispatch(
+            dispatch_results = self._phase(4, self.cycles, dispatch.dispatch,
                 self.backend, self.org, self.leader, mission_draft,
                 approver_fn=approver_fn,
                 pods_out=self.pods,
@@ -383,11 +399,11 @@ class Session:
                     self.queue_user_input({"kind": "safety_morality_halt", **halt})
 
             # Phase 5: synthesis.
-            verdict = self._synthesis()
+            verdict = self._phase(5, self.cycles, self._synthesis)
             self.phases.append(5)
 
             # Phase 6: evaluation (decides continue / stop).
-            evaluation, status = self._evaluate(
+            evaluation, status = self._phase(6, self.cycles, self._evaluate,
                 intake, mission, dispatch_results, verdict, max_iterations
             )
             self.phases.append(6)

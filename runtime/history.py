@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 
@@ -97,6 +98,34 @@ class HistoryStore:
                 "mission_section": mission_section,
                 "outcome": outcome,
             },
+        )
+
+    # --- observability logs (tiled by the dashboard; the org never reads them)
+
+    def log_code_edit(self, role_id: str, path: str, ok: bool,
+                      error: str = "") -> str:
+        """Record one agent self-edit result (``history/code_edits.jsonl``) —
+        the source for the "code edited over time" metric."""
+        return self._append(
+            "code_edits.jsonl",
+            {"ts": time.time(), "role": role_id, "path": path,
+             "ok": bool(ok), "error": error},
+        )
+
+    def log_tool_call(self, stat: Dict[str, Any]) -> str:
+        """Record one backend call's stats (``history/tool_calls.jsonl``) —
+        ``{ts, role, mode, outcome, error, latency}``; the source for the
+        "tool calls over time" metric."""
+        return self._append("tool_calls.jsonl", dict(stat))
+
+    def log_cycle(self, phase: int, cycle: int, started: float,
+                  ended: float) -> str:
+        """Record one phase's duration (``history/cycles.jsonl``) — the source
+        for the "uptime per iteration" metric."""
+        return self._append(
+            "cycles.jsonl",
+            {"ts": ended, "phase": phase, "cycle": cycle,
+             "started": started, "duration": round(ended - started, 3)},
         )
 
     # --- halt-event log ----------------------------------------------------

@@ -13,14 +13,20 @@ only what still needs to be done.
 ## 1. A real LLM backend
 
 Drive the Organization with a live model instead of the offline `StubBackend`.
-The interface + a worked example are in `SETUP.md` ("The LLM backend").
+The interface + wiring are in `SETUP.md` ("The LLM backend").
 
-- [ ] Implement `LLMBackend.invoke` (call your model, return the shared output
-      envelope) and select it where the `Session` is constructed.
-- [ ] Set `LLM_BACKEND=api` in `.env` (plus the model's `base_url` / `api_key`).
-- [ ] Route the agents' code edits through `runtime/permissions.write_file`
-      (the permission layer enforces the workspace sandbox, the mission lock,
-      and the meta-rule lock - see `tests/test_permissions.py`).
+- [x] Implement `LLMBackend.invoke` (call your model, return the shared output
+      envelope) and select it where the `Session` is constructed - done:
+      `runtime/llm_api.py` ships `OpenAIBackend` (OpenAI-compatible endpoint)
+      + `make_backend()` (env-selected), and `run_session.py` builds the
+      `Session` with it.
+- [x] Route the agents' code edits through `runtime/permissions.write_file`
+      - done: the dispatch loop applies self-edits via
+      `permissions.apply_code_edits` (each edit gated by `write_file`; the
+      permission layer enforces the workspace sandbox, the mission lock, and
+      the meta-rule lock - see `tests/test_permissions.py`).
+- [ ] Set `LLM_BACKEND=api` in `.env` (plus `LLM_MODEL` / `LLM_BASE_URL` /
+      `LLM_API_KEY`) and run `python run_session.py` (or `run_org.bat`).
 - [ ] Hand-run a deliberately vague intake against the real model and confirm
       the clarifying Q&A loop resolves it - confidence climbs across rounds,
       the mission is approved, the org bootstraps, and the work flows up.

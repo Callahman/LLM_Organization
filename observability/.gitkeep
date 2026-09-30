@@ -1,0 +1,2 @@
+# observability/ — operator-owned, read-only for all agent roles.
+# Locked in runtime/permissions.py (can_edit refuses every path under here).

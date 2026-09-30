@@ -75,7 +75,8 @@ def _rel(path: str) -> str:
 def can_edit(role, path: str) -> bool:
     """True if *role* may write *path*.
 
-    Enforces, in order: the mission lock, the meta-rule lock, department-policy
+    Enforces, in order: the observability lock (operator-owned, read-only for
+    every role), the mission lock, the meta-rule lock, department-policy
     ownership, department/team scoping, and org-tooling self-mod.
     """
     try:
@@ -83,16 +84,21 @@ def can_edit(role, path: str) -> bool:
     except PermissionError:
         return False
     rel = _rel(path)
-    # 1. Mission: only the leader may write it (and only via the user-approval
+    parts = rel.split(os.sep)
+    # 1. Observability: operator-owned analytics — read-only for every role.
+    #    Agents can never write into observability/; the dashboard process
+    #    is an operator tool, not an agent.
+    if parts and parts[0] == "observability":
+        return False
+    # 2. Mission: only the leader may write it (and only via the user-approval
     #    path, a separate check). No role may edit this rule.
     if rel == "MISSION.md":
         return role.architype == "leader"
-    # 2. Meta-rules: read-only for every role (the rules themselves).
+    # 3. Meta-rules: read-only for every role (the rules themselves).
     if rel in PROTECTED:
         return False
-    # 3. Department policy: only the owning department head.
+    # 4. Department policy: only the owning department head.
     #    e.g. departments/engineering/ENGINEERING_POLICY.md
-    parts = rel.split(os.sep)
     if parts and parts[0] == "departments" and len(parts) >= 3:
         dept = parts[1]
         if parts[2].endswith("_POLICY.md"):
@@ -100,9 +106,9 @@ def can_edit(role, path: str) -> bool:
                 role.architype == "department_head"
                 and role.department == dept
             )
-        # 4. Team dirs / work files: only roles in that department.
+        # 5. Team dirs / work files: only roles in that department.
         return role.department == dept
-    # 5. Org tooling: self-mod via the gated loop (any active role).
+    # 6. Org tooling: self-mod via the gated loop (any active role).
     if parts and parts[0] in TOOLING:
         return role.status == "active"
     return False

@@ -1,0 +1,135 @@
+/* Organization observability dashboard — dark theme. */
+
+:root {
+  --bg: #0f1420;
+  --card: #161d2e;
+  --border: #232c44;
+  --text: #d7deee;
+  --muted: #9aa5bd;
+  --accent: #4cc9f0;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 14px 20px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+
+.status {
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 2px 10px;
+}
+
+.status.live { color: #80ed99; border-color: #2c4a3a; }
+
+main { padding: 16px 20px 30px; }
+
+.charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.monitor {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+canvas {
+  width: 100%;
+  height: 220px;
+  display: block;
+}
+
+.pod-live {
+  height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.pod-live.busy { color: var(--text); border-color: #2c4a5a; }
+
+.pod-head {
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.pod-entry { white-space: pre-wrap; word-break: break-word; }
+
+.pod-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  height: 260px;
+  overflow-y: auto;
+}
+
+.pod-list li {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+
+.pod-list summary {
+  cursor: pointer;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pod-body {
+  padding: 4px 10px 8px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+@media (max-width: 900px) {
+  .charts, .monitor { grid-template-columns: 1fr; }
+}

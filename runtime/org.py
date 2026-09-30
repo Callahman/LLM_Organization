@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from roles.base import Role
@@ -76,7 +77,7 @@ class OrgState:
                   detail: Optional[Dict[str, Any]] = None) -> None:
         self.events.append(
             {"kind": kind, "initiator": initiator, "target": target,
-             "detail": detail or {}}
+             "detail": detail or {}, "ts": time.time()}
         )
 
     def write_events(self) -> str:
@@ -248,7 +249,8 @@ def bootstrap(
         org.add_role(head)
         _create_department_dirs(head, departments_dir)
         org.log_event("bootstrapped", leader.id, head.id,
-                      {"required": head.is_required})
+                      {"required": head.is_required,
+                       "department": head.department})
         created.append(head)
 
     # Required departments are always spun up (and cannot be fired).
@@ -281,7 +283,8 @@ def hire(
         _create_department_dirs(new_role, departments_dir)
     _create_team_dir(new_role, departments_dir)
     org.log_event("hired", initiator.id, new_role.id,
-                  {"approver": approver_type, "def_key": def_key})
+                  {"approver": approver_type, "def_key": def_key,
+                   "department": new_role.department})
     return new_role
 
 
@@ -339,7 +342,8 @@ def fire(
     plan = _offload(org, target, departments_dir)
     org.mark_inactive(target_id)
     org.log_event("fired", initiator.id, target_id,
-                  {"approver": approver_type, "offloading": plan})
+                  {"approver": approver_type, "offloading": plan,
+                   "department": target.department})
     return plan
 
 

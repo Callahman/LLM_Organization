@@ -27,6 +27,21 @@ def make_role(architype, department="", team="", status="active"):
     )
 
 
+# --- OBSERVABILITY -----------------------------------------------------------
+
+def test_observability_locked_for_every_role():
+    assert not P.can_edit(make_role("leader"), "observability/metrics.json")
+    assert not P.can_edit(
+        make_role("department_head", "hr"), "observability/dashboard.py")
+    assert not P.can_edit(
+        make_role("ic", "engineering", "development"), "observability/web/app.js")
+
+
+def test_observability_write_refused_before_any_write():
+    with pytest.raises(PermissionError):
+        P.write_file(make_role("leader"), "observability/evil.py", "x")
+
+
 # --- SANDBOX ---------------------------------------------------------------
 
 def test_sandbox_blocks_escape_via_dotdot():

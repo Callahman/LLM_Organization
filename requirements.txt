@@ -3,5 +3,5 @@
 python-dotenv>=1.0        # load .env (optional; code has defaults)
 pytest>=8.0               # test runner
 
-# A real LLM backend (a later task, see SETUP.md) would add, e.g.:
-# httpx>=0.27             # for an API client
+# Real LLM backend (runtime/llm_api.py) — an OpenAI-compatible API client:
+httpx>=0.27               # for the OpenAIBackend (LLM_BACKEND=api)

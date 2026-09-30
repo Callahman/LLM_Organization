@@ -246,7 +246,7 @@ def _check_pod_triggers(
         )
     except PodMembershipError:
         return
-    run_pod(backend, pod)
+    run_pod(backend, pod, transcripts_dir=transcripts_dir)
     # Write the pod's transcript (pods/transcripts/) + its decision artifact
     # (pods/artifacts/).
     write_transcripts(pod, transcripts_dir=transcripts_dir)
@@ -280,7 +280,7 @@ def _check_pod_triggers(
         except PodMembershipError:
             chained = None
         if chained is not None:
-            run_pod(backend, chained)
+            run_pod(backend, chained, transcripts_dir=transcripts_dir)
             write_transcripts(chained, transcripts_dir=transcripts_dir)
             write_decision_artifact(chained, artifacts_dir=artifacts_dir)
     # Seed the members' memory with the cross-team `pod:<id>` entry (what
@@ -365,8 +365,13 @@ def dispatch(
                     # permission layer).
                     edits = ic_out.get("code_edits", [])
                     if edits:
-                        apply_code_edits(ic, edits,
-                                         log=_self_edit_log(history, ic.id))
+                        results = apply_code_edits(
+                            ic, edits, log=_self_edit_log(history, ic.id))
+                        if history is not None:
+                            for r in results:
+                                history.log_code_edit(
+                                    ic.id, r["path"], r["ok"],
+                                    error=r.get("error", ""))
                 # Pods A/B/C (an add-on): disagreement / cross-team / routing.
                 _check_pod_triggers(
                     backend, org, manager, ic_ids, t_obj, ic_outputs, ic_tasks,
@@ -389,8 +394,13 @@ def dispatch(
                 # permission layer).
                 edits = ic_out.get("code_edits", [])
                 if edits:
-                    apply_code_edits(ic, edits,
-                                     log=_self_edit_log(history, ic.id))
+                    results = apply_code_edits(
+                        ic, edits, log=_self_edit_log(history, ic.id))
+                    if history is not None:
+                        for r in results:
+                            history.log_code_edit(
+                                ic.id, r["path"], r["ok"],
+                                error=r.get("error", ""))
                 # Pods A/B/C (an add-on): the head is the starter; the ICs are
                 # the members (an IC podding with a department head would be a
                 # 2-tier spread — a membership failure skips the pod).
