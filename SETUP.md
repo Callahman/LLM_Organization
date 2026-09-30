@@ -91,14 +91,6 @@ Python interpreter and package set, isolated from your system Python.
 `( .venv )`. From here, `python` and `pip` refer to the venv's, not the
 system's.
 
-> **If activation is blocked** (a common PowerShell policy error: *"cannot be
-> loaded because running scripts is disabled"*), run this **once** in an
-> elevated PowerShell, then re-activate:
->
-> ```powershell
-> Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-> ```
-
 **Verify:**
 
 ```powershell

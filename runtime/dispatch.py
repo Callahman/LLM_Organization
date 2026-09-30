@@ -301,6 +301,7 @@ def dispatch(
     history: Optional[HistoryStore] = None,
     routing_rules: Optional[List[str]] = None,
     artifacts_dir: str = "pods/artifacts",
+    transcripts_dir: str = "pods/transcripts",
 ) -> List[Dict[str, Any]]:
     """Run the Phase 4 top-down dispatch. Returns the leader's view: a list of
     department reports (each carrying the chain of team/IC reports up).
@@ -365,10 +366,10 @@ def dispatch(
                     # permission layer).
                     edits = ic_out.get("code_edits", [])
                     if edits:
-                        results = apply_code_edits(
+                        edit_results = apply_code_edits(
                             ic, edits, log=_self_edit_log(history, ic.id))
                         if history is not None:
-                            for r in results:
+                            for r in edit_results:
                                 history.log_code_edit(
                                     ic.id, r["path"], r["ok"],
                                     error=r.get("error", ""))
@@ -376,6 +377,7 @@ def dispatch(
                 _check_pod_triggers(
                     backend, org, manager, ic_ids, t_obj, ic_outputs, ic_tasks,
                     routing_rules, pods_out, history, artifacts_dir,
+                    transcripts_dir,
                     starter_in_members=True,
                 )
                 team_reports.append(_upward_report(manager, ic_reports))
@@ -394,10 +396,10 @@ def dispatch(
                 # permission layer).
                 edits = ic_out.get("code_edits", [])
                 if edits:
-                    results = apply_code_edits(
+                    edit_results = apply_code_edits(
                         ic, edits, log=_self_edit_log(history, ic.id))
                     if history is not None:
-                        for r in results:
+                        for r in edit_results:
                             history.log_code_edit(
                                 ic.id, r["path"], r["ok"],
                                 error=r.get("error", ""))
@@ -407,6 +409,7 @@ def dispatch(
                 _check_pod_triggers(
                     backend, org, head, [ic.id], t_obj, [ic_out], [],
                     routing_rules, pods_out, history, artifacts_dir,
+                    transcripts_dir,
                     starter_in_members=False,
                 )
                 team_reports.append(
