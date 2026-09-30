@@ -102,3 +102,62 @@ def test_write_file_respects_permissions(monkeypatch):
             P.write_file(eng, os.path.join("..", "escape.py"), "x")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --- apply_code_edits (the self-edit action) --------------------------------
+
+def test_apply_code_edits_applies_scoped(monkeypatch):
+    tmp = os.path.join(P.ROOT, "perm_test_tmp")
+    os.makedirs(tmp, exist_ok=True)
+    monkeypatch.setattr(P, "ROOT", tmp)
+    try:
+        ic = make_role("ic", "engineering", "development")
+        edits = [
+            {"path": os.path.join("departments", "engineering", "development", "fix.py"),
+             "content": "print('fix')\n"},
+        ]
+        results = P.apply_code_edits(ic, edits)
+        assert len(results) == 1
+        assert results[0]["ok"] is True
+        assert os.path.exists(results[0]["real"])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_apply_code_edits_refuses_meta_and_escape(monkeypatch):
+    tmp = os.path.join(P.ROOT, "perm_test_tmp")
+    os.makedirs(tmp, exist_ok=True)
+    monkeypatch.setattr(P, "ROOT", tmp)
+    try:
+        ic = make_role("ic", "engineering", "development")
+        edits = [
+            {"path": os.path.join("runtime", "permissions.py"), "content": "x"},
+            {"path": "MISSION.md", "content": "x"},
+            {"path": os.path.join("..", "escape.py"), "content": "x"},
+        ]
+        results = P.apply_code_edits(ic, edits)
+        assert len(results) == 3
+        assert all(r["ok"] is False for r in results)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_apply_code_edits_logs_refusals(monkeypatch):
+    tmp = os.path.join(P.ROOT, "perm_test_tmp")
+    os.makedirs(tmp, exist_ok=True)
+    monkeypatch.setattr(P, "ROOT", tmp)
+    try:
+        ic = make_role("ic", "engineering", "development")
+        log_lines = []
+        edits = [
+            {"path": os.path.join("departments", "engineering", "development", "ok.py"),
+             "content": "print('ok')\n"},
+            {"path": os.path.join("runtime", "permissions.py"), "content": "x"},
+        ]
+        results = P.apply_code_edits(ic, edits, log=log_lines.append)
+        assert results[0]["ok"] is True
+        assert results[1]["ok"] is False
+        assert any("applied" in line for line in log_lines)
+        assert any("REFUSED" in line for line in log_lines)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)

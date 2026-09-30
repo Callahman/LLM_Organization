@@ -1,4 +1,4 @@
-﻿"""The permission layer for agent self-modification.
+"""The permission layer for agent self-modification.
 
 This module is the single source of truth for what any role may write, and it
 is itself a protected meta-rule: no role may edit this module, the mission, or
@@ -23,6 +23,7 @@ trusted harness's own bookkeeping writes do not go through here.
 from __future__ import annotations
 
 import os
+from typing import Any, Callable, Dict, List, Optional
 
 # The sandbox boundary: the LLM_Organization root. Computed from this file's
 # location (runtime/permissions.py -> parent = LLM_Organization).
@@ -55,14 +56,20 @@ def resolve(path: str) -> str:
 
 
 def _rel(path: str) -> str:
-    """Return *path* relative to ``ROOT`` (for matching PROTECTED / scoping)."""
-    real = os.path.realpath(path)
+    """Return *path* relative to ``ROOT`` (for matching PROTECTED / scoping).
+
+    A relative *path* is resolved against ``ROOT`` (not the CWD), so the
+    result uses the platform separator and the scoping checks in
+    ``can_edit`` can split it reliably.
+    """
+    candidate = path if os.path.isabs(path) else os.path.join(ROOT, path)
+    real = os.path.realpath(candidate)
     root_real = os.path.realpath(ROOT)
     if real == root_real:
         return ""
     if real.startswith(root_real + os.sep):
         return os.path.relpath(real, root_real)
-    return path
+    return os.path.normpath(path)
 
 
 def can_edit(role, path: str) -> bool:
@@ -117,3 +124,35 @@ def write_file(role, path: str, content: str) -> str:
     with open(real, "w", encoding="utf-8") as f:
         f.write(content)
     return real
+
+
+def apply_code_edits(
+    role,
+    edits,
+    log: Optional[Callable[[str], None]] = None,
+) -> List[Dict[str, Any]]:
+    """Apply a role's self-edit requests (a list of {path, content}), each
+    gated by ``write_file`` (the sandbox, the mission lock, and the meta-rule
+    lock). A refused write is recorded visibly (never silent) and the rest
+    proceed. Returns one result per edit:
+
+    - applied: ``{"path": ..., "ok": True, "real": ...}``
+    - refused: ``{"path": ..., "ok": False, "error": ...}``
+
+    `log` (optional) is called with a human-readable line for each result, so
+    a refusal is visible in the audit, not swallowed.
+    """
+    results: List[Dict[str, Any]] = []
+    for edit in edits or []:
+        path = edit.get("path", "")
+        content = edit.get("content", "")
+        try:
+            real = write_file(role, path, content)
+            results.append({"path": path, "ok": True, "real": real})
+            if log:
+                log(f"applied: {role.id} -> {path}")
+        except PermissionError as e:
+            results.append({"path": path, "ok": False, "error": str(e)})
+            if log:
+                log(f"REFUSED: {role.id} -> {path}: {e}")
+    return results

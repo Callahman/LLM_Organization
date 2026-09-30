@@ -95,3 +95,56 @@ def test_mission_digest_is_bounded():
     assert "a pipeline" in digest
     assert "works" in digest
     assert "ETL" in digest
+
+
+def test_dispatch_self_edit_gated(monkeypatch):
+    # An IC proposes code_edits during the dispatch: the scoped one is applied,
+    # the meta-rule one is refused (gated by the permission layer).
+    import os
+    import shutil
+    from runtime import permissions as P
+    tmp = os.path.join(P.ROOT, "dispatch_test_tmp")
+    os.makedirs(tmp, exist_ok=True)
+    monkeypatch.setattr(P, "ROOT", tmp)
+    try:
+        org, leader, head, mgr, ic = _org()
+        backend = StubBackend()
+        backend.set_script("leader", [
+            {"decomposition": {"department_objectives": [
+                {"head_id": "head_analytics", "objective": "build the pipeline"},
+            ]}},
+        ])
+        backend.set_script("head_analytics", [
+            {"decomposition": {"team_objectives": [
+                {"manager_id": "mgr1", "objective": "build the ETL"},
+            ]}},
+        ])
+        backend.set_script("mgr1", [
+            {"decomposition": {"ic_tasks": [
+                {"ic_id": "ic1", "task": "write the extractor"},
+            ]}},
+        ])
+        # The IC proposes code_edits: a scoped one (applied) + a meta one (refused).
+        backend.set_script("ic1", [
+            {"summary": "extractor done",
+             "work_path": "departments/analytics/pipelines/extractor.md",
+             "code_edits": [
+                 {"path": "departments/analytics/pipelines/extractor.py",
+                  "content": "print('extractor')\n"},
+                 {"path": "runtime/permissions.py", "content": "x"},
+             ]},
+        ])
+
+        mission = {"purpose": "a data pipeline", "success_criteria": ["works"],
+                   "scope": ["ETL"]}
+        reports = dispatch(backend, org, leader, mission)
+        assert len(reports) == 1
+
+        # The scoped edit was applied (the file exists in the sandbox).
+        applied = os.path.join(tmp, "departments", "analytics", "pipelines", "extractor.py")
+        assert os.path.exists(applied)
+        # The meta edit was refused (the permission module is not created/changed).
+        meta_path = os.path.join(tmp, "runtime", "permissions.py")
+        assert not os.path.exists(meta_path)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)

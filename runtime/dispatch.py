@@ -37,6 +37,7 @@ from runtime.org import OrgState, hire
 from runtime.llm import LLMBackend
 from runtime.complexity import detect_disagreement
 from runtime.history import HistoryStore
+from runtime.permissions import apply_code_edits
 from runtime.pods import (
     Pod,
     PodMembershipError,
@@ -91,7 +92,11 @@ def _manager_ctx(manager: Role, objective: str) -> str:
 def _ic_ctx(ic: Role, task: str) -> str:
     return (
         f"PHASE 4 (IC {ic.id}): do the work in your team directory. Task: "
-        f"{task} Produce a summary of the work done (and the work path)."
+        f"{task} Produce a summary of the work done (and the work path). "
+        "If your work requires changing code, also propose code_edits: a "
+        "list of {path, content}. Each edit is gated by the permission "
+        "layer: you may only write inside your own team/department scope; "
+        "the mission and the rules are read-only."
     )
 
 
@@ -113,6 +118,18 @@ def _upward_report(role: Role, children: List[Dict[str, Any]]) -> Dict[str, Any]
             for c in children
         ],
     }
+
+
+def _self_edit_log(history: Optional[HistoryStore], role_id: str):
+    """A log callable for self-edit results (appends to the HistoryStore's
+    ``self_edits.jsonl`` audit, so a refusal is visible, not swallowed).
+    Returns None when no history is available (the results are still returned
+    by ``apply_code_edits``)."""
+    if history is None:
+        return None
+    def log(msg: str) -> None:
+        history._append("self_edits.jsonl", {"role": role_id, "msg": msg})
+    return log
 
 
 def _ensure_role(
@@ -344,6 +361,12 @@ def dispatch(
                         {"from": ic.id, "summary": ic_out.get("summary", ""),
                          "pointer": pointer}
                     )
+                    # Self-edit: the IC may propose code edits (gated by the
+                    # permission layer).
+                    edits = ic_out.get("code_edits", [])
+                    if edits:
+                        apply_code_edits(ic, edits,
+                                         log=_self_edit_log(history, ic.id))
                 # Pods A/B/C (an add-on): disagreement / cross-team / routing.
                 _check_pod_triggers(
                     backend, org, manager, ic_ids, t_obj, ic_outputs, ic_tasks,
@@ -362,6 +385,12 @@ def dispatch(
                 if ic is None:
                     continue
                 ic_out = backend.invoke(ic, _ic_ctx(ic, t_obj.get("objective", "")))
+                # Self-edit: the IC may propose code edits (gated by the
+                # permission layer).
+                edits = ic_out.get("code_edits", [])
+                if edits:
+                    apply_code_edits(ic, edits,
+                                     log=_self_edit_log(history, ic.id))
                 # Pods A/B/C (an add-on): the head is the starter; the ICs are
                 # the members (an IC podding with a department head would be a
                 # 2-tier spread — a membership failure skips the pod).
