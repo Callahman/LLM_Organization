@@ -2,7 +2,8 @@
 
 Initial setup instructions for the Organization: the environment, the
 step-by-step rollout (with the exact PowerShell commands and what each step
-does), the configuration knobs, and how to wire a real LLM backend.
+does), the configuration knobs, and the LLM backend (the real local model is
+the shipped default; the offline stub is the fallback).
 
 > **Working directory** for every command below: `D:\LLM\LLM_Organization`
 > (the folder containing `README.md`, `runtime/`, `tests/`, ...).
@@ -46,10 +47,11 @@ Get-ChildItem
 ```
 
 You should see `README.md`, `SETUP.md`, `EXECUTION_CHECKLIST.md`,
-`Organization_Outline.md`, `MISSION.md`, `requirements.txt`, `.env.example`,
-`run_session.py`, `run_org.bat`, and the `runtime/`, `org/`, `roles/`,
-`tests/`, `departments/` directories (plus the state directories `pods/`,
-`state/`, `history/`, `archives/`, `reports/` and the `.gitignore`).
+`OBSERVABILITY_CHECKLIST.md`, `Organization_Outline.md`, `MISSION.md`,
+`requirements.txt`, `.env.example`, `run_session.py`, `run_org.bat`, and the
+`runtime/`, `org/`, `roles/`, `tests/`, `departments/`, `observability/`
+directories (plus the state directories `pods/`, `state/`, `history/`,
+`archives/`, `reports/` and the `.gitignore`).
 
 ---
 
@@ -109,8 +111,8 @@ pip install -r requirements.txt
 
 **What happens:** installs `python-dotenv`, `pytest`, and `httpx` into the
 venv. The core code is stdlib-only, so the tests run with just the first
-two; `httpx` is only needed by the real backend (`runtime/llm_api.py`,
-`LLM_BACKEND=api`).
+two; `httpx` is needed by the real backend (`runtime/llm_api.py`,
+`LLM_BACKEND=api`) — the shipped default — so install all three.
 
 **Verify:**
 
@@ -176,7 +178,7 @@ knob; the important ones:
 | `ROLE_MEMORY_MAX_ENTRIES` | `20` | Max entries in a role's short-term memory |
 | `HISTORY_WINDOW_SESSIONS` | `50` | Rolling window before archiving |
 | `ARCHIVE_CAP_MB` | `1024` | Archive size cap (oldest deleted beyond this) |
-| `LLM_BACKEND` | `stub` | `stub` (offline) or `api` (real) |
+| `LLM_BACKEND` | `stub` (code) / `api` (`.env.example`) | `api` (real — the shipped default) or `stub` (offline) |
 | `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` | (empty) | Credentials for a real backend (`LLM_BACKEND=api`) |
 | `LLM_STRUCTURED` | `tools` | api backend's structured-output mode: `tools` (tool calls) or `json` (`json_object`) |
 
@@ -200,22 +202,26 @@ sets it per task — complex tasks run with thinking on, simple ones off.
 
 Two implementations ship in the repo:
 
-- **`StubBackend`** (default, `LLM_BACKEND=stub`) — deterministic, scripted
-  per role. Every loop/budget/schema check runs offline. This is what the
-  tests use. No live model required.
-- **`OpenAIBackend`** (`runtime/llm_api.py`, `LLM_BACKEND=api`) — a real
-  backend that calls any OpenAI-compatible chat endpoint (KoboldCpp,
-  llama.cpp server, vLLM, LM Studio, ...). `make_backend()` in the same
-  module selects the backend from the environment: `LLM_BACKEND=api` builds
-  `OpenAIBackend` from `LLM_MODEL` / `LLM_BASE_URL` / `LLM_API_KEY`; anything
-  else falls back to `StubBackend`. `httpx` is imported lazily, so the stub
-  path and the offline tests need no network dependency. Structured output
-  uses **tool calls** by default: the role's output schema is offered as a
-  single forced tool (`submit_output`), so the envelope arrives as the
+- **`OpenAIBackend`** (`runtime/llm_api.py`, `LLM_BACKEND=api`) — **the
+  shipped default**: `.env.example` (copied to `.env` in the Configuration
+  step) pre-fills the localhost setup, a local KoboldCpp server hosting
+  Qwen3.8-27B on port 5001. It calls any OpenAI-compatible chat endpoint
+  (KoboldCpp, llama.cpp server, vLLM, LM Studio, ...). `make_backend()` in
+  the same module selects the backend from the environment:
+  `LLM_BACKEND=api` builds `OpenAIBackend` from `LLM_MODEL` / `LLM_BASE_URL`
+  / `LLM_API_KEY`; `LLM_BACKEND=stub` builds the stub (an unset variable
+  also falls back to the stub in code). `httpx` is imported lazily, so the
+  stub path and the offline tests need no network dependency. Structured
+  output uses **tool calls** by default: the role's output schema is offered
+  as a single forced tool (`submit_output`), so the envelope arrives as the
   tool's JSON arguments — the path that needs the server's tool-call support
   (KoboldCpp's `--jinja --jinjatools`, which `run_org.bat` passes). Set
   `LLM_STRUCTURED=json` for the legacy `response_format: json_object`
   request on servers without tool support.
+- **`StubBackend`** (`LLM_BACKEND=stub`) — the offline fallback:
+  deterministic, scripted per role. Every loop/budget/schema check runs
+  without a live model. This is what the tests use; set
+  `LLM_BACKEND=stub` in `.env` for offline runs.
 
 Every backend — stub or real — must return a dict containing the **shared
 output envelope**:
@@ -249,13 +255,13 @@ output envelope**:
 3. **`MemoryBackend`** — folds each role's isolated short-term memory into
    its own prompt before the invoke and appends the role's output after it.
 
-### Wiring a real backend
+### The default backend (and how to change it)
 
-The backend is already wired: `run_session.py` builds the `Session` with
-`make_backend()`, which reads the environment. `.env.example` ships with the
-localhost setup pre-filled (matching `run_org.bat`: local KoboldCpp hosting
-Qwen3.8-27B on port 5001), so to run against the local model just copy
-`.env.example` to `.env`:
+The real backend is already wired: `run_session.py` builds the `Session`
+with `make_backend()`, which reads the environment. `.env.example` ships
+with the localhost setup pre-filled (matching `run_org.bat`: local KoboldCpp
+hosting Qwen3.8-27B on port 5001), so the default run after the
+Configuration step is the **real** local model:
 
 ```ini
 LLM_BACKEND=api
@@ -264,9 +270,12 @@ LLM_BASE_URL=http://localhost:5001/v1   # endpoint root (no /chat/completions)
 LLM_API_KEY=not-needed
 ```
 
-Then run `python run_session.py` (Step 7). `run_org.bat` is a worked example
-that also starts the local KoboldCpp server first (with the `--jinja
---jinjatools` tool-call flags). Set `LLM_BACKEND=stub` for offline runs.
+Run it with `python run_session.py` (Step 7) — the local KoboldCpp server
+must be up on port 5001; `run_org.bat` starts it for you (with the `--jinja
+--jinjatools` tool-call flags) and also opens the observability dashboard.
+To point at a different OpenAI-compatible endpoint, edit `LLM_MODEL` /
+`LLM_BASE_URL` / `LLM_API_KEY` in `.env`. Set `LLM_BACKEND=stub` for offline
+runs (no server needed).
 
 ### The permission layer (self-mod)
 
@@ -311,39 +320,57 @@ You should see your initial commit.
 
 ## Step 7 — Run the pipeline (smoke run)
 
-Two entry points ship in the repo.
+Two entry points ship in the repo; the shipped `.env` default
+(`LLM_BACKEND=api`) makes the **live** run the default.
 
-### Offline smoke run (no model needed)
+### Live run (real model — the default)
 
-With the default `LLM_BACKEND=stub`, run the full pipeline unattended
-(auto-answer / auto-approve callbacks):
+`run_org.bat` is the worked one-shot. It opens three windows:
 
-```powershell
-python run_session.py
-```
+1. **KoboldCpp server** — starts the local model (model + GPU flags,
+   including the `--jinja --jinjatools` tool-call flags) on port 5001 and
+   waits until the endpoint answers.
+2. **Observability dashboard** — `python observability\dashboard.py
+   --port 8090` (read-only, stdlib-only); watch it at
+   `http://127.0.0.1:8090`.
+3. **The pipeline** — `python run_session.py` against the live model.
 
-**What happens:** `run_session.py` loads the backend from the environment
-(`make_backend()`), builds the `Session`, and runs one bounded end-to-end
-cycle (intake -> mission -> org bootstrap -> dispatch -> synthesis ->
-evaluation) against the deterministic `StubBackend`. It prints the final
-status, phases, cycles, verdict, and evaluation.
-
-**What to look for:** a clean completion (or a visible verdict/escalation)
-with no exceptions.
-
-### Live run (real model)
-
-`run_org.bat` is a worked one-shot: it starts a local KoboldCpp server
-(model + GPU flags), waits until the endpoint answers, then runs
-`python run_session.py`. Adjust the paths at the top of the file for your
-setup (model path, port, directories):
+Adjust the paths at the top of the file for your setup (model path, port,
+directories):
 
 ```powershell
 run_org.bat
 ```
 
-**What happens:** the same pipeline runs against the live model instead of
-the stub. The KoboldCpp server window stays open afterwards.
+**What happens:** one bounded end-to-end cycle (intake -> mission -> org
+bootstrap -> dispatch -> synthesis -> evaluation) runs against the live
+model; it prints the final status, phases, cycles, verdict, and evaluation.
+While it runs, the dashboard shows agents by department, code edits, tool
+calls by outcome, cycle durations, and the active pod's transcript live.
+Every run also appends JSONL logs to `history/` (`org_events`, `code_edits`,
+`tool_calls`, `cycles`) and live pod transcripts to `pods/transcripts/` —
+the files the dashboard tails. The KoboldCpp server and dashboard windows
+stay open afterwards.
+
+**What to look for:** a clean completion (or a visible verdict/escalation)
+with no exceptions, and live data on the dashboard. To skip the batch file,
+start the server yourself and run `python run_session.py` directly.
+
+### Offline smoke run (no model needed)
+
+The shipped `.env` says `LLM_BACKEND=api`, so for an offline run set
+`LLM_BACKEND=stub` in `.env` first (no server needed), then run the full
+pipeline unattended (auto-answer / auto-approve callbacks):
+
+```powershell
+python run_session.py
+```
+
+**What happens:** the same bounded cycle runs against the deterministic
+`StubBackend` instead of the live model.
+
+**What to look for:** a clean completion (or a visible verdict/escalation)
+with no exceptions.
 
 ---
 
@@ -356,6 +383,7 @@ the stub. The KoboldCpp server window stays open afterwards.
 | `pip install` fails on a package | Usually a network/proxy issue. Check connectivity; retry. |
 | `pytest` not found | The venv isn't active (no `( .venv )` prefix). Re-run `.venv\Scripts\Activate.ps1`. |
 | A test fails | Read the assertion diff; the failure is deterministic and points at one branch in `runtime/` or `org/`. Fix and re-run. |
+| `run_session.py` fails with a connection error | The local KoboldCpp server isn't running (the shipped `.env` says `LLM_BACKEND=api`). Use `run_org.bat` (starts the server), start `koboldcpp.exe` manually on port 5001 with `--jinja --jinjatools`, or set `LLM_BACKEND=stub` for offline. |
 
 ---
 
@@ -367,9 +395,13 @@ When you're finished, you should have:
 2. A venv with `python-dotenv` + `pytest` + `httpx` installed.
 3. `pytest -v` reporting **all tests passed, 0 failed**.
 4. An initial commit in `git log`.
-5. (Optional) A live-model smoke run: `LLM_BACKEND=api` set in `.env` and
-   `python run_session.py` (or `run_org.bat`) completing against the real
-   model.
+5. A smoke run **against the real model** (the shipped default:
+   `LLM_BACKEND=api` in `.env`): `run_org.bat` (or `python run_session.py`
+   with the local server up) completing one bounded end-to-end cycle, with
+   the observability dashboard live at `http://127.0.0.1:8090` showing
+   agents, edits, tool calls, cycles, and the active pod.
+6. (Offline fallback) `LLM_BACKEND=stub` set in `.env` and
+   `python run_session.py` completing the same cycle without a live model.
 
 ---
 
@@ -380,4 +412,8 @@ When you're finished, you should have:
 - Generated state (`history/`, `archives/`, `state/role_memory/`,
   `pods/transcripts/`, `pods/artifacts/`, `reports/offloading/`,
   `reports/evaluation/`) is git-ignored; the `.gitkeep` markers keep the
-  directories in the repo.
+  directories in the repo. `history/` also carries the run's JSONL logs
+  (`org_events`, `code_edits`, `tool_calls`, `cycles`) that the
+  observability dashboard tails.
+- `observability/` is **operator-owned**: it is tracked in the repo, and
+  `runtime/permissions.py` locks it so no agent can ever write into it.
