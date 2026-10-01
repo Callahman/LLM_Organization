@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -220,16 +221,18 @@ def _create_team_dir(role: Role, departments_dir: str) -> None:
 def _bootstrap_context(mission_result: MissionResult) -> str:
     return (
         "PHASE 3: propose the initial department heads for the mission. "
-        "Produce org_recommendation.department_heads: a NON-EMPTY list of "
-        "{id, department, sub_architype, required, mandate}. You MUST include "
-        "the OPERATIONAL department heads that will actually do the mission's "
-        "work — derive them from the mission's purpose / scope / org-recommendation "
-        "section (the workstreams the mission names, e.g. income/operations, "
-        "data, ml/compute, finance/reporting) — in ADDITION to the required "
-        "governance departments (hr, safety, morality, which must also be "
-        "included). The list must NOT be empty and must NOT contain only the "
-        "required departments: without operational heads, Phase 4 cannot "
-        "dispatch any work."
+        "Produce org_recommendation with the department heads as a NON-EMPTY "
+        "list — use the key `department_heads` (items: {id, department, "
+        "sub_architype, required, mandate}) or, equivalently, the key "
+        "`departments` (items: {name, head, mandate}). You MUST include the "
+        "OPERATIONAL department heads that will actually do the mission's "
+        "work — derive them from the mission's purpose / scope / "
+        "org-recommendation section (the workstreams the mission names, e.g. "
+        "income/operations, data, ml/compute, finance/reporting) — in "
+        "ADDITION to the required governance departments (hr, safety, "
+        "morality, which must also be included). The list must NOT be empty "
+        "and must NOT contain only the required departments: without "
+        "operational heads, Phase 4 cannot dispatch any work."
     )
 
 
@@ -245,6 +248,49 @@ def _has_operational_head(heads: List[Dict[str, Any]]) -> bool:
         if dept and dept not in REQUIRED_DEPARTMENTS:
             return True
     return False
+
+
+def _dept_slug(name: str) -> str:
+    """A filesystem-safe slug for a department name (lowercase, underscores) —
+    the leader's free-text department names (e.g. 'Engineering / Data & ML')
+    must become valid directory names."""
+    slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    return slug or "dept"
+
+
+def _extract_department_heads(out: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract the proposed department heads from the leader's Phase 3 output,
+    accepting the **multiple structures the leader actually produces** (not just
+    the canonical `org_recommendation.department_heads`). The real LLM leader
+    tends to emit `org_recommendation.departments` — a list of
+    `{name, head, mandate}` — so that shape is normalized here. Each spec is
+    normalized to `{id, department, sub_architype, required, mandate}`."""
+    rec = out.get("org_recommendation") or {}
+    # Canonical: org_recommendation.department_heads (already normalized).
+    heads = rec.get("department_heads") or []
+    if heads:
+        return [h for h in heads if isinstance(h, dict)]
+    # The leader's actual structure: org_recommendation.departments (a list of
+    # {name, head, mandate}). Normalize it.
+    depts = rec.get("departments") or []
+    normalized: List[Dict[str, Any]] = []
+    for d in depts:
+        if not isinstance(d, dict):
+            continue
+        name = str(d.get("name", "")).strip()
+        head = str(d.get("head", "")).strip()
+        mandate = str(d.get("mandate", "")).strip()
+        if not name and not head:
+            continue
+        slug = _dept_slug(name)
+        normalized.append({
+            "id": f"head_{slug}",
+            "department": slug,
+            "sub_architype": head,
+            "required": False,
+            "mandate": mandate,
+        })
+    return normalized
 
 
 def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
@@ -307,9 +353,7 @@ def bootstrap(
             # The Leader's head proposal is a resourcing decision -> thinking on.
             reasoning=classify_complexity(3, leader, {"is_decision": True}),
         )
-        candidate = (
-            out.get("org_recommendation", {}).get("department_heads", [])
-        )
+        candidate = _extract_department_heads(out)
         if _has_operational_head(candidate):
             proposed = candidate
             break

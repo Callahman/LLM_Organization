@@ -78,6 +78,45 @@ def test_bootstrap_creates_required_departments(tmp_path):
     assert os.path.isdir(os.path.join(str(tmp_path), "hr"))
 
 
+def test_bootstrap_accepts_leader_departments_shape(tmp_path):
+    """The real LLM leader emits ``org_recommendation.departments`` (a list of
+    ``{name, head, mandate}``), not the canonical ``department_heads`` — the
+    bootstrap must normalize that shape (the Phase-3 'did nothing' regression)."""
+    org = OrgState(history_dir=str(tmp_path))
+    leader = make_leader()
+    backend = StubBackend()
+    backend.set_script("leader", [
+        {"summary": "propose",
+         "org_recommendation": {"departments": [
+             {"name": "Business Development / Revenue",
+              "head": "Business Development Director",
+              "mandate": "Owns product lines and the contract pipeline."},
+             {"name": "Engineering / Data & ML",
+              "head": "Engineering Director (CTO)",
+              "mandate": "Owns model development and data pipelines."},
+             {"name": "Finance & Compliance",
+              "head": "Finance Director (CFO)",
+              "mandate": "Owns P&L and the governance log."},
+             {"name": "HR", "head": "HR Director",
+              "mandate": "Owns resourcing."},
+         ]}},
+    ])
+    mission = MissionResult(approved=True, attempts=1, version=1,
+                            mission_path="MISSION.md")
+    bootstrap(org, backend, leader, mission, _approve_all,
+              departments_dir=str(tmp_path))
+    # The operational heads were created (free-text names normalized to slugs).
+    for slug in ("business_development_revenue", "engineering_data_ml",
+                 "finance_compliance"):
+        assert org.get(f"head_{slug}") is not None
+    # The required departments are present (the leader's 'HR' is folded into
+    # the required hr department and marked non-fireable).
+    for dept in ("hr", "safety", "morality"):
+        head = [r for r in org.active_roles()
+                if r.department == dept and r.architype == "department_head"][0]
+        assert head.is_required
+
+
 def test_redundant_hire_vetoed_by_hr(tmp_path):
     org = OrgState(history_dir=str(tmp_path))
     leader = make_leader()
