@@ -63,12 +63,14 @@ def mission_digest(mission: Dict[str, Any]) -> str:
     return " | ".join(parts) if parts else "(no mission digest)"
 
 
-def _leader_ctx(digest: str) -> str:
+def _leader_ctx(digest: str, head_ids: List[str]) -> str:
     return (
         "PHASE 4: decompose the mission into department objectives. "
         f"Mission digest: {digest} "
-        "Produce decomposition.department_objectives: a list of "
-        "{head_id, objective}."
+        "Produce decomposition.department_objectives: a NON-EMPTY list of "
+        "{head_id, objective}. The head_id MUST be one of the existing "
+        f"department heads: {head_ids}. Do NOT invent new head_ids — only "
+        "assign objectives to the heads that already exist in the org."
     )
 
 
@@ -320,13 +322,33 @@ def dispatch(
     seeded into the members' memory as a cross-team `pod:<id>` entry (via
     `MemoryBackend.seed_cross_team` — a no-op for a plain stub)."""
     digest = mission_digest(mission)
-    out = backend.invoke(leader, _leader_ctx(digest))
+    head_ids = [h.id for h in org.department_heads()]
+    out = backend.invoke(leader, _leader_ctx(digest, head_ids))
     dept_objectives = out.get("decomposition", {}).get("department_objectives", [])
+    if not dept_objectives:
+        # The leader's Phase 4 decomposition came back empty — no work to
+        # dispatch. Log it so the no-op is visible, never silent.
+        if history is not None:
+            history._append(
+                "dispatch_skips.jsonl",
+                {"reason": "leader produced no department_objectives (empty "
+                           "Phase 4 decomposition)"},
+            )
 
     results: List[Dict[str, Any]] = []
     for obj in dept_objectives:
         head = org.get(obj.get("head_id", ""))
         if head is None:
+            # A missing head (the leader decomposed onto a department that was
+            # never created in Phase 3) — log it so the skip is visible, never
+            # silent.
+            if history is not None:
+                history._append(
+                    "dispatch_skips.jsonl",
+                    {"head_id": obj.get("head_id", ""),
+                     "objective": obj.get("objective", ""),
+                     "reason": "head not in the org (never created in Phase 3)"},
+                )
             continue
         head_out = backend.invoke(head, _head_ctx(head, obj.get("objective", ""), digest))
         team_objectives = head_out.get("decomposition", {}).get("team_objectives", [])

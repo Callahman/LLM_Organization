@@ -106,6 +106,16 @@ def test_firing_produces_offloading_plan(tmp_path):
     org = OrgState(history_dir=str(tmp_path))
     leader = make_leader()
     backend = StubBackend()
+    # The Leader proposes an analytics head so the bootstrap has an
+    # operational head (an unscripted stub would raise BootstrapError).
+    backend.set_script("leader", [
+        {"summary": "propose",
+         "org_recommendation": {"department_heads": [
+             {"id": "head_analytics", "department": "analytics",
+              "sub_architype": "head_of_analytics", "required": False,
+              "mandate": "Head of analytics."},
+         ]}},
+    ])
     mission = MissionResult(approved=True, attempts=1, version=1,
                             mission_path="MISSION.md")
     bootstrap(org, backend, leader, mission, _approve_all,
@@ -129,6 +139,16 @@ def test_required_department_cannot_be_fired(tmp_path):
     org = OrgState(history_dir=str(tmp_path))
     leader = make_leader()
     backend = StubBackend()
+    # The Leader proposes an analytics head so the bootstrap has an
+    # operational head (an unscripted stub would raise BootstrapError).
+    backend.set_script("leader", [
+        {"summary": "propose",
+         "org_recommendation": {"department_heads": [
+             {"id": "head_analytics", "department": "analytics",
+              "sub_architype": "head_of_analytics", "required": False,
+              "mandate": "Head of analytics."},
+         ]}},
+    ])
     mission = MissionResult(approved=True, attempts=1, version=1,
                             mission_path="MISSION.md")
     bootstrap(org, backend, leader, mission, _approve_all,

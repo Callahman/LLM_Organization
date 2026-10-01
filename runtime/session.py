@@ -157,12 +157,13 @@ class Session:
         verdict: str,
         max_iterations: int,
     ):
+        dispatch_units = len(dispatch_results)
         evaluation = {
             "ts": f"cycle{self.cycles}",
             "outcome": verdict,
             "process": {
                 "pods": len(self.pods),
-                "dispatch_units": len(dispatch_results),
+                "dispatch_units": dispatch_units,
                 "resourcing_events": len(self.org.events),
             },
             "improvement_actions": [
@@ -171,6 +172,22 @@ class Session:
                 "leader updates the mission's working section (user permission)",
             ],
         }
+        # A no-op cycle (zero work dispatched) must not masquerade as a clean
+        # "complete" — surface it as an escalation so it is visible, never
+        # silent.
+        if dispatch_units == 0:
+            evaluation["no_work"] = True
+            evaluation["escalation_reason"] = (
+                "Phase 4 dispatched zero work (no department objectives could "
+                "be resolved to heads in the org) — the cycle did nothing."
+            )
+            self.history.write_evaluation_report(evaluation)
+            self.history._append(
+                "escalations.jsonl",
+                {"phase": 6, "reason": evaluation["escalation_reason"],
+                 "cycle": self.cycles},
+            )
+            return evaluation, "escalated"
         self.history.write_evaluation_report(evaluation)
         out = self.backend.invoke(
             self.leader,

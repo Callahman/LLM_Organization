@@ -185,7 +185,7 @@ function drawTimeSeries(canvas, series, stacked) {
 function drawBars(canvas, groups) {
   if (!groups.length) return drawEmpty(canvas);
   const { ctx, w, h } = prepCanvas(canvas);
-  const padL = 34, padB = 20, padT = 8, padR = 8;
+  const padL = 34, padB = 20, padT = 14, padR = 8;
   const iw = w - padL - padR, ih = h - padT - padB;
   const maxV = Math.max(
     1, ...groups.map((g) => g.segments.reduce((a, s) => a + s.v, 0)));
@@ -218,6 +218,17 @@ function drawBars(canvas, groups) {
     ctx.textAlign = 'center';
     ctx.fillText(g.label, cx, h - 6);
   });
+  // Legend: the distinct segments (phases) across all bars, so the stacked
+  // colors are explained (the time-series charts already draw legends).
+  const seen = {};
+  const legend = [];
+  for (const g of groups) for (const s of g.segments) {
+    if (!seen[s.label]) {
+      seen[s.label] = true;
+      legend.push({ label: s.label, color: s.color });
+    }
+  }
+  drawLegend(ctx, legend, w);
 }
 
 // ---------- data mapping -----------------------------------------------------

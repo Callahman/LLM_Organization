@@ -44,6 +44,12 @@ class ResourcingVetoed(ResourcingError):
     """A resourcing action vetoed by the approver (HR / the Leader)."""
 
 
+class BootstrapError(ValueError):
+    """Phase 3 produced no usable department-head proposal (empty, or only the
+    required governance departments) — no work could be dispatched in Phase 4.
+    Raised after the bounded retry budget is exhausted (never silent)."""
+
+
 # --- The org state (registry) ---------------------------------------------
 
 class OrgState:
@@ -214,10 +220,31 @@ def _create_team_dir(role: Role, departments_dir: str) -> None:
 def _bootstrap_context(mission_result: MissionResult) -> str:
     return (
         "PHASE 3: propose the initial department heads for the mission. "
-        "Produce org_recommendation.department_heads: a list of "
-        "{id, department, sub_architype, required, mandate}. Required "
-        "departments (hr, safety, morality) must be included."
+        "Produce org_recommendation.department_heads: a NON-EMPTY list of "
+        "{id, department, sub_architype, required, mandate}. You MUST include "
+        "the OPERATIONAL department heads that will actually do the mission's "
+        "work — derive them from the mission's purpose / scope / org-recommendation "
+        "section (the workstreams the mission names, e.g. income/operations, "
+        "data, ml/compute, finance/reporting) — in ADDITION to the required "
+        "governance departments (hr, safety, morality, which must also be "
+        "included). The list must NOT be empty and must NOT contain only the "
+        "required departments: without operational heads, Phase 4 cannot "
+        "dispatch any work."
     )
+
+
+def _has_operational_head(heads: List[Dict[str, Any]]) -> bool:
+    """True if the proposal includes at least one **operational** department
+    head (a head whose department is not one of the required governance
+    departments). Without an operational head, Phase 4 cannot dispatch any
+    work, so the bootstrap retries / fails rather than proceeding silently."""
+    for spec in heads or []:
+        if not isinstance(spec, dict):
+            continue
+        dept = str(spec.get("department", "")).strip().lower()
+        if dept and dept not in REQUIRED_DEPARTMENTS:
+            return True
+    return False
 
 
 def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
@@ -256,21 +283,43 @@ def bootstrap(
     approver_fn: Callable[[str, str, Role], Dict[str, str]],
     departments_dir: str = "departments",
     additive: bool = False,
+    head_retry_budget: int = 3,
 ) -> List[Role]:
     """Phase 3: Leader proposes department heads → HR redundancy review →
     registry creation → directories. Required departments are always present.
 
+    The leader's proposal MUST include at least one **operational** department
+    head (a head whose department is not one of the required governance
+    departments) — without it, no work can be dispatched in Phase 4. If the
+    proposal is empty or contains only required departments, the bootstrap
+    **retries** (bounded, `head_retry_budget`, default 3); if still empty
+    after the retries, it raises a visible `BootstrapError` (never silent).
+
     In `additive` mode (a revisit), the bootstrap only **adds** roles — a
     proposed role whose id already exists in the org is skipped (never
     dropped / overwritten)."""
-    out = backend.invoke(
-        leader, _bootstrap_context(mission_result),
-        # The Leader's head proposal is a resourcing decision -> thinking on.
-        reasoning=classify_complexity(3, leader, {"is_decision": True}),
-    )
-    proposed = (
-        out.get("org_recommendation", {}).get("department_heads", [])
-    )
+    # Bounded retry: the leader's head proposal must include at least one
+    # operational department head (not just the required governance depts).
+    proposed: List[Dict[str, Any]] = []
+    for _ in range(max(1, head_retry_budget)):
+        out = backend.invoke(
+            leader, _bootstrap_context(mission_result),
+            # The Leader's head proposal is a resourcing decision -> thinking on.
+            reasoning=classify_complexity(3, leader, {"is_decision": True}),
+        )
+        candidate = (
+            out.get("org_recommendation", {}).get("department_heads", [])
+        )
+        if _has_operational_head(candidate):
+            proposed = candidate
+            break
+    if not _has_operational_head(proposed):
+        raise BootstrapError(
+            "Phase 3 produced no operational department heads "
+            f"(after {head_retry_budget} attempts) — the org would have only "
+            "the required governance departments (hr, safety, morality), so no "
+            "work could be dispatched in Phase 4. Re-run the session."
+        )
     created: List[Role] = []
     for spec in proposed:
         head = Role(
