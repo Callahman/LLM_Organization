@@ -37,6 +37,15 @@ def _assemble_context(initial_prompt: str, transcript: List[Dict[str, Any]]) -> 
     """Assemble the Leader's intake context: the initial prompt + the running
     Q&A transcript (prior speakers' outputs in the new speaker's prompt)."""
     parts = [f"INITIAL PROMPT:\n{initial_prompt}"]
+    parts.append(
+        "INTAKE RULES:\n"
+        "- Your FIRST question to the user must be \"What is the organization's "
+        "goal?\" — establish the goal before any other clarifying question "
+        "(scope, size, ownership, success criteria). Do not jump into scope or "
+        "org-size clarifications until you understand the goal.\n"
+        "- Only ask clarifying questions you genuinely need; when confident, "
+        "stop."
+    )
     if transcript:
         parts.append("Q&A SO FAR:")
         for entry in transcript:

@@ -11,7 +11,9 @@ a localhost dashboard with live charts —
 - **cycle duration per iteration** (phase 4/5/6 durations),
 
 plus a real-time **conversation monitor** (the active pod's transcript live,
-last-N historical pods expandable).
+last-N historical pods expandable). Historical pods only populate as pods are
+spun up (transcript files created or rewritten after the dashboard starts);
+prior runs' transcript files are seeded (suppressed) at startup.
 
 The dashboard only READS the organization's state; agents can never write
 here (``observability/`` is locked in ``runtime/permissions.py``).
@@ -110,6 +112,27 @@ class Watcher:
         }
 
     # --- file polling --------------------------------------------------------
+
+    def seed_transcripts(self) -> None:
+        """Record the size of every **existing** pod transcript file without
+        ingesting its content.
+
+        Called once when the dashboard starts: 'Historical pods' must only
+        populate as pods are spun up (files created or rewritten *after* the
+        dashboard starts), not from prior runs' transcript files. ``poll()``
+        skips a transcript file whose size equals the recorded offset, so the
+        seeded offsets suppress the existing files until they change.
+        """
+        if not os.path.isdir(self.transcripts_dir):
+            return
+        for name in os.listdir(self.transcripts_dir):
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(self.transcripts_dir, name)
+            try:
+                self._offsets[path] = os.path.getsize(path)
+            except OSError:
+                pass
 
     def _read_new_lines(self, path: str) -> List[str]:
         if not os.path.exists(path):
@@ -273,6 +296,10 @@ def main() -> int:
     args = ap.parse_args()
 
     watcher = Watcher(args.root)
+    # 'Historical pods' only populates as pods are spun up: seed the existing
+    # transcript files' sizes (suppressing their prior content) BEFORE the
+    # initial load, so only files created/changed after startup are ingested.
+    watcher.seed_transcripts()
     watcher.poll()  # initial load (existing history)
     threading.Thread(target=_watch_loop, args=(watcher,), daemon=True).start()
     server = make_server(watcher, args.host, args.port)

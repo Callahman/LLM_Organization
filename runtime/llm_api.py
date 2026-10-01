@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -133,7 +134,9 @@ class OpenAIBackend(LLMBackend):
         Returns ``(envelope, outcome)`` where outcome is ``"tool_call"`` or
         ``"content_fallback"``. Preferred: the ``submit_output`` tool call's
         JSON arguments. Fallback: plain JSON ``content`` (a server that
-        ignored the tool). Anything else raises ``OpenAIOutputError``
+        ignored the tool), or a call the model wrote as **text** inside
+        ``content`` (a fenced JSON block or an embedded JSON object, via
+        ``_recover_tool_call``). Anything else raises ``OpenAIOutputError``
         (visible, never silent).
         """
         message = data["choices"][0]["message"]
@@ -162,17 +165,80 @@ class OpenAIBackend(LLMBackend):
         if content.strip():
             try:
                 out = json.loads(content)
-            except json.JSONDecodeError as e:
-                raise OpenAIOutputError(
-                    f"reply has no {TOOL_NAME} tool call and content is not "
-                    f"JSON: {content[:300]!r} ({e})"
-                ) from e
-            if isinstance(out, dict):
-                return out, "content_fallback"
+                if isinstance(out, dict):
+                    return out, "content_fallback"
+            except json.JSONDecodeError:
+                pass  # try the text-shape recovery below
+            recovered = OpenAIBackend._recover_tool_call(content)
+            if recovered is not None:
+                return recovered, "content_fallback"
         raise OpenAIOutputError(
             f"reply has no {TOOL_NAME} tool call and no JSON object content: "
             f"{content[:300]!r}"
         )
+
+    @staticmethod
+    def _recover_tool_call(content: str) -> Optional[Dict[str, Any]]:
+        """Recover a ``submit_output`` call the model wrote as **text** inside
+        ``content``.
+
+        A server without tool-call support (or a model that ignored the forced
+        tool) can emit the call in the reply body as text. Handle the common
+        text shapes:
+
+        - a fenced JSON block containing the call's arguments (the whole
+          block, or the call's ``arguments`` member if present);
+        - a bare JSON object embedded in the text (the first brace-delimited
+          span that parses as an object).
+
+        Returns the parsed envelope dict, or ``None`` if no shape recovers.
+        """
+        candidates: list = []
+        # Fenced blocks: ```json ... ``` (or any ``` ... ``` fence).
+        for m in re.finditer(r"```[a-zA-Z0-9_-]*[ \t]*\n(.*?)```",
+                             content, re.DOTALL):
+            block = m.group(1).strip()
+            if block:
+                candidates.append(block)
+        # First brace-delimited span in the raw text (covers a bare JSON
+        # object surrounded by prose; the scanner is string-aware so braces
+        # inside string values do not confuse it).
+        start = content.find("{")
+        if start != -1:
+            depth = 0
+            in_str = False
+            esc = False
+            for i in range(start, len(content)):
+                ch = content[i]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            candidates.append(content[start:i + 1])
+                            break
+        for cand in candidates:
+            try:
+                out = json.loads(cand)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(out, dict):
+                continue
+            # A tool-call wrapper: {"name": ..., "arguments": {...}}.
+            if isinstance(out.get("arguments"), dict):
+                return out["arguments"]
+            return out
+        return None
 
     def _report(self, role, outcome: str, t0: float, error: str = "") -> None:
         if self.on_call is None:
