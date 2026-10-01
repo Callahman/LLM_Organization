@@ -258,39 +258,63 @@ def _dept_slug(name: str) -> str:
     return slug or "dept"
 
 
+def _normalize_head_spec(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Normalize a single department-head spec — in **any** of the shapes the
+    leader produces — to ``{id, department, sub_architype, required, mandate}``.
+    Accepts the canonical keys (``department``/``sub_architype``) and the
+    leader's free-text keys (``name``/``head``). Returns ``None`` if the spec
+    has no usable department name or head."""
+    name = str(d.get("department", "") or d.get("name", "")).strip()
+    head = str(d.get("sub_architype", "") or d.get("head", "")).strip()
+    mandate = str(d.get("mandate", "")).strip()
+    if not name and not head:
+        return None
+    rid = str(d.get("id", "")).strip() or f"head_{_dept_slug(name)}"
+    return {
+        "id": rid,
+        "department": _dept_slug(name),
+        "sub_architype": head,
+        "required": bool(d.get("required", False)),
+        "mandate": mandate,
+    }
+
+
 def _extract_department_heads(out: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extract the proposed department heads from the leader's Phase 3 output,
     accepting the **multiple structures the leader actually produces** (not just
-    the canonical `org_recommendation.department_heads`). The real LLM leader
-    tends to emit `org_recommendation.departments` — a list of
-    `{name, head, mandate}` — so that shape is normalized here. Each spec is
-    normalized to `{id, department, sub_architype, required, mandate}`."""
+    the canonical ``org_recommendation.department_heads``). The real LLM leader
+    may emit ``org_recommendation.departments`` (a list of ``{name, head,
+    mandate}``), or free-form some *other* list-of-objects under
+    ``org_recommendation`` (the key name varies run to run). Each spec is
+    normalized to ``{id, department, sub_architype, required, mandate}``."""
     rec = out.get("org_recommendation") or {}
-    # Canonical: org_recommendation.department_heads (already normalized).
-    heads = rec.get("department_heads") or []
-    if heads:
-        return [h for h in heads if isinstance(h, dict)]
-    # The leader's actual structure: org_recommendation.departments (a list of
-    # {name, head, mandate}). Normalize it.
-    depts = rec.get("departments") or []
-    normalized: List[Dict[str, Any]] = []
-    for d in depts:
-        if not isinstance(d, dict):
+    if not isinstance(rec, dict):
+        return []
+
+    def _norm_list(val: Any) -> List[Dict[str, Any]]:
+        if not (isinstance(val, list) and val):
+            return []
+        norm = [_normalize_head_spec(d) for d in val if isinstance(d, dict)]
+        return [n for n in norm if n is not None]
+
+    # 1. Canonical: org_recommendation.department_heads.
+    norm = _norm_list(rec.get("department_heads"))
+    if norm:
+        return norm
+    # 2. The leader's known shape: org_recommendation.departments.
+    norm = _norm_list(rec.get("departments"))
+    if norm:
+        return norm
+    # 3. Fallback: any other list-of-objects under org_recommendation (the
+    #    leader free-forms the key name). Scan the remaining keys and return
+    #    the first that yields at least one usable head.
+    for key, val in rec.items():
+        if key in ("department_heads", "departments"):
             continue
-        name = str(d.get("name", "")).strip()
-        head = str(d.get("head", "")).strip()
-        mandate = str(d.get("mandate", "")).strip()
-        if not name and not head:
-            continue
-        slug = _dept_slug(name)
-        normalized.append({
-            "id": f"head_{slug}",
-            "department": slug,
-            "sub_architype": head,
-            "required": False,
-            "mandate": mandate,
-        })
-    return normalized
+        norm = _norm_list(val)
+        if norm:
+            return norm
+    return []
 
 
 def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
@@ -347,22 +371,31 @@ def bootstrap(
     # Bounded retry: the leader's head proposal must include at least one
     # operational department head (not just the required governance depts).
     proposed: List[Dict[str, Any]] = []
+    last_out: Dict[str, Any] = {}
     for _ in range(max(1, head_retry_budget)):
-        out = backend.invoke(
+        last_out = backend.invoke(
             leader, _bootstrap_context(mission_result),
             # The Leader's head proposal is a resourcing decision -> thinking on.
             reasoning=classify_complexity(3, leader, {"is_decision": True}),
         )
-        candidate = _extract_department_heads(out)
+        candidate = _extract_department_heads(last_out)
         if _has_operational_head(candidate):
             proposed = candidate
             break
     if not _has_operational_head(proposed):
+        # Visible diagnostic: show exactly what the leader returned so the
+        # cause is self-evident from the traceback (no re-run to debug).
+        rec = last_out.get("org_recommendation")
+        rec_keys = (list(rec.keys()) if isinstance(rec, dict)
+                    else type(rec).__name__)
+        top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
         raise BootstrapError(
             "Phase 3 produced no operational department heads "
             f"(after {head_retry_budget} attempts) — the org would have only "
             "the required governance departments (hr, safety, morality), so no "
-            "work could be dispatched in Phase 4. Re-run the session."
+            "work could be dispatched in Phase 4. Re-run the session.\n"
+            f"  leader reply top-level keys: {top_keys}\n"
+            f"  leader reply org_recommendation: {rec_keys}"
         )
     created: List[Role] = []
     for spec in proposed:

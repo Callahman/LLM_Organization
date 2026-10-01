@@ -59,6 +59,31 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
         "questions": {"type": "array"},        # Phase 1 clarifying questions
         "assumptions": {"type": "array"},      # Phase 1 (budget exhaustion)
         "mission_draft": {"type": "object"},   # Phase 2
+        # Phase 3: the org bootstrap head proposal. Optional at the top level
+        # (so it does not leak into the other phases) but, when present, the
+        # `department_heads` array is REQUIRED — this is the exact shape
+        # `runtime/org.py::bootstrap` reads, so the forced submit_output tool
+        # constrains the model to emit it (the "did nothing" regression).
+        "org_recommendation": {
+            "type": "object",
+            "properties": {
+                "department_heads": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "department": {"type": "string"},
+                            "sub_architype": {"type": "string"},
+                            "required": {"type": "boolean"},
+                            "mandate": {"type": "string"},
+                        },
+                        "required": ["id", "department", "mandate"],
+                    },
+                },
+            },
+            "required": ["department_heads"],
+        },
         "decomposition": {"type": "object"},   # Phase 4
         "verdict": {"type": "string"},         # Phase 5/6: complete / continue / escalate
     },
