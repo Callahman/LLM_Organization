@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -33,12 +34,18 @@ class MissionResult:
     edits: List[Dict[str, Any]] = field(default_factory=list)
 
 
-def _mission_context(intake_result: IntakeResult, feedback: str) -> str:
+def _mission_context(intake_result: IntakeResult, feedback: str,
+                     current_mission: str = "") -> str:
     parts = [
         "PHASE 2: codify the global mission (MISSION.md).",
         f"Intake confidence: {intake_result.confidence:.2f} "
         f"(converged={intake_result.converged})",
     ]
+    if current_mission:
+        parts.append(
+            "CURRENT MISSION (revise it — the goal may have changed):\n"
+            + current_mission
+        )
     if intake_result.assumptions:
         parts.append("Assumptions to carry (mark in the mission):")
         parts.extend(f"  - {a}" for a in intake_result.assumptions)
@@ -104,6 +111,24 @@ def _log_edit(
     return record
 
 
+def load_mission(mission_path: str = "MISSION.md"):
+    """Load the current mission from disk. Returns `(version, text)` — the
+    version (from the `# MISSION (vN)` header, or None if absent) and the full
+    mission text (for seeding a revisit's draft / the intake frame). Returns
+    `(None, "")` if the file is missing."""
+    if not os.path.exists(mission_path):
+        return None, ""
+    with open(mission_path, encoding="utf-8") as f:
+        text = f.read()
+    version = None
+    lines = text.splitlines()
+    if lines:
+        m = re.match(r"# MISSION \(v(\d+)\)", lines[0])
+        if m:
+            version = int(m.group(1))
+    return version, text
+
+
 def run_mission(
     backend: LLMBackend,
     leader: Role,
@@ -112,34 +137,41 @@ def run_mission(
     mission_path: str = "MISSION.md",
     history_dir: str = "history",
     reask_budget: int = 3,
+    start_version: Optional[int] = None,
+    current_mission: str = "",
 ) -> MissionResult:
     """Run the Phase 2 mission codification + permission flow.
 
     `user_permission_fn(draft) -> {"decision": "approve"|"reject",
-    "feedback": str}` supplies the user's decision on a draft.
+    "feedback": str}` supplies the user's decision on a draft. On a revisit
+    (`start_version` set), the version number **continues** from the current
+    mission (v1 -> v2 -> ...) and the draft is seeded from the current mission
+    (`current_mission`) so the Leader revises it rather than starting fresh.
     """
     edits: List[Dict[str, Any]] = []
     attempts = 0
     approved = False
     version: Optional[int] = None
     feedback = ""
+    base_version = start_version or 0
 
     while attempts < reask_budget:
         attempts += 1
-        ctx = _mission_context(intake_result, feedback)
+        ctx = _mission_context(intake_result, feedback, current_mission)
         out = backend.invoke(leader, ctx)
         draft = out.get("mission_draft", {})
         decision = user_permission_fn(draft)
 
         if decision.get("decision") == "approve":
             approved = True
-            version = attempts
+            version = base_version + attempts
             _write_mission(mission_path, draft, version)  # the only write path
             edits.append(_log_edit(history_dir, version, draft, decision, written=True))
             break
 
         feedback = decision.get("feedback", "")
-        edits.append(_log_edit(history_dir, attempts, draft, decision, written=False))
+        edits.append(_log_edit(history_dir, base_version + attempts, draft,
+                               decision, written=False))
 
     return MissionResult(
         approved=approved,

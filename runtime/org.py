@@ -89,6 +89,41 @@ class OrgState:
         self.events = []
         return path
 
+    # --- Persistence (the org chart, across runs) --------------------------
+
+    def save(self, path: str = "state/org_chart.json") -> str:
+        """Persist the org chart (every role + the role-definition catalog) to
+        `path`. The event log is **not** persisted (it is already appended to
+        `history/org_events.jsonl`). Returns the path written."""
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        payload = {
+            "roles": {rid: r.to_dict() for rid, r in self.roles.items()},
+            "role_definitions": self.role_definitions,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return path
+
+    @classmethod
+    def load(cls, path: str = "state/org_chart.json",
+             history_dir: str = "history") -> "OrgState":
+        """Load an org chart from `path`. Returns a fresh `OrgState` (empty if
+        the file is missing)."""
+        org = cls(history_dir=history_dir)
+        if not os.path.exists(path):
+            return org
+        try:
+            with open(path, encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, ValueError):
+            return org
+        for rid, data in payload.get("roles", {}).items():
+            org.roles[rid] = Role.from_dict(data)
+        org.role_definitions = payload.get("role_definitions", {})
+        return org
+
 
 # --- Approval matrix -------------------------------------------------------
 
@@ -220,9 +255,14 @@ def bootstrap(
     mission_result: MissionResult,
     approver_fn: Callable[[str, str, Role], Dict[str, str]],
     departments_dir: str = "departments",
+    additive: bool = False,
 ) -> List[Role]:
     """Phase 3: Leader proposes department heads → HR redundancy review →
-    registry creation → directories. Required departments are always present."""
+    registry creation → directories. Required departments are always present.
+
+    In `additive` mode (a revisit), the bootstrap only **adds** roles — a
+    proposed role whose id already exists in the org is skipped (never
+    dropped / overwritten)."""
     out = backend.invoke(
         leader, _bootstrap_context(mission_result),
         # The Leader's head proposal is a resourcing decision -> thinking on.
@@ -241,6 +281,9 @@ def bootstrap(
             mandate=spec.get("mandate", ""),
             is_required=spec.get("required", False),
         )
+        if additive and org.get(head.id) is not None:
+            # Additive-only: never drop / overwrite an existing role.
+            continue
         # HR redundancy review (vetoes redundant hires).
         decision = approver_fn("hr", "hire", head)
         if decision.get("decision") != "approve":

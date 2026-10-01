@@ -78,6 +78,12 @@ def main() -> None:
         "--interactive", action="store_true",
         help="prompt for the Leader's clarifying answers and the mission "
              "approval (default: unattended auto-answer / auto-approve).")
+    parser.add_argument(
+        "--revisit", action="store_true",
+        help="revisit the current mission: re-clarify the goal (Phase 1), "
+             "continue the mission version (Phase 2), bootstrap additively "
+             "(Phase 3), and re-save the org chart. Roles remember prior "
+             "runs (their memory is loaded from / saved to disk).")
     args = parser.parse_args()
 
     user_answer_fn, user_permission_fn, approver_fn = (
@@ -92,13 +98,17 @@ def main() -> None:
     )
 
     mode = "interactive" if args.interactive else "unattended"
-    print(f"Running the Organization pipeline ({mode})...")
+    if args.revisit:
+        print("Revisiting the current mission (roles remember prior runs)...")
+    else:
+        print(f"Running the Organization pipeline ({mode})...")
     result = session.run(
-        initial_prompt="Build a small ETL pipeline for our analytics team.",
+        initial_prompt="",  # blank: Phase 1 starts from the Leader's role info
         user_answer_fn=user_answer_fn,
         user_permission_fn=user_permission_fn,
         approver_fn=approver_fn,
         max_iterations=2,
+        revisit=args.revisit,
     )
 
     print("=== Session complete ===")

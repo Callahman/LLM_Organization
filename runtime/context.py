@@ -17,7 +17,7 @@ Token counting is a deterministic whitespace-token estimate (no model needed).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def estimate_tokens(text: str) -> int:
@@ -63,6 +63,32 @@ class RoleMemory:
 
     def __len__(self) -> int:
         return len(self.entries)
+
+    # --- Persistence (across runs) -----------------------------------------
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the memory (for `MemoryBackend.save_state`)."""
+        return {
+            "max_entries": self.max_entries,
+            "entries": [
+                {"summary": e.summary, "source": e.source,
+                 "team": e.team, "ts": e.ts}
+                for e in self.entries
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RoleMemory":
+        """Deserialize a memory (for `MemoryBackend.load_state`)."""
+        mem = cls(max_entries=data.get("max_entries", 20))
+        for e in data.get("entries", []):
+            mem.entries.append(MemoryEntry(
+                summary=e.get("summary", ""),
+                source=e.get("source", "intra-team"),
+                team=e.get("team", ""),
+                ts=e.get("ts", 0.0),
+            ))
+        return mem
 
 
 # --- Four-part prompt construction -----------------------------------------

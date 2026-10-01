@@ -23,6 +23,7 @@ archives/*
 !archives/.gitkeep
 state/role_memory/*
 !state/role_memory/.gitkeep
+state/org_chart.json
 pods/transcripts/*
 !pods/transcripts/.gitkeep
 pods/artifacts/*

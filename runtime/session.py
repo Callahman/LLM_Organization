@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, List, Optional
 from roles.base import Role, validate_envelope
 from runtime.llm import LLMBackend, MemoryBackend, TimeoutBackend
 from runtime.intake import run_intake, IntakeResult
-from runtime.mission import run_mission, MissionResult
+from runtime.mission import run_mission, MissionResult, load_mission
 from runtime.org import OrgState, bootstrap
 from runtime import dispatch
 from runtime.history import HistoryStore
@@ -335,13 +335,38 @@ class Session:
         approver_fn: Callable[[str, str, Role], Dict[str, str]],
         phase4_halt_fn: Optional[Callable[[], Optional[Dict[str, str]]]] = None,
         max_iterations: int = 3,
+        revisit: bool = False,
     ) -> SessionResult:
         """Run the pipeline: Phases 1-3 run **once** (intake, mission, org
         bootstrap), then Phases 4 & 5 **iterate** (dispatch, synthesis) for up
         to `max_iterations` passes — or until the evaluation says the
         deliverable is genuinely polished. The stop is **bounded** (the
         iteration cap) **and goal-based** (the leader can stop early on
-        'complete'); the original goal is still abided by on every pass."""
+        'complete'); the original goal is still abided by on every pass.
+
+        Each role's isolated memory is loaded from / saved to disk around the
+        run (so a role remembers prior runs). A `revisit` run additionally
+        loads the saved org chart + the current mission, re-clarifies the goal
+        in Phase 1, continues the mission version in Phase 2, bootstraps
+        additively in Phase 3, and re-saves the org chart at the end."""
+        memory_dir = self.config.get("memory_dir", "state/role_memory")
+        org_chart_path = self.config.get("org_chart_path", "state/org_chart.json")
+        mission_path = self.config.get("mission_path", "MISSION.md")
+
+        # Load each role's persisted memory (so roles remember prior runs).
+        self.backend.load_state(memory_dir)
+
+        # A revisit: load the saved org chart + the current mission.
+        start_version = None
+        current_mission = ""
+        if revisit:
+            loaded_org = OrgState.load(org_chart_path,
+                                       history_dir=self.org.history_dir)
+            for rid, role in loaded_org.roles.items():
+                self.org.roles.setdefault(rid, role)
+            self.org.role_definitions.update(loaded_org.role_definitions)
+            start_version, current_mission = load_mission(mission_path)
+
         self.phases = []
         self.cycles = 0
 
@@ -351,6 +376,7 @@ class Session:
             confidence_threshold=self.config.get("confidence_threshold", 0.8),
             question_budget=self.config.get("question_budget", 5),
             history_dir=self.org.history_dir,
+            current_mission=current_mission,
         )
         self.phases.append(1)
 
@@ -359,6 +385,8 @@ class Session:
             self.backend, self.leader, intake, user_permission_fn,
             history_dir=self.org.history_dir,
             reask_budget=self.config.get("mission_reask_budget", 3),
+            start_version=start_version,
+            current_mission=current_mission,
         )
         self.phases.append(2)
         if not mission.approved:
@@ -367,7 +395,8 @@ class Session:
 
         # --- Phase 3: org bootstrap (once) ---
         self._phase(3, 0, bootstrap,
-            self.org, self.backend, self.leader, mission, approver_fn)
+            self.org, self.backend, self.leader, mission, approver_fn,
+            additive=revisit)
         self.org.write_events()
         self.phases.append(3)
 
@@ -417,6 +446,11 @@ class Session:
         # Rolling window + archive cap (Epic 7): old sessions move to the
         # archives; the audit path stays resolvable.
         self.history.maintain()
+
+        # Persist each role's memory (so it carries into the next run) and the
+        # org chart (so a --revisit run loads it).
+        self.backend.save_state(memory_dir)
+        self.org.save(org_chart_path)
 
         return SessionResult(
             status=status,

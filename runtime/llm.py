@@ -10,6 +10,8 @@ later task and must implement the same interface.
 
 from __future__ import annotations
 
+import json
+import os
 import random
 import threading
 from abc import ABC, abstractmethod
@@ -176,15 +178,62 @@ class MemoryBackend(LLMBackend):
         full_prompt = assemble_prompt(role, context, memory=memory)
         # Call the inner backend.
         result = self.inner.invoke(role, full_prompt, reasoning)
-        # After the invoke: append the role's output to its memory (bounded).
-        # A manager accumulates conversations (summaries); an IC/dev accumulates
-        # work artifacts (raw code) — so append both the summary and any work
-        # artifact the role produced.
+        # After the invoke: record the interaction (both sides) — what the
+        # role was asked and what it produced. This is how a role remembers
+        # ALL its past interactions (and, via save_state/load_state, across
+        # runs). A manager accumulates conversations (summaries); an IC/dev
+        # accumulates work artifacts — so the entry carries the summary and
+        # any work artifact the role produced.
         team = getattr(role, "team", "")
-        summary = result.get("summary", "")
-        if summary:
-            memory.add_summary(summary, source="intra-team", team=team)
-        work = result.get("work_path") or result.get("artifact")
+        input_digest = " ".join(context.split())[:200]
+        summary = str(result.get("summary", ""))
+        work = result.get("work_path") or result.get("artifact") or ""
+        interaction = f"asked: {input_digest} -> did: {summary}"
         if work:
-            memory.add_summary(f"work: {work}", source="report", team=team)
+            interaction += f" (work: {work})"
+        if interaction:
+            memory.add_summary(interaction, source="intra-team", team=team)
         return result
+
+    # --- Persistence (across runs) -----------------------------------------
+
+    def save_state(self, directory: str = "state/role_memory") -> int:
+        """Persist each role's memory to `<directory>/<role_id>.json`.
+        Returns the number of roles saved. This is what a --continue /
+        --revisit run loads so roles remember prior runs."""
+        os.makedirs(directory, exist_ok=True)
+        saved = 0
+        for role_id, memory in self.role_memories.items():
+            path = os.path.join(directory, f"{role_id}.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(memory.to_dict(), f, ensure_ascii=False, indent=2)
+            saved += 1
+        return saved
+
+    def load_state(self, directory: str = "state/role_memory") -> int:
+        """Load persisted role memories from `<directory>/<role_id>.json`.
+        A role that already has in-memory entries keeps them; the persisted
+        history is prepended (oldest first) so the role remembers prior runs
+        plus the current run. Returns the number of roles loaded."""
+        if not os.path.isdir(directory):
+            return 0
+        loaded = 0
+        for name in sorted(os.listdir(directory)):
+            if not name.endswith(".json"):
+                continue
+            role_id = name[: -len(".json")]
+            path = os.path.join(directory, name)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                continue
+            persisted = RoleMemory.from_dict(data)
+            existing = self.role_memories.get(role_id)
+            if existing is None:
+                self.role_memories[role_id] = persisted
+            else:
+                merged = persisted.entries + existing.entries
+                existing.entries = merged[-existing.max_entries:]
+            loaded += 1
+        return loaded

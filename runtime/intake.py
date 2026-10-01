@@ -33,10 +33,28 @@ class IntakeResult:
     audit_path: Optional[str] = None
 
 
-def _assemble_context(initial_prompt: str, transcript: List[Dict[str, Any]]) -> str:
-    """Assemble the Leader's intake context: the initial prompt + the running
-    Q&A transcript (prior speakers' outputs in the new speaker's prompt)."""
-    parts = [f"INITIAL PROMPT:\n{initial_prompt}"]
+def _assemble_context(
+    initial_prompt: str = "",
+    transcript: Optional[List[Dict[str, Any]]] = None,
+    current_mission: str = "",
+) -> str:
+    """Assemble the Leader's intake context.
+
+    The **initial prompt** section is included only when a non-blank prompt is
+    supplied (a fresh run starts from the Leader's role info + the intake
+    rules — no ETL seed). The **current mission** section is included on a
+    revisit (the goal may have changed — re-clarify). The running Q&A
+    transcript is always appended (prior speakers' outputs in the new
+    speaker's prompt).
+    """
+    parts: List[str] = []
+    if initial_prompt and initial_prompt.strip():
+        parts.append(f"INITIAL PROMPT:\n{initial_prompt}")
+    if current_mission and current_mission.strip():
+        parts.append(
+            "CURRENT MISSION (the goal may have changed — re-clarify it):\n"
+            + current_mission
+        )
     parts.append(
         "INTAKE RULES:\n"
         "- Your FIRST question to the user must be \"What is the organization's "
@@ -93,6 +111,7 @@ def run_intake(
     confidence_threshold: float = 0.8,
     question_budget: int = 5,
     history_dir: str = "history",
+    current_mission: str = "",
 ) -> IntakeResult:
     """Run the Phase 1 intake loop.
 
@@ -107,7 +126,8 @@ def run_intake(
 
     for r in range(1, question_budget + 1):
         rounds = r
-        ctx = _assemble_context(initial_prompt, transcript)
+        ctx = _assemble_context(initial_prompt, transcript,
+                                current_mission=current_mission)
         # Not converging and near the budget -> a deeper pass (thinking on).
         level = classify_complexity(
             1, leader,
@@ -144,7 +164,8 @@ def run_intake(
     else:
         # Question budget exhausted: proceed with the best understanding,
         # explicitly marking assumptions.
-        ctx = _assemble_context(initial_prompt, transcript)
+        ctx = _assemble_context(initial_prompt, transcript,
+                                current_mission=current_mission)
         # Final pass at budget exhaustion: complex if we never converged.
         level = classify_complexity(
             1, leader,

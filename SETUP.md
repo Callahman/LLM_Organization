@@ -48,10 +48,10 @@ Get-ChildItem
 
 You should see `README.md`, `SETUP.md`, `EXECUTION_CHECKLIST.md`,
 `OBSERVABILITY_CHECKLIST.md`, `Organization_Outline.md`, `MISSION.md`,
-`requirements.txt`, `.env.example`, `run_session.py`, `run_org.bat`, and the
-`runtime/`, `org/`, `roles/`, `tests/`, `departments/`, `observability/`
-directories (plus the state directories `pods/`, `state/`, `history/`,
-`archives/`, `reports/` and the `.gitignore`).
+`requirements.txt`, `.env.example`, `run_session.py`, `reset_org.py`,
+`run_org.bat`, and the `runtime/`, `org/`, `roles/`, `tests/`,
+`departments/`, `observability/` directories (plus the state directories
+`pods/`, `state/`, `history/`, `archives/`, `reports/` and the `.gitignore`).
 
 ---
 
@@ -385,6 +385,40 @@ python run_session.py
 **What to look for:** a clean completion (or a visible verdict/escalation)
 with no exceptions.
 
+### Revisiting the mission (`--revisit`)
+
+Roles remember their past: each role's isolated memory is loaded from / saved
+to `state/role_memory/` around every run, so a later run starts with the
+context of what already happened. To **revisit the current mission**
+(re-clarify the goal, continue the mission version, bootstrap the org
+additively):
+
+```powershell
+python run_session.py --revisit
+```
+
+**What happens:** Phase 1 re-clarifies the goal against the existing
+`MISSION.md`; Phase 2 continues the version number (v1 → v2 → …) and revises
+the mission; Phase 3 adds roles only (it never drops / overwrites an existing
+one); Phases 4–5 run as usual; then the org chart is re-saved to
+`state/org_chart.json` for the next revisit.
+
+**What to look for:** the mission advancing to the next version, the existing
+roles preserved (only new roles added), and the org chart re-saved.
+
+### Resetting the organization (clean slate)
+
+To wipe the generated state (departments, teams, the org chart, role memory,
+the mission, and the audit trails) so the next run starts fresh:
+
+```powershell
+python reset_org.py          # dry run — prints what would be deleted
+python reset_org.py --yes    # actually delete
+```
+
+**What happens:** deletes `departments/`, `state/` (org chart + role memory),
+`MISSION.md`, and `history/*.jsonl`. The `history/` directory itself is kept.
+
 ---
 
 ## Troubleshooting
@@ -425,10 +459,10 @@ When you're finished, you should have:
 - The repo layout uses drive-letter Windows paths in the docs, but the code
   itself uses `pathlib`/relative `os.path` so it is portable.
 - Generated state (`history/`, `archives/`, `state/role_memory/`,
-  `pods/transcripts/`, `pods/artifacts/`, `reports/offloading/`,
-  `reports/evaluation/`) is git-ignored; the `.gitkeep` markers keep the
-  directories in the repo. `history/` also carries the run's JSONL logs
-  (`org_events`, `code_edits`, `tool_calls`, `cycles`) that the
+  `state/org_chart.json`, `pods/transcripts/`, `pods/artifacts/`,
+  `reports/offloading/`, `reports/evaluation/`) is git-ignored; the `.gitkeep`
+  markers keep the directories in the repo. `history/` also carries the run's
+  JSONL logs (`org_events`, `code_edits`, `tool_calls`, `cycles`) that the
   observability dashboard tails.
 - `observability/` is **operator-owned**: it is tracked in the repo, and
   `runtime/permissions.py` locks it so no agent can ever write into it.
