@@ -54,10 +54,12 @@ def test_memory_decay_bounded_oldest_dropped():
     # Bounded: the memory holds exactly its (random, per-role) bound.
     assert len(memory) <= hi
     assert len(memory) == memory.max_entries
-    # Oldest dropped first: the newest is present, the oldest is gone.
+    # Oldest dropped first: the newest is present, the oldest is gone. The
+    # entries now record the full interaction ("asked: ... -> did: entry N"),
+    # so match on a substring.
     summaries = [e.summary for e in memory.entries]
-    assert "entry 29" in summaries
-    assert "entry 0" not in summaries
+    assert any("entry 29" in s for s in summaries)
+    assert not any("entry 0" in s for s in summaries)
 
 
 def test_per_role_bound_within_range():
@@ -79,9 +81,11 @@ def test_work_artifact_appended_to_memory():
     mem = MemoryBackend(stub)
     mem.invoke(ic, "do the work")
     entries = mem.role_memories["ic1"].entries
+    # The work artifact is folded into the interaction record (both sides:
+    # asked + did + work), so it appears in the intra-team entry's summary.
     assert any(
-        e.summary == "work: departments/analytics/pipelines/extractor.md"
-        and e.source == "report"
+        "work: departments/analytics/pipelines/extractor.md" in e.summary
+        and e.source == "intra-team"
         for e in entries
     )
 

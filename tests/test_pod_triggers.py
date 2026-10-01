@@ -15,6 +15,7 @@ After the pod runs, the decision is carried **all three ways**:
 """
 
 import os
+import re
 
 from roles.base import Role
 from roles.leader import make_leader
@@ -27,6 +28,15 @@ from runtime.session import Session
 def _role(rid, architype, department="", team="", reports_to=None):
     return Role(id=rid, architype=architype, department=department, team=team,
                 reports_to=reports_to)
+
+
+def _objective(ctx: str) -> str:
+    """The OBJECTIVE section of a prompt (the actual context). The SHORT-TERM
+    MEMORY section now also contains prior phase labels (the full interaction
+    is recorded), so filter on the OBJECTIVE only when matching a phase."""
+    m = re.search(r"OBJECTIVE:\n(.*?)(?:\n\nSHORT-TERM MEMORY:|\Z)",
+                  ctx, re.DOTALL)
+    return m.group(1) if m else ""
 
 
 def _org():
@@ -206,7 +216,7 @@ def test_pod_carry_over_three_ways(tmp_path):
     assert os.path.exists(os.path.join(artifacts_dir, pod.id + ".md"))
     # (2) The decision is in the leader's Phase 5 synthesis prompt.
     phase5 = [ctx for rid, ctx in backend.calls
-              if rid == "leader" and "PHASE 5" in ctx][-1]
+              if rid == "leader" and "PHASE 5" in _objective(ctx)][-1]
     assert "POD DECISIONS" in phase5
     assert "approve schema v2" in phase5
     # (3) The decision is seeded into the members' memory with a `pod:<id>`
