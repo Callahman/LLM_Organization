@@ -84,7 +84,28 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
             },
             "required": ["department_heads"],
         },
-        "decomposition": {"type": "object"},   # Phase 4
+        # Phase 4: the top-down dispatch decomposition. Optional at the top
+        # level (so it does not leak into the other phases) but, when present,
+        # the `department_objectives` array is REQUIRED — the exact shape
+        # `runtime/dispatch.py::dispatch` reads, so the forced submit_output
+        # tool constrains the model to emit it (not a free-form string).
+        "decomposition": {
+            "type": "object",
+            "properties": {
+                "department_objectives": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "head_id": {"type": "string"},
+                            "objective": {"type": "string"},
+                        },
+                        "required": ["head_id", "objective"],
+                    },
+                },
+            },
+            "required": ["department_objectives"],
+        },
         "verdict": {"type": "string"},         # Phase 5/6: complete / continue / escalate
     },
     "required": ["summary", "confidence"],

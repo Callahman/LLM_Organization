@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from roles.base import Role
+from roles.worker import worker_output_schema
 from runtime.org import OrgState, hire
 from runtime.llm import LLMBackend
 from runtime.complexity import detect_disagreement
@@ -67,10 +68,12 @@ def _leader_ctx(digest: str, head_ids: List[str]) -> str:
     return (
         "PHASE 4: decompose the mission into department objectives. "
         f"Mission digest: {digest} "
-        "Produce decomposition.department_objectives: a NON-EMPTY list of "
-        "{head_id, objective}. The head_id MUST be one of the existing "
-        f"department heads: {head_ids}. Do NOT invent new head_ids — only "
-        "assign objectives to the heads that already exist in the org."
+        "Set `decomposition` to a JSON OBJECT (not a string) whose "
+        "`department_objectives` key is a NON-EMPTY JSON array of objects, "
+        "each exactly {\"head_id\": <str>, \"objective\": <str>}. "
+        f"The head_id MUST be one of the existing department heads: {head_ids}. "
+        "Do NOT invent new head_ids — only assign objectives to the heads that "
+        "already exist in the org."
     )
 
 
@@ -78,8 +81,10 @@ def _head_ctx(head: Role, objective: str, digest: str) -> str:
     return (
         f"PHASE 4 (head {head.id}): decompose the department objective into "
         f"team objectives. Objective: {objective} | Mission digest: {digest} "
-        "Produce decomposition.team_objectives: a list of {manager_id, "
-        "objective} (or {ic_id, objective} if the head directs ICs directly)."
+        "Set `decomposition` to a JSON OBJECT (not a string) whose "
+        "`team_objectives` key is a JSON array of objects, each exactly "
+        "{\"manager_id\": <str>, \"objective\": <str>} (or "
+        "{\"ic_id\": <str>, \"objective\": <str>} if you direct ICs directly)."
     )
 
 
@@ -87,18 +92,21 @@ def _manager_ctx(manager: Role, objective: str) -> str:
     return (
         f"PHASE 4 (manager {manager.id}): decompose the team objective into "
         f"IC tasks. Objective: {objective} "
-        "Produce decomposition.ic_tasks: a list of {ic_id, task}."
+        "Set `decomposition` to a JSON OBJECT (not a string) whose "
+        "`ic_tasks` key is a JSON array of objects, each exactly "
+        "{\"ic_id\": <str>, \"task\": <str>}."
     )
 
 
 def _ic_ctx(ic: Role, task: str) -> str:
     return (
         f"PHASE 4 (IC {ic.id}): do the work in your team directory. Task: "
-        f"{task} Produce a summary of the work done (and the work path). "
-        "If your work requires changing code, also propose code_edits: a "
-        "list of {path, content}. Each edit is gated by the permission "
-        "layer: you may only write inside your own team/department scope; "
-        "the mission and the rules are read-only."
+        f"{task} Set `summary` to a one-line summary of the work done and "
+        "`work_path` to the path of the work. If your work requires changing "
+        "code, set `code_edits` to a JSON array of objects, each exactly "
+        "{\"path\": <str>, \"content\": <str>}. Each edit is gated by the "
+        "permission layer: you may only write inside your own team/department "
+        "scope; the mission and the rules are read-only."
     )
 
 
@@ -159,6 +167,7 @@ def _ensure_role(
         department=department,
         team=team,
         reports_to=initiator.id,
+        output_schema=worker_output_schema(architype),
     )
     try:
         return hire(org, initiator, new_role, approver_fn)
@@ -293,6 +302,28 @@ def _check_pod_triggers(
             seed(member.id, pod.id, pod.decision, member.team)
 
 
+def _decomposition_list(out: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
+    """Safely read a list from a role's ``decomposition`` object, tolerating the
+    shapes the real LLM free-forms: a dict (canonical), a bare list (the model
+    collapsed the object into the list itself), or a string/number/None (the
+    model ignored the forced schema). Returns a list of dicts (empty if none).
+
+    This is the defensive half of the Phase-4 fix: even if the model ignores
+    the forced ``submit_output`` schema, a string ``decomposition`` degrades to
+    "no work to dispatch" (visible + logged) instead of an ``AttributeError``
+    crash on ``.get(...)``."""
+    rec = (out or {}).get("decomposition")
+    if isinstance(rec, dict):
+        val = rec.get(key)
+    elif isinstance(rec, list):
+        val = rec
+    else:
+        return []
+    if not isinstance(val, list):
+        return []
+    return [v for v in val if isinstance(v, dict)]
+
+
 def dispatch(
     backend: LLMBackend,
     org: OrgState,
@@ -324,7 +355,7 @@ def dispatch(
     digest = mission_digest(mission)
     head_ids = [h.id for h in org.department_heads()]
     out = backend.invoke(leader, _leader_ctx(digest, head_ids))
-    dept_objectives = out.get("decomposition", {}).get("department_objectives", [])
+    dept_objectives = _decomposition_list(out, "department_objectives")
     if not dept_objectives:
         # The leader's Phase 4 decomposition came back empty — no work to
         # dispatch. Log it so the no-op is visible, never silent.
@@ -351,7 +382,7 @@ def dispatch(
                 )
             continue
         head_out = backend.invoke(head, _head_ctx(head, obj.get("objective", ""), digest))
-        team_objectives = head_out.get("decomposition", {}).get("team_objectives", [])
+        team_objectives = _decomposition_list(head_out, "team_objectives")
 
         team_reports: List[Dict[str, Any]] = []
         for t_obj in team_objectives:
@@ -363,7 +394,7 @@ def dispatch(
                 )
             if manager is not None:
                 mgr_out = backend.invoke(manager, _manager_ctx(manager, t_obj.get("objective", "")))
-                ic_tasks = mgr_out.get("decomposition", {}).get("ic_tasks", [])
+                ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
                 ic_reports: List[Dict[str, Any]] = []
                 ic_outputs: List[Dict[str, Any]] = []  # full IC outputs (trigger A)
                 ic_ids: List[str] = []

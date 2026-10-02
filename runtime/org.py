@@ -27,6 +27,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from roles.base import Role
+from roles.worker import worker_output_schema
 from runtime.mission import MissionResult
 from runtime.complexity import classify_complexity
 
@@ -336,6 +337,7 @@ def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
             department=dept,
             mandate=f"Head of {dept.upper()}.",
             is_required=True,
+            output_schema=worker_output_schema("department_head"),
         )
         org.add_role(head)
         _create_department_dirs(head, departments_dir)
@@ -406,6 +408,7 @@ def bootstrap(
             department=spec.get("department", ""),
             mandate=spec.get("mandate", ""),
             is_required=spec.get("required", False),
+            output_schema=worker_output_schema("department_head"),
         )
         if additive and org.get(head.id) is not None:
             # Additive-only: never drop / overwrite an existing role.

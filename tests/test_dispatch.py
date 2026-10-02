@@ -86,6 +86,70 @@ def test_dispatch_skips_missing_roles(tmp_path):
     assert reports == []
 
 
+def test_dispatch_tolerates_head_string_decomposition(tmp_path):
+    """The head's `decomposition` came back as a **string** (the exact Phase-4
+    crash: `head_out['decomposition'].get(...)` -> AttributeError) — the
+    dispatch must degrade to 'no team work' for that department, not crash."""
+    org, leader, head, mgr, ic = _org()
+    backend = StubBackend()
+    backend.set_script("leader", [
+        {"decomposition": {"department_objectives": [
+            {"head_id": "head_analytics", "objective": "build the pipeline"},
+        ]}},
+    ])
+    # The head's decomposition is a string (the model ignored the forced
+    # schema) — this is the exact shape that crashed dispatch.
+    backend.set_script("head_analytics", [
+        {"summary": "decompose",
+         "decomposition": "Have the pipelines manager build the ETL."},
+    ])
+    mission = {"purpose": "a data pipeline", "success_criteria": ["works"],
+               "scope": ["ETL"]}
+    # Must NOT raise AttributeError — the department reports up with zero team
+    # work (the head produced no team_objectives).
+    reports = dispatch(backend, org, leader, mission)
+    assert len(reports) == 1
+    assert reports[0]["head"] == "head_analytics"
+
+
+def test_dispatch_tolerates_leader_string_decomposition(tmp_path):
+    """The leader's `decomposition` is a **string** (the model ignored the
+    forced schema) — the dispatch degrades to 'no work to dispatch' (zero
+    reports), not an AttributeError crash."""
+    org, leader, head, mgr, ic = _org()
+    backend = StubBackend()
+    backend.set_script("leader", [
+        {"summary": "decompose",
+         "decomposition": "Assign the pipeline build to the analytics head."},
+    ])
+    mission = {"purpose": "a data pipeline", "success_criteria": ["works"],
+               "scope": ["ETL"]}
+    reports = dispatch(backend, org, leader, mission)
+    assert reports == []
+
+
+def test_decomposition_list_tolerates_shapes():
+    """_decomposition_list() handles the shapes the real LLM free-forms: a dict
+    (canonical), a bare list (collapsed), and a string/None (ignored)."""
+    from runtime.dispatch import _decomposition_list
+    # Canonical: a dict with the key.
+    assert _decomposition_list(
+        {"decomposition": {"team_objectives": [{"objective": "x"}]}},
+        "team_objectives") == [{"objective": "x"}]
+    # Collapsed: the object is a bare list.
+    assert _decomposition_list(
+        {"decomposition": [{"objective": "x"}]}, "team_objectives") == [{"objective": "x"}]
+    # String: the model ignored the schema.
+    assert _decomposition_list(
+        {"decomposition": "have the manager build it"}, "team_objectives") == []
+    # Missing: no decomposition key.
+    assert _decomposition_list({}, "team_objectives") == []
+    # Non-dict items are filtered out.
+    assert _decomposition_list(
+        {"decomposition": {"team_objectives": [{"objective": "x"}, "str", 5]}},
+        "team_objectives") == [{"objective": "x"}]
+
+
 def test_mission_digest_is_bounded():
     mission = {"purpose": "a pipeline", "success_criteria": ["works", "fast"],
                "scope": ["ETL"], "constraints": ["no new deps"]}
