@@ -113,11 +113,18 @@ def run_intake(
     question_budget: int = 5,
     history_dir: str = "history",
     current_mission: str = "",
+    mission_path: str = "MISSION.md",
 ) -> IntakeResult:
     """Run the Phase 1 intake loop.
 
     `user_answer_fn(questions) -> str` supplies the user's answer to a round's
     clarifying questions (in tests, a scripted function).
+
+    `mission_path` is the existing mission file (if any). When it does not
+    exist, no goal has been established yet, so the intake opens with the
+    hard-coded goal question and does not converge on the Leader's confidence
+    alone (a high-confidence round-1 response must not short-circuit the goal
+    question).
     """
     transcript: List[Dict[str, Any]] = []
     assumptions: List[str] = []
@@ -125,8 +132,28 @@ def run_intake(
     rounds = 0
     converged = False
 
+    # If no goal is established yet (no MISSION.md), the first question is the
+    # hard-coded goal question (don't trust the Leader's confidence).
+    goal_established = os.path.exists(mission_path)
+
     for r in range(1, question_budget + 1):
         rounds = r
+        # If no goal is established yet, the first question is the hard-coded
+        # goal question (don't invoke the Leader, don't converge).
+        if not goal_established:
+            questions = ["What is the organization's goal?"]
+            goal_established = True
+            transcript.append(
+                {
+                    "role": "leader",
+                    "round": r,
+                    "confidence": 0.0,
+                    "questions": questions,
+                }
+            )
+            answer = user_answer_fn(questions)
+            transcript.append({"role": "user", "round": r, "answer": answer})
+            continue
         ctx = _assemble_context(initial_prompt, transcript,
                                 current_mission=current_mission)
         # Not converging and near the budget -> a deeper pass (thinking on).

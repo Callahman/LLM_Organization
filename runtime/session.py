@@ -394,6 +394,7 @@ class Session:
             question_budget=self.config.get("question_budget", 5),
             history_dir=self.org.history_dir,
             current_mission=current_mission,
+            mission_path=mission_path,
         )
         self.phases.append(1)
 

@@ -29,7 +29,12 @@ def test_vague_prompt_converges(tmp_path):
         {"summary": "understood", "questions": [], "confidence": 0.9},
     ])
 
-    answers = iter(["a weekly report", "it must be accurate"])
+    # Round 1 is the hard-coded goal question (no MISSION.md exists); the
+    # Leader then runs rounds 2-4 (converging at round 4). Use an isolated
+    # mission path in tmp_path so the test does not depend on a leftover
+    # MISSION.md in the repo root.
+    mission_path = os.path.join(str(tmp_path), "MISSION.md")
+    answers = iter(["build a thing", "a weekly report", "it must be accurate"])
     result = run_intake(
         backend,
         leader,
@@ -38,10 +43,11 @@ def test_vague_prompt_converges(tmp_path):
         confidence_threshold=0.8,
         question_budget=5,
         history_dir=str(tmp_path),
+        mission_path=mission_path,
     )
     assert result.converged
     assert result.confident
-    assert result.rounds == 3
+    assert result.rounds == 4
     # The audit trail was written.
     assert os.path.exists(os.path.join(str(tmp_path), "intake.jsonl"))
 
@@ -53,6 +59,9 @@ def test_clear_prompt_short_circuits(tmp_path):
     backend.set_script("leader", [
         {"summary": "clear", "questions": [], "confidence": 0.9},
     ])
+    # Isolated mission path in tmp_path (does not exist -> hard-coded goal
+    # question at round 1), so the test does not depend on the repo root.
+    mission_path = os.path.join(str(tmp_path), "MISSION.md")
     result = run_intake(
         backend,
         leader,
@@ -61,23 +70,31 @@ def test_clear_prompt_short_circuits(tmp_path):
         confidence_threshold=0.8,
         question_budget=5,
         history_dir=str(tmp_path),
+        mission_path=mission_path,
     )
     assert result.converged
-    assert result.rounds == 1
+    # Round 1 is the hard-coded goal question (no MISSION.md); the Leader
+    # converges at round 2.
+    assert result.rounds == 2
 
 
 def test_budget_exhaustion_marks_assumptions(tmp_path):
     leader = make_leader()
     backend = StubBackend()
     # Never reaches threshold within the budget: keeps asking questions.
+    # Round 1 is the hard-coded goal question (no MISSION.md), so the Leader
+    # gets rounds 2-3 (budget 3) to ask questions, then the budget-exhausted
+    # pass marks assumptions.
     backend.set_script("leader", [
         {"summary": "?", "questions": ["q1?"], "confidence": 0.3},
         {"summary": "?", "questions": ["q2?"], "confidence": 0.4},
-        {"summary": "?", "questions": ["q3?"], "confidence": 0.5},
         # After the budget, the Leader marks assumptions.
         {"summary": "best guess", "questions": [], "confidence": 0.55,
          "assumptions": ["assume weekly cadence", "assume accuracy = 95%"]},
     ])
+    # Isolated mission path in tmp_path (does not exist -> hard-coded goal
+    # question at round 1), so the test does not depend on the repo root.
+    mission_path = os.path.join(str(tmp_path), "MISSION.md")
     result = run_intake(
         backend,
         leader,
@@ -86,6 +103,7 @@ def test_budget_exhaustion_marks_assumptions(tmp_path):
         confidence_threshold=0.8,
         question_budget=3,
         history_dir=str(tmp_path),
+        mission_path=mission_path,
     )
     assert not result.converged
     assert not result.confident
