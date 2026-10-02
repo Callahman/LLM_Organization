@@ -56,6 +56,12 @@ class Pod:
     closed_reason: str = ""
     input_artifacts: List[str] = field(default_factory=list)
     transcript: List[Dict[str, Any]] = field(default_factory=list)
+    # A **solo** pod is a single-role (leader) working step observed as a pod
+    # (P1/P2/P3/P5/P6). It skips the 2–6 / 1-tier-spread membership bounds
+    # (a lone leader is not a working group) and its transcript grows per
+    # round in `pods/transcripts/` so the dashboard can watch the leader's
+    # solo work, not just the multi-role pods.
+    solo: bool = False
 
 
 def form_pod(
@@ -215,6 +221,12 @@ def write_transcripts(pod: Pod, transcripts_dir: str = "pods/transcripts") -> st
             elif entry.get("kind") == "carried_decision":
                 f.write(f"- [carried] from {entry.get('from_pod')}: "
                         f"{entry.get('decision', '')}\n")
+            else:
+                # A solo (single-role) leader step (intake / mission /
+                # bootstrap / synthesis / decision) — render its label +
+                # summary so the dashboard can show the leader's solo work.
+                f.write(f"- [{entry.get('kind')}, r{entry.get('round')}] "
+                        f"{entry.get('role')}: {entry.get('summary', '')}\n")
     return base
 
 
@@ -242,3 +254,64 @@ def write_decision_artifact(pod: Pod, artifacts_dir: str = "pods/artifacts") -> 
         f.write(f"- open items: {', '.join(pod.open_items) or '(none)'}\n")
         f.write(f"- members: {', '.join(artifact['members'])}\n")
     return base
+
+
+# --- Solo (single-role) leader pods (P1/P2/P3/P5/P6) ------------------------
+
+def form_solo_pod(leader: Role, phase: str, topic: str) -> Pod:
+    """Form a **solo** pod: the leader working a single phase, observed as a
+    pod. Skips the 2–6 / 1-tier-spread membership bounds (a lone leader is not
+    a working group) — the pod has the leader as both starter and sole member.
+    The id is stable per (leader, phase) so the transcript file grows per
+    round (one file per phase, rewritten each round)."""
+    pod_id = f"solo_{leader.id}_{phase}"
+    return Pod(id=pod_id, starter=leader, members=[leader],
+               topic=topic, solo=True)
+
+
+def record_solo_step(pod: Pod, round_no: int, kind: str,
+                     output: Dict[str, Any]) -> None:
+    """Append one leader working step to a solo pod's transcript. `kind` is a
+    short label for the step (e.g. ``questions``, ``answer``, ``draft``,
+    ``verdict``); the full structured output is carried in the entry so the
+    dashboard can render the leader's actual work."""
+    pod.transcript.append({
+        "kind": kind,
+        "role": pod.starter.id,
+        "round": round_no,
+        "summary": str(output.get("summary", "")),
+        "output": output,
+    })
+
+
+class SoloTracker:
+    """Holds the leader's solo pods (one per phase: P1/P2/P3/P5/P6) and
+    rewrites their transcripts after each step, so the observability dashboard
+    can watch the leader's solo work (not just the multi-role pods).
+
+    Each phase gets one pod (one transcript file, growing per round). The
+    tracker is optional: when no `transcripts_dir` is supplied, steps are
+    recorded in memory only (no file I/O) — so a session without observability
+    still works.
+    """
+
+    def __init__(self, leader: Role,
+                 transcripts_dir: Optional[str] = "pods/transcripts"):
+        self.leader = leader
+        self.transcripts_dir = transcripts_dir
+        self.pods: Dict[str, Pod] = {}
+
+    def pod_for(self, phase: str, topic: str) -> Pod:
+        """Get (or create) the solo pod for a phase (one file per phase)."""
+        if phase not in self.pods:
+            self.pods[phase] = form_solo_pod(self.leader, phase, topic)
+        return self.pods[phase]
+
+    def record(self, phase: str, topic: str, round_no: int, kind: str,
+               output: Dict[str, Any]) -> None:
+        """Record one leader working step for a phase and (re)write the
+        transcript so the dashboard sees it live."""
+        pod = self.pod_for(phase, topic)
+        record_solo_step(pod, round_no, kind, output)
+        if self.transcripts_dir:
+            write_transcripts(pod, self.transcripts_dir)

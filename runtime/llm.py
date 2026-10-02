@@ -16,7 +16,7 @@ import random
 import threading
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from runtime.context import RoleMemory, assemble_prompt
 
@@ -106,8 +106,12 @@ class TimeoutBackend(LLMBackend):
         self.timeout_seconds = timeout_seconds
 
     def invoke(self, role, context: str,
-               reasoning: Reasoning = Reasoning.LOW) -> Dict[str, Any]:
+               reasoning: Reasoning = Reasoning.LOW,
+               timeout: Optional[float] = None) -> Dict[str, Any]:
         box: Dict[str, Any] = {}
+        # A per-invoke timeout override (e.g. a heavier Phase-4 IC work step
+        # gets a larger budget than the default). `None` uses the default.
+        effective = self.timeout_seconds if timeout is None else timeout
 
         def worker() -> None:
             try:
@@ -117,10 +121,10 @@ class TimeoutBackend(LLMBackend):
 
         t = threading.Thread(target=worker, daemon=True)
         t.start()
-        t.join(self.timeout_seconds)
+        t.join(effective)
         if t.is_alive():
             raise LLMTimeoutError(
-                f"backend invoke for {role.id} exceeded {self.timeout_seconds}s"
+                f"backend invoke for {role.id} exceeded {effective}s"
             )
         if "err" in box:
             raise box["err"]
@@ -172,12 +176,20 @@ class MemoryBackend(LLMBackend):
         memory.add_summary(decision, source=f"pod:{pod_id}", team=team)
 
     def invoke(self, role, context: str,
-               reasoning: Reasoning = Reasoning.LOW) -> Dict[str, Any]:
+               reasoning: Reasoning = Reasoning.LOW,
+               timeout: Optional[float] = None) -> Dict[str, Any]:
         memory = self._memory_for(role.id)
         # Before the invoke: fold the role's isolated memory into its prompt.
         full_prompt = assemble_prompt(role, context, memory=memory)
-        # Call the inner backend.
-        result = self.inner.invoke(role, full_prompt, reasoning)
+        # Call the inner backend. A per-invoke timeout override is threaded
+        # through the chain (MemoryBackend -> RoutingBackend -> TimeoutBackend).
+        # A raw backend like the StubBackend has no timeout concept (its invoke
+        # has no `timeout` param), so fall back to a plain call on TypeError.
+        try:
+            result = self.inner.invoke(role, full_prompt, reasoning,
+                                       timeout=timeout)
+        except TypeError:
+            result = self.inner.invoke(role, full_prompt, reasoning)
         # After the invoke: record the interaction (both sides) — what the
         # role was asked and what it produced. This is how a role remembers
         # ALL its past interactions (and, via save_state/load_state, across

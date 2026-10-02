@@ -14,6 +14,7 @@ watch and steer the Leader.
 from __future__ import annotations
 
 import argparse
+import os
 
 try:
     import dotenv
@@ -91,10 +92,25 @@ def main() -> None:
         else _unattended_callbacks()
     )
 
+    # Timeouts are config-driven (not hardcoded): `timeout_seconds` bounds
+    # every invoke, and `ic_timeout_seconds` gives the heavier Phase-4 IC work
+    # invokes a larger budget (the ICs do the actual work, so they are the
+    # heaviest invokes and the ones that hit the flat 300s budget). Both can
+    # be overridden via the environment (LLM_TIMEOUT_SECONDS /
+    # LLM_IC_TIMEOUT_SECONDS) without touching this file.
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return float(os.environ.get(name, default))
+        except (TypeError, ValueError):
+            return default
+    config = {
+        "timeout_seconds": _env_float("LLM_TIMEOUT_SECONDS", 300),
+        "ic_timeout_seconds": _env_float("LLM_IC_TIMEOUT_SECONDS", 600),
+    }
     session = Session(
         backend=make_backend(),
         leader=make_leader(),
-        config={"timeout_seconds": 300},
+        config=config,
     )
 
     mode = "interactive" if args.interactive else "unattended"

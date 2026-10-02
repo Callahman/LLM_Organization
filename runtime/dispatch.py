@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from roles.base import Role
+from roles.base import Role, spin_personality, spin_sub_architype
 from roles.worker import worker_output_schema
 from runtime.org import OrgState, hire
 from runtime.llm import LLMBackend
@@ -100,14 +100,25 @@ def _manager_ctx(manager: Role, objective: str) -> str:
 
 
 def _ic_ctx(ic: Role, task: str) -> str:
+    # The exact team work root (departments/<dept>/<team>/). The IC must write
+    # there — a bare top-level dir (e.g. "marketplace_ops/...") is refused by
+    # the permission layer as out_of_scope, so the prompt names the real root
+    # and the work_path must live under it (a dangling pointer otherwise).
+    team_root = (
+        f"departments/{ic.department}/{ic.team}"
+        if ic.department and ic.team else "your team directory"
+    )
     return (
-        f"PHASE 4 (IC {ic.id}): do the work in your team directory. Task: "
-        f"{task} Set `summary` to a one-line summary of the work done and "
-        "`work_path` to the path of the work. If your work requires changing "
-        "code, set `code_edits` to a JSON array of objects, each exactly "
+        f"PHASE 4 (IC {ic.id}): do the work in your team directory. Your team "
+        f"work directory is {team_root}/ — write ALL files there. A bare "
+        f"top-level path (e.g. '{ic.team or 'team'}/...') will be refused by "
+        f"the permission layer (out_of_scope). Task: {task} Set `summary` to "
+        f"a one-line summary of the work done and `work_path` to the path of "
+        f"the work (under {team_root}/). If your work requires changing code, "
+        "set `code_edits` to a JSON array of objects, each exactly "
         "{\"path\": <str>, \"content\": <str>}. Each edit is gated by the "
-        "permission layer: you may only write inside your own team/department "
-        "scope; the mission and the rules are read-only."
+        f"permission layer: write under {team_root}/ only; the mission and "
+        "the rules are read-only."
     )
 
 
@@ -162,9 +173,14 @@ def _ensure_role(
         return role
     if approver_fn is None:
         return None
+    # Spin a functional specialty + a stable behavioral bias so a spun
+    # manager/IC is never left with an empty identity (the prompt rendered
+    # "(architype=ic, sub-architype=, personality=)" before this).
     new_role = Role(
         id=role_id,
         architype=architype,
+        sub_architype=spin_sub_architype(architype, role_id),
+        personality=spin_personality(role_id),
         department=department,
         team=team,
         reports_to=initiator.id,
@@ -336,9 +352,15 @@ def dispatch(
     routing_rules: Optional[List[str]] = None,
     artifacts_dir: str = "pods/artifacts",
     transcripts_dir: str = "pods/transcripts",
+    ic_timeout_seconds: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Run the Phase 4 top-down dispatch. Returns the leader's view: a list of
     department reports (each carrying the chain of team/IC reports up).
+
+    `ic_timeout_seconds` (optional) gives the IC work invokes a larger per-
+    invoke timeout than the session default — the ICs do the actual work, so
+    they are the heaviest invokes and the ones most likely to hit the flat
+    budget. `None` uses the session default.
 
     `approver_fn` (optional) lets the dispatch hire the managers/ICs it
     decomposes onto when they don't exist yet (the full heads->managers->ICs
@@ -408,7 +430,10 @@ def dispatch(
                         )
                     if ic is None:
                         continue
-                    ic_out = backend.invoke(ic, _ic_ctx(ic, task.get("task", "")))
+                    ic_out = backend.invoke(
+                        ic, _ic_ctx(ic, task.get("task", "")),
+                        timeout=ic_timeout_seconds,
+                    )
                     ic_outputs.append(ic_out)
                     ic_ids.append(ic.id)
                     pointer = ic_out.get("work_path", _work_path(ic, task))
@@ -445,7 +470,10 @@ def dispatch(
                     )
                 if ic is None:
                     continue
-                ic_out = backend.invoke(ic, _ic_ctx(ic, t_obj.get("objective", "")))
+                ic_out = backend.invoke(
+                    ic, _ic_ctx(ic, t_obj.get("objective", "")),
+                    timeout=ic_timeout_seconds,
+                )
                 # Self-edit: the IC may propose code edits (gated by the
                 # permission layer).
                 edits = as_dict_list(ic_out.get("code_edits", []))

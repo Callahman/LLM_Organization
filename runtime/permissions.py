@@ -72,57 +72,83 @@ def _rel(path: str) -> str:
     return os.path.normpath(path)
 
 
-def can_edit(role, path: str) -> bool:
-    """True if *role* may write *path*.
+def edit_reason(role, path: str) -> tuple:
+    """Return ``(allowed, reason)`` for a role's write to *path*.
 
-    Enforces, in order: the observability lock (operator-owned, read-only for
-    every role), the mission lock, the meta-rule lock, department-policy
-    ownership, department/team scoping, and org-tooling self-mod.
+    `reason` is a short, human-readable explanation of the decision — which
+    invariant was satisfied (when allowed) or violated (when refused). This is
+    what the audit records on a refusal, so the operator can see *why* an edit
+    was denied without re-deriving it from the code.
+
+    Enforces, in order: the sandbox, the observability lock (operator-owned,
+    read-only for every role), the mission lock, the meta-rule lock,
+    department-policy ownership, department/team scoping, and org-tooling
+    self-mod.
     """
     try:
         resolve(path)
-    except PermissionError:
-        return False
+    except PermissionError as e:
+        return False, f"sandbox: {e}"
     rel = _rel(path)
     parts = rel.split(os.sep)
     # 1. Observability: operator-owned analytics — read-only for every role.
     #    Agents can never write into observability/; the dashboard process
     #    is an operator tool, not an agent.
     if parts and parts[0] == "observability":
-        return False
+        return False, ("observability: operator-owned analytics is read-only "
+                       "for every role")
     # 2. Mission: only the leader may write it (and only via the user-approval
     #    path, a separate check). No role may edit this rule.
     if rel == "MISSION.md":
-        return role.architype == "leader"
+        if role.architype == "leader":
+            return True, "mission: the leader may edit MISSION.md"
+        return False, "mission: only the leader may edit MISSION.md"
     # 3. Meta-rules: read-only for every role (the rules themselves).
     if rel in PROTECTED:
-        return False
+        return False, f"meta_rule: {rel} is a protected invariant"
     # 4. Department policy: only the owning department head.
     #    e.g. departments/engineering/ENGINEERING_POLICY.md
     if parts and parts[0] == "departments" and len(parts) >= 3:
         dept = parts[1]
         if parts[2].endswith("_POLICY.md"):
-            return (
-                role.architype == "department_head"
-                and role.department == dept
-            )
+            if role.architype == "department_head" and role.department == dept:
+                return True, f"department_policy: {role.id} owns {dept}"
+            return False, (f"department_policy: only the {dept} department "
+                           f"head may edit its policy")
         # 5. Team dirs / work files: only roles in that department.
-        return role.department == dept
+        if role.department == dept:
+            return True, f"team_work: {role.id} is in {dept}"
+        return False, (f"team_work: {role.id} (dept "
+                       f"{role.department or '-'}) is not in {dept}")
     # 6. Org tooling: self-mod via the gated loop (any active role).
     if parts and parts[0] in TOOLING:
-        return role.status == "active"
-    return False
+        if role.status == "active":
+            return True, f"org_tooling: {role.id} is active"
+        return False, f"org_tooling: {role.id} is not active"
+    # 7. Out of scope: a top-level dir that is not a recognized write scope.
+    top = parts[0] if parts else rel
+    return False, (f"out_of_scope: '{top}' is not this role's team work dir "
+                   f"(departments/<dept>/<team>/), org tooling "
+                   f"(runtime/org/roles/pods), MISSION.md, or a department "
+                   f"policy")
+
+
+def can_edit(role, path: str) -> bool:
+    """True if *role* may write *path* (see `edit_reason` for the why)."""
+    return edit_reason(role, path)[0]
 
 
 def write_file(role, path: str, content: str) -> str:
     """Write *content* to *path* if *role* may edit it.
 
     The only sanctioned write path for agent self-mod. Raises
-    ``PermissionError`` if the role may not edit the path (sandbox escape,
-    meta-rule, mission, or out-of-scope department).
+    ``PermissionError`` if the role may not edit the path — the message
+    carries the specific reason (which invariant was violated), so a refusal
+    is self-explanatory in the audit.
     """
-    if not can_edit(role, path):
-        raise PermissionError(f"role {role.id!r} may not edit {path!r}")
+    allowed, reason = edit_reason(role, path)
+    if not allowed:
+        raise PermissionError(f"role {role.id!r} may not edit {path!r}: {reason}")
     real = resolve(path)
     parent = os.path.dirname(real)
     if parent:

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from runtime.llm import LLMBackend, Reasoning
+from runtime.llm import LLMBackend, Reasoning, TimeoutBackend
 from runtime.history import HistoryStore
 
 
@@ -128,7 +128,8 @@ class RoutingBackend(LLMBackend):
         self.history = history
 
     def invoke(self, role, context: str,
-               reasoning: Optional[Reasoning] = None) -> Dict[str, Any]:
+               reasoning: Optional[Reasoning] = None,
+               timeout: Optional[float] = None) -> Dict[str, Any]:
         phase = parse_phase(context)
         level = (
             reasoning
@@ -140,4 +141,9 @@ class RoutingBackend(LLMBackend):
             self.history.log_invocation(
                 role.id, phase, level.value, granted.value
             )
+        # A per-invoke timeout override is only honored when the inner is a
+        # TimeoutBackend (a raw backend like the StubBackend has no timeout
+        # concept).
+        if isinstance(self.inner, TimeoutBackend):
+            return self.inner.invoke(role, context, granted, timeout=timeout)
         return self.inner.invoke(role, context, granted)

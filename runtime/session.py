@@ -27,6 +27,7 @@ from runtime.intake import run_intake, IntakeResult
 from runtime.mission import run_mission, MissionResult, load_mission
 from runtime.org import OrgState, bootstrap
 from runtime import dispatch
+from runtime.pods import SoloTracker
 from runtime.history import HistoryStore
 from runtime.complexity import RoutingBackend, ThinkingBudget
 
@@ -81,6 +82,14 @@ class Session:
         # is emergent rather than self-confirmation.
         self.backend = MemoryBackend(routing)
         self.pods: List[Any] = []
+        # Solo (single-role) leader pods: one per phase (P1/P2/P3/P5/P6), so the
+        # observability dashboard can watch the leader's solo work (not just the
+        # multi-role pods). Transcripts grow per round in pods/transcripts/.
+        self.solo = SoloTracker(
+            leader,
+            transcripts_dir=self.config.get("pod_transcripts_dir",
+                                            "pods/transcripts"),
+        )
         self.cycles = 0
 
         # BAU rule state.
@@ -145,6 +154,10 @@ class Session:
         if decisions:
             ctx += " POD DECISIONS: " + "; ".join(decisions)
         out = self.backend.invoke(self.leader, ctx)
+        # Solo (P5): record the leader's synthesis step so the dashboard can
+        # watch it (one transcript file, growing per round).
+        self.solo.record("p5", "Phase 5: synthesis", self.cycles,
+                         "synthesis", out)
         return out.get("verdict", "complete")
 
     # --- Phase 6 evaluation + continue/complete ----------------------------
@@ -198,6 +211,10 @@ class Session:
             f"abiding by the original goal). Evaluation: {evaluation}",
         )
         decision = out.get("verdict", "complete")
+        # Solo (P6): record the leader's continue/complete decision so the
+        # dashboard can watch it (one transcript file, growing per round).
+        self.solo.record("p6", "Phase 6: evaluation", self.cycles,
+                         "decision", out)
         if decision == "continue" and self.cycles < max_iterations:
             return evaluation, "continue"
         return evaluation, "complete"
@@ -259,6 +276,15 @@ class Session:
             history_dir=self.org.history_dir,
         )
         self.phases.append(1)
+        # Solo (P1): record the leader's intake (clarifying Q&A convergence) so
+        # the dashboard can watch it (one transcript file, growing per round).
+        self.solo.record("p1", "Phase 1: intake", self.cycles, "intake",
+                         {"summary": f"intake converged={intake.converged} "
+                                     f"rounds={intake.rounds}",
+                          "confidence": intake.confidence,
+                          "converged": intake.converged,
+                          "rounds": intake.rounds,
+                          "assumptions": intake.assumptions})
 
         # --- Phase 2: mission (permission flow) ---
         mission = self._phase(2, self.cycles, run_mission,
@@ -270,6 +296,16 @@ class Session:
             reask_budget=self.config.get("mission_reask_budget", 3),
         )
         self.phases.append(2)
+        # Solo (P2): record the leader's mission draft + approval so the
+        # dashboard can watch it (one transcript file, growing per round).
+        self.solo.record("p2", "Phase 2: mission", self.cycles, "mission",
+                         {"summary": f"mission approved={mission.approved} "
+                                     f"version={mission.version} "
+                                     f"attempts={mission.attempts}",
+                          "approved": mission.approved,
+                          "version": mission.version,
+                          "attempts": mission.attempts,
+                          "edits": len(mission.edits)})
         if not mission.approved:
             return self._escalate("mission not approved by the user", intake, mission)
         mission_draft = mission.edits[-1]["draft"]
@@ -279,6 +315,13 @@ class Session:
             self.org, self.backend, self.leader, mission, approver_fn)
         self.org.write_events()
         self.phases.append(3)
+        # Solo (P3): record the leader's org-bootstrap (department-head
+        # proposals + hires) so the dashboard can watch it (one transcript
+        # file, growing per round).
+        self.solo.record("p3", "Phase 3: org bootstrap", self.cycles, "bootstrap",
+                         {"summary": "org bootstrapped",
+                          "departments": len(self.org.department_heads()),
+                          "roles": len(self.org.roles)})
 
         # --- Phase 4: top-down dispatch (+ pods / resourcing / BAU) ---
         # The approver_fn lets the dispatch hire the managers/ICs it decomposes
@@ -293,6 +336,7 @@ class Session:
             routing_rules=self.config.get("pod_routing_rules", []),
             artifacts_dir=self.config.get("pod_artifacts_dir", "pods/artifacts"),
             transcripts_dir=self.config.get("pod_transcripts_dir", "pods/transcripts"),
+            ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
         )
         self.phases.append(4)
 
@@ -397,6 +441,14 @@ class Session:
             mission_path=mission_path,
         )
         self.phases.append(1)
+        # Solo (P1): record the leader's intake so the dashboard can watch it.
+        self.solo.record("p1", "Phase 1: intake", 0, "intake",
+                         {"summary": f"intake converged={intake.converged} "
+                                     f"rounds={intake.rounds}",
+                          "confidence": intake.confidence,
+                          "converged": intake.converged,
+                          "rounds": intake.rounds,
+                          "assumptions": intake.assumptions})
 
         # --- Phase 2: mission (once) ---
         mission = self._phase(2, 0, run_mission,
@@ -407,6 +459,15 @@ class Session:
             current_mission=current_mission,
         )
         self.phases.append(2)
+        # Solo (P2): record the leader's mission draft + approval.
+        self.solo.record("p2", "Phase 2: mission", 0, "mission",
+                         {"summary": f"mission approved={mission.approved} "
+                                     f"version={mission.version} "
+                                     f"attempts={mission.attempts}",
+                          "approved": mission.approved,
+                          "version": mission.version,
+                          "attempts": mission.attempts,
+                          "edits": len(mission.edits)})
         if not mission.approved:
             return self._escalate("mission not approved by the user", intake, mission)
         mission_draft = mission.edits[-1]["draft"]
@@ -417,6 +478,11 @@ class Session:
             additive=revisit)
         self.org.write_events()
         self.phases.append(3)
+        # Solo (P3): record the leader's org-bootstrap.
+        self.solo.record("p3", "Phase 3: org bootstrap", 0, "bootstrap",
+                         {"summary": "org bootstrapped",
+                          "departments": len(self.org.department_heads()),
+                          "roles": len(self.org.roles)})
 
         # --- Phases 4 & 5: iterate (bounded + goal-based stop) ---
         dispatch_results: List[Dict[str, Any]] = []
@@ -438,6 +504,7 @@ class Session:
                 routing_rules=self.config.get("pod_routing_rules", []),
                 artifacts_dir=self.config.get("pod_artifacts_dir", "pods/artifacts"),
                 transcripts_dir=self.config.get("pod_transcripts_dir", "pods/transcripts"),
+                ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
             )
             self.phases.append(4)
 
