@@ -52,10 +52,29 @@ def _mission_context(intake_result: IntakeResult, feedback: str,
     if feedback:
         parts.append(f"User feedback on the previous draft: {feedback}")
     parts.append(
-        "Produce mission_draft: purpose, scope, non_goals, success_criteria, "
-        "constraints, org_recommendation, resource_envelope."
+        "Set `mission_draft` to a JSON OBJECT (not a string) with keys: "
+        "`purpose` (string), `success_criteria` (array), `scope` (array), "
+        "`non_goals` (array), `constraints` (array), `org_recommendation` "
+        "(object or string), `resource_envelope` (object or string)."
     )
     return "\n".join(parts)
+
+
+def _mission_draft(out: Dict[str, Any]) -> Dict[str, Any]:
+    """Safely extract the Phase-2 ``mission_draft`` from the Leader's output,
+    tolerating the shapes the real LLM free-forms. A dict is returned as-is;
+    a **string** (the model collapsed the draft to prose — the Phase-2 crash)
+    degrades to ``{"purpose": <string>}`` so it still renders (visible, never
+    an ``AttributeError``); anything else (None / number / list) degrades to
+    an empty dict. This is the defensive half of the Phase-2 fix: even if the
+    model ignores the forced ``submit_output`` schema, a string draft renders
+    as the mission's purpose instead of crashing ``_render_mission``."""
+    rec = (out or {}).get("mission_draft")
+    if isinstance(rec, dict):
+        return rec
+    if isinstance(rec, str) and rec.strip():
+        return {"purpose": rec}
+    return {}
 
 
 def _render_mission(draft: Dict[str, Any], version: int) -> str:
@@ -159,7 +178,7 @@ def run_mission(
         attempts += 1
         ctx = _mission_context(intake_result, feedback, current_mission)
         out = backend.invoke(leader, ctx)
-        draft = out.get("mission_draft", {})
+        draft = _mission_draft(out)
         decision = user_permission_fn(draft)
 
         if decision.get("decision") == "approve":

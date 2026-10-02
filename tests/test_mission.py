@@ -93,6 +93,53 @@ def test_approval_writes_v1_with_change_log(tmp_path):
     assert "approve" in log
 
 
+def test_mission_draft_string_tolerated(tmp_path):
+    """The real LLM leader free-forms `mission_draft` as a **string** (not a
+    dict) — the mission must degrade to rendering the string as the `purpose`
+    (visible, never an AttributeError crash) — the Phase-2 'did nothing'
+    regression."""
+    leader = make_leader()
+    backend = StubBackend()
+    # The leader's mission_draft is a string (the model ignored the forced
+    # schema).
+    backend.set_script("leader", [
+        {"summary": "draft",
+         "mission_draft": "Develop a recurring-income business on the 4090."},
+    ])
+    mission_path = os.path.join(str(tmp_path), "MISSION.md")
+    # The user approves the (string) draft — it must render as the purpose.
+    result = run_mission(
+        backend,
+        leader,
+        _intake(),
+        user_permission_fn=lambda draft: {"decision": "approve", "feedback": ""},
+        mission_path=mission_path,
+        history_dir=str(tmp_path),
+        reask_budget=1,
+    )
+    assert result.approved
+    # The write happened; the string renders as the mission's purpose.
+    assert os.path.exists(mission_path)
+    content = open(mission_path, encoding="utf-8").read()
+    assert "Develop a recurring-income business on the 4090." in content
+
+
+def test_mission_draft_helper_tolerates_shapes():
+    """_mission_draft() handles the shapes the real LLM free-forms: a dict
+    (canonical), a string (collapsed to prose), and None/number (ignored)."""
+    from runtime.mission import _mission_draft
+    # Canonical: a dict.
+    assert _mission_draft({"mission_draft": {"purpose": "x"}}) == {"purpose": "x"}
+    # String: the model collapsed the draft to prose.
+    assert _mission_draft({"mission_draft": "build the pipeline"}) == {"purpose": "build the pipeline"}
+    # Whitespace-only string: degrades to an empty dict.
+    assert _mission_draft({"mission_draft": "   "}) == {}
+    # Missing: no mission_draft key.
+    assert _mission_draft({}) == {}
+    # Number: degrades to an empty dict.
+    assert _mission_draft({"mission_draft": 5}) == {}
+
+
 def test_no_out_of_flow_write_path(tmp_path):
     """The module exposes no public write function — the only write is inside
     `run_mission` on approval (enforced by construction)."""

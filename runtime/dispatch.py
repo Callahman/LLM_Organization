@@ -39,6 +39,7 @@ from runtime.llm import LLMBackend
 from runtime.complexity import detect_disagreement
 from runtime.history import HistoryStore
 from runtime.permissions import apply_code_edits
+from runtime.coerce import as_dict_list
 from runtime.pods import (
     Pod,
     PodMembershipError,
@@ -417,7 +418,7 @@ def dispatch(
                     )
                     # Self-edit: the IC may propose code edits (gated by the
                     # permission layer).
-                    edits = ic_out.get("code_edits", [])
+                    edits = as_dict_list(ic_out.get("code_edits", []))
                     if edits:
                         edit_results = apply_code_edits(
                             ic, edits, log=_self_edit_log(history, ic.id))
@@ -447,7 +448,7 @@ def dispatch(
                 ic_out = backend.invoke(ic, _ic_ctx(ic, t_obj.get("objective", "")))
                 # Self-edit: the IC may propose code edits (gated by the
                 # permission layer).
-                edits = ic_out.get("code_edits", [])
+                edits = as_dict_list(ic_out.get("code_edits", []))
                 if edits:
                     edit_results = apply_code_edits(
                         ic, edits, log=_self_edit_log(history, ic.id))

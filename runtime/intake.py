@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional
 from roles.base import Role
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
+from runtime.coerce import as_float, as_str_list
 
 
 @dataclass
@@ -135,8 +136,8 @@ def run_intake(
              "budget_left": question_budget - r + 1},
         )
         out = backend.invoke(leader, ctx, reasoning=level)
-        confidence = float(out.get("confidence", 0.0))
-        questions = out.get("questions", [])
+        confidence = as_float(out.get("confidence", 0.0))
+        questions = as_str_list(out.get("questions", []))
         transcript.append(
             {
                 "role": "leader",
@@ -155,7 +156,7 @@ def run_intake(
         # No questions but not confident: the Leader marks assumptions and
         # stops asking.
         if not questions:
-            assumptions = list(out.get("assumptions", []))
+            assumptions = as_str_list(out.get("assumptions", []))
             break
 
         # Ask the user and continue.
@@ -172,8 +173,8 @@ def run_intake(
             {"converging": confidence >= confidence_threshold, "budget_left": 0},
         )
         out = backend.invoke(leader, ctx, reasoning=level)
-        confidence = float(out.get("confidence", 0.0))
-        assumptions = list(out.get("assumptions", []))
+        confidence = as_float(out.get("confidence", 0.0))
+        assumptions = as_str_list(out.get("assumptions", []))
         transcript.append(
             {
                 "role": "leader",

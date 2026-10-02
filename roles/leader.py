@@ -58,7 +58,23 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
         # phase-specific extensions:
         "questions": {"type": "array"},        # Phase 1 clarifying questions
         "assumptions": {"type": "array"},      # Phase 1 (budget exhaustion)
-        "mission_draft": {"type": "object"},   # Phase 2
+        # Phase 2: the MISSION.md draft. Optional at the top level (so it does
+        # not leak into the other phases) but, when present, it is a JSON
+        # OBJECT with the exact keys `runtime/mission.py::_render_mission`
+        # reads — so the forced submit_output tool constrains the model to
+        # emit a dict (not a free-form string, the Phase-2 crash).
+        "mission_draft": {
+            "type": "object",
+            "properties": {
+                "purpose": {"type": "string"},
+                "success_criteria": {"type": "array"},
+                "scope": {"type": "array"},
+                "non_goals": {"type": "array"},
+                "constraints": {"type": "array"},
+                "org_recommendation": {},
+                "resource_envelope": {},
+            },
+        },
         # Phase 3: the org bootstrap head proposal. Optional at the top level
         # (so it does not leak into the other phases) but, when present, the
         # `department_heads` array is REQUIRED — this is the exact shape

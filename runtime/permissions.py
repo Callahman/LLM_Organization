@@ -150,6 +150,10 @@ def apply_code_edits(
     """
     results: List[Dict[str, Any]] = []
     for edit in edits or []:
+        # Tolerate a free-form (non-dict) edit — the model occasionally
+        # collapses `code_edits` to a string; skip it (visible, never a crash).
+        if not isinstance(edit, dict):
+            continue
         path = edit.get("path", "")
         content = edit.get("content", "")
         try:

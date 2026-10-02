@@ -37,6 +37,11 @@ TOOL_DESCRIPTION = (
     "role's output schema."
 )
 
+# The known nested keys that must be JSON objects (dicts) — the Phase-2/3/4
+# structured outputs the pipeline reads. A wrong type (e.g. a free-form string)
+# is logged (not rejected) so future free-forms are visible in tool_calls.jsonl.
+_NESTED_OBJECT_KEYS = ("mission_draft", "decomposition", "org_recommendation")
+
 
 class OpenAIOutputError(RuntimeError):
     """The model's reply could not be parsed into the shared output envelope
@@ -255,6 +260,18 @@ class OpenAIBackend(LLMBackend):
         except Exception:
             pass  # observability must never break the pipeline
 
+    def _nested_type_warnings(self, out: Dict[str, Any]) -> str:
+        """Return a warning string if any known nested key arrived as the wrong
+        type (e.g. a free-form string instead of a JSON object). Empty if all
+        known nested keys are well-typed. Observability only — it never rejects
+        a call (the pipeline's tolerant extractors degrade gracefully), but it
+        makes a future free-form visible in ``tool_calls.jsonl``."""
+        problems = []
+        for key in _NESTED_OBJECT_KEYS:
+            if key in out and not isinstance(out[key], dict):
+                problems.append(f"{key}={type(out[key]).__name__}")
+        return ("nested-type: " + ", ".join(problems)) if problems else ""
+
     def invoke(self, role, context: str,
                reasoning: Reasoning = Reasoning.LOW) -> Dict[str, Any]:
         import httpx  # lazy: only the api path needs it
@@ -274,7 +291,10 @@ class OpenAIBackend(LLMBackend):
         except httpx.HTTPError as e:
             self._report(role, "error", t0, str(e))
             raise
-        self._report(role, outcome, t0)
+        # Observability: log (not reject) a wrong-typed nested key (e.g. a
+        # free-form string instead of a JSON object) so future free-forms are
+        # visible in tool_calls.jsonl.
+        self._report(role, outcome, t0, self._nested_type_warnings(out))
         return out
 
 

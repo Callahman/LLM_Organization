@@ -25,6 +25,7 @@ from org import tiers
 from roles.base import Role
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity, detect_disagreement
+from runtime.coerce import as_str_list
 
 
 class PodMembershipError(ValueError):
@@ -176,7 +177,7 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
     out = backend.invoke(pod.starter, _pod_ctx(pod, "close"))
     pod.decision = str(out.get("decision", ""))
     pod.rationale = str(out.get("rationale", ""))
-    pod.open_items = list(out.get("open_items", []))
+    pod.open_items = as_str_list(out.get("open_items", []))
     if not pod.closed_reason:
         pod.closed_reason = "closed by starter"
     pod.transcript.append({
