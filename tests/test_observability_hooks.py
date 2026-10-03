@@ -116,6 +116,8 @@ def test_history_store_observability_logs(tmp_path):
     h.log_tool_call({"ts": 1.0, "role": "leader", "mode": "tools",
                      "outcome": "tool_call", "error": "", "latency": 0.5})
     h.log_cycle(4, 1, 1000.0, 1002.5)
+    h.log_stream("s1", "leader", "qwen", "thinking", "let me think")
+    h.log_stream("s1", "leader", "qwen", "content", "reply")
 
     edits = [json.loads(l) for l in open(
         str(tmp_path / "code_edits.jsonl"), encoding="utf-8")]
@@ -131,3 +133,11 @@ def test_history_store_observability_logs(tmp_path):
         str(tmp_path / "cycles.jsonl"), encoding="utf-8")]
     assert cycles[0]["phase"] == 4
     assert cycles[0]["duration"] == pytest.approx(2.5)
+
+    stream = [json.loads(l) for l in open(
+        str(tmp_path / "stream.jsonl"), encoding="utf-8")]
+    assert stream[0]["stream_id"] == "s1"
+    assert stream[0]["kind"] == "thinking"
+    assert stream[0]["text"] == "let me think"
+    assert stream[1]["kind"] == "content"
+    assert stream[1]["text"] == "reply"

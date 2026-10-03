@@ -64,7 +64,8 @@ class OpenAIBackend(LLMBackend):
     """
 
     def __init__(self, model: str, base_url: str, api_key: str = "",
-                 structured: str = "tools", max_tokens: int = 8192):
+                 structured: str = "tools", max_tokens: int = 8192,
+                 idle_timeout: float = 180.0):
         self.model = model
         self.base_url = (base_url or "").rstrip("/")
         self.api_key = api_key or "not-needed"
@@ -75,11 +76,21 @@ class OpenAIBackend(LLMBackend):
         # "Unterminated string" parse error). KoboldCpp's server-side default
         # is 2048, which is too small for a thinking model; 8192 is safe.
         self.max_tokens = int(max_tokens or 8192)
+        # Progress-based idle timeout (seconds): the max time to wait for the
+        # NEXT streamed chunk. A thinking model keeps emitting chunks
+        # (progress), so a long think never trips this; a hung model emits no
+        # chunks, so it trips after idle_timeout. This is the primary timeout
+        # bound (replacing the old flat wall-clock, which false-timed-out
+        # long-but-active thinks).
+        self.idle_timeout = float(idle_timeout or 180.0)
         # Optional per-call stats callback (observability): called with
         # ``{ts, role, mode, outcome, error, latency}`` after every invoke.
         # The pipeline wires it to ``history/tool_calls.jsonl``; it must
         # never break a call (exceptions are swallowed).
         self.on_call: Optional[Callable[[Dict[str, Any]], None]] = None
+        # Forward each streamed chunk (the dashboard's live "model stream"
+        # window): (stream_id, role_id, model, kind, text).
+        self.on_stream: Optional[Callable[[str, str, str, str, str], None]] = None
 
     # --- request building ---------------------------------------------------
 
@@ -260,6 +271,18 @@ class OpenAIBackend(LLMBackend):
         except Exception:
             pass  # observability must never break the pipeline
 
+    def _emit_stream(self, stream_id: str, role_id: str, kind: str,
+                     text: str) -> None:
+        """Forward one streamed chunk to the on_stream callback (the dashboard's
+        live "model stream" window). Exceptions are swallowed: observability
+        must never break the pipeline (same guarantee as on_call)."""
+        if self.on_stream is None:
+            return
+        try:
+            self.on_stream(stream_id, role_id, self.model, kind, text)
+        except Exception:
+            pass  # observability must never break the pipeline
+
     def _nested_type_warnings(self, out: Dict[str, Any]) -> str:
         """Return a warning string if any known nested key arrived as the wrong
         type (e.g. a free-form string instead of a JSON object). Empty if all
@@ -276,15 +299,77 @@ class OpenAIBackend(LLMBackend):
                reasoning: Reasoning = Reasoning.LOW) -> Dict[str, Any]:
         import httpx  # lazy: only the api path needs it
         t0 = time.time()
+        payload = self._payload(role, context)
+        payload["stream"] = True
+        # Progress-based idle timeout: the `read` timeout is the max time to
+        # wait for the NEXT chunk. A thinking model keeps emitting chunks
+        # (progress), so it never trips this even over a long think; a hung
+        # model emits no chunks, so it trips after idle_timeout seconds. This
+        # replaces the old flat wall-clock (which false-timed-out long-but-
+        # active thinks). We accumulate three buffers from the stream:
+        #   - reasoning_content: the model's chain-of-thought (streamed first);
+        #   - content:           the plain reply (the content-fallback path);
+        #   - tool_calls args:   the forced submit_output call (the tool path).
+        import uuid
+        stream_id = uuid.uuid4().hex[:8]
+        role_id = getattr(role, "id", "")
+        reasoning_buf = ""
+        content_buf = ""
+        tool_args_buf = ""
+        tool_name = TOOL_NAME
         try:
-            resp = httpx.post(
+            with httpx.stream(
+                "POST",
                 f"{self.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                json=self._payload(role, context),
-                timeout=300,
-            )
-            resp.raise_for_status()
-            out, outcome = self._parse(resp.json())
+                json=payload,
+                timeout=httpx.Timeout(connect=10.0, read=self.idle_timeout,
+                                      write=10.0, pool=10.0),
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue  # skip a malformed chunk
+                    choices = obj.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    rc = delta.get("reasoning_content") or ""
+                    if rc:
+                        reasoning_buf += rc
+                        self._emit_stream(stream_id, role_id, "thinking", rc)
+                    cc = delta.get("content") or ""
+                    if cc:
+                        content_buf += cc
+                        self._emit_stream(stream_id, role_id, "content", cc)
+                    for tc in delta.get("tool_calls") or []:
+                        fn = (tc or {}).get("function") or {}
+                        if fn.get("name"):
+                            tool_name = fn["name"]
+                        ta = fn.get("arguments") or ""
+                        if ta:
+                            tool_args_buf += ta
+                            self._emit_stream(stream_id, role_id, "tool_call", ta)
+            # Reconstruct the non-streaming message shape and reuse _parse
+            # (tool-call extraction, content fallback, text-shape recovery).
+            message = {"role": "assistant", "content": content_buf}
+            if tool_args_buf.strip():
+                message["tool_calls"] = [{"function": {"name": tool_name,
+                                                       "arguments": tool_args_buf}}]
+            out, outcome = self._parse({"choices": [{"message": message}]})
+        except httpx.TimeoutException as e:
+            self._report(role, "error", t0,
+                         f"LLM idle timeout: no response chunk for "
+                         f"{self.idle_timeout}s — the model may be hung "
+                         f"({type(e).__name__})")
+            raise
         except OpenAIOutputError as e:
             self._report(role, "error", t0, str(e))
             raise
@@ -315,5 +400,6 @@ def make_backend() -> LLMBackend:
             api_key=os.getenv("LLM_API_KEY", ""),
             structured=os.getenv("LLM_STRUCTURED", "tools"),
             max_tokens=os.getenv("LLM_MAX_TOKENS", "8192"),
+            idle_timeout=os.getenv("LLM_IDLE_TIMEOUT_SECONDS", "180"),
         )
     return StubBackend()

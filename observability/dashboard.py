@@ -63,6 +63,7 @@ class Watcher:
             "code_edits": os.path.join(h, "code_edits.jsonl"),
             "tool_calls": os.path.join(h, "tool_calls.jsonl"),
             "cycles": os.path.join(h, "cycles.jsonl"),
+            "stream": os.path.join(h, "stream.jsonl"),
         }
         self.transcripts_dir = os.path.join(root, "pods", "transcripts")
         self._offsets: Dict[str, int] = {}
@@ -74,6 +75,10 @@ class Watcher:
         self.tool_calls: List[Dict[str, Any]] = []
         self.cycles: List[Dict[str, Any]] = []
         self.pods: Dict[str, Dict[str, Any]] = {}
+        # Live "model stream" window: a 2-slot ring (current + previous
+        # segment). Each segment = one model call (one stream_id), with its
+        # streamed content accumulated per kind (thinking/content/tool_call).
+        self.stream_segments: List[Dict[str, Any]] = []
 
     # --- ingestion (pure state mutations) -----------------------------------
 
@@ -110,6 +115,34 @@ class Watcher:
             "entries": entries,
             "updated": time.time(),
         }
+
+    def ingest_stream(self, e: Dict[str, Any]) -> None:
+        """Ingest one streamed chunk (from history/stream.jsonl). Chunks are
+        grouped by stream_id (one per model call) and accumulated per kind
+        (thinking/content/tool_call). The window is a 2-slot ring: a new
+        stream_id shifts the ring (current -> previous, new -> current), so
+        only the current + previous model call are retained (short-term)."""
+        stream_id = e.get("stream_id", "")
+        if not stream_id:
+            return
+        kind = e.get("kind", "")
+        text = e.get("text", "")
+        # A new stream_id = a new segment (a new model call): shift the ring.
+        if not self.stream_segments or \
+                self.stream_segments[0]["stream_id"] != stream_id:
+            self.stream_segments.insert(0, {
+                "stream_id": stream_id,
+                "role": e.get("role", ""),
+                "model": e.get("model", ""),
+                "kinds": {"thinking": "", "content": "", "tool_call": ""},
+                "updated": time.time(),
+            })
+            del self.stream_segments[2:]  # keep only current + previous
+        # Accumulate the chunk into the current segment's kind.
+        seg = self.stream_segments[0]
+        if kind in seg["kinds"]:
+            seg["kinds"][kind] += text
+        seg["updated"] = time.time()
 
     # --- file polling --------------------------------------------------------
 
@@ -185,6 +218,8 @@ class Watcher:
                         self.ingest_code_edit(e)
                     elif key == "tool_calls":
                         self.ingest_tool_call(e)
+                    elif key == "stream":
+                        self.ingest_stream(e)
                     else:
                         self.ingest_cycle(e)
             self._poll_transcripts()
@@ -200,6 +235,16 @@ class Watcher:
                 }
                 for p in (self.pods[k] for k in sorted(self.pods))
             ]
+            stream = [
+                {
+                    "stream_id": s["stream_id"],
+                    "role": s["role"],
+                    "model": s["model"],
+                    "kinds": {k: v[-4000:] for k, v in s["kinds"].items()},
+                    "updated": s["updated"],
+                }
+                for s in self.stream_segments
+            ]
             return {
                 "ts": time.time(),
                 "agents": {
@@ -211,6 +256,7 @@ class Watcher:
                 "tool_calls": self.tool_calls[-SNAPSHOT_CAP:],
                 "cycles": self.cycles[-SNAPSHOT_CAP:],
                 "pods": pods,
+                "stream": stream,
             }
 
 

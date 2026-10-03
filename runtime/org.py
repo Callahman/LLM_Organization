@@ -356,6 +356,7 @@ def bootstrap(
     departments_dir: str = "departments",
     additive: bool = False,
     head_retry_budget: int = 3,
+    bootstrap_timeout_seconds: Optional[float] = None,
 ) -> List[Role]:
     """Phase 3: Leader proposes department heads → HR redundancy review →
     registry creation → directories. Required departments are always present.
@@ -379,6 +380,11 @@ def bootstrap(
             leader, _bootstrap_context(mission_result),
             # The Leader's head proposal is a resourcing decision -> thinking on.
             reasoning=classify_complexity(3, leader, {"is_decision": True}),
+            # The head proposal is a heavy operation (it proposes 5-6 department
+            # heads, each with a mandate, and the downstream hires) — give it a
+            # larger per-invoke budget than the flat default so it doesn't hit
+            # the 300s timeout. `None` uses the default.
+            timeout=bootstrap_timeout_seconds,
         )
         candidate = _extract_department_heads(last_out)
         if _has_operational_head(candidate):

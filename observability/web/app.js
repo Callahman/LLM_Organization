@@ -337,6 +337,37 @@ function renderPodList() {
   }
 }
 
+/* Live "model stream" window: the 2-slot ring (current + previous model
+ * call). Each segment is headed by role (pod-window naming) + model, and its
+ * streamed content is rendered as {model} [kind]: {output} lines that grow
+ * live as the SSE pushes each second. */
+function renderModelStream() {
+  const pane = $('model-stream');
+  const segments = (state && state.stream) || [];
+  if (!segments.length) {
+    pane.textContent = 'no model activity';
+    pane.classList.remove('busy');
+    return;
+  }
+  pane.classList.add('busy');
+  pane.innerHTML = '';
+  for (const seg of segments) {
+    const head = document.createElement('div');
+    head.className = 'stream-head';
+    head.textContent = seg.role + ' · ' + seg.model;
+    pane.appendChild(head);
+    for (const kind of ['thinking', 'content', 'tool_call']) {
+      const text = (seg.kinds && seg.kinds[kind]) || '';
+      if (!text) continue;
+      const div = document.createElement('div');
+      div.className = 'stream-line stream-' + kind;
+      div.textContent = seg.model + ' [' + kind + ']: ' + text;
+      pane.appendChild(div);
+    }
+  }
+  pane.scrollTop = pane.scrollHeight;
+}
+
 // ---------- render -------------------------------------------------------------
 
 function render() {
@@ -358,6 +389,7 @@ function render() {
   drawBars($('chart-cycles'), buildCycleGroups(state.cycles));
   renderMonitor();
   renderPodList();
+  renderModelStream();
 }
 
 connect();

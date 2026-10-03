@@ -63,6 +63,11 @@ class Session:
         # history/tool_calls.jsonl (the dashboard's "tool calls" metric).
         if hasattr(backend, "on_call"):
             backend.on_call = self.history.log_tool_call
+        # Live "model stream" observability: if the raw backend supports
+        # per-chunk streaming (OpenAIBackend), forward each streamed chunk to
+        # history/stream.jsonl (the dashboard's live "model stream" window).
+        if hasattr(backend, "on_stream"):
+            backend.on_stream = self.history.log_stream
         # Bound the actual backend call: a per-invoke timeout (a visible
         # LLMTimeoutError, never silent) guards the real LLM call.
         timed = TimeoutBackend(
@@ -312,7 +317,9 @@ class Session:
 
         # --- Phase 3: org bootstrap + resourcing ---
         self._phase(3, self.cycles, bootstrap,
-            self.org, self.backend, self.leader, mission, approver_fn)
+            self.org, self.backend, self.leader, mission, approver_fn,
+            bootstrap_timeout_seconds=self.config.get(
+                "bootstrap_timeout_seconds", self.config.get("ic_timeout_seconds")))
         self.org.write_events()
         self.phases.append(3)
         # Solo (P3): record the leader's org-bootstrap (department-head
@@ -475,7 +482,9 @@ class Session:
         # --- Phase 3: org bootstrap (once) ---
         self._phase(3, 0, bootstrap,
             self.org, self.backend, self.leader, mission, approver_fn,
-            additive=revisit)
+            additive=revisit,
+            bootstrap_timeout_seconds=self.config.get(
+                "bootstrap_timeout_seconds", self.config.get("ic_timeout_seconds")))
         self.org.write_events()
         self.phases.append(3)
         # Solo (P3): record the leader's org-bootstrap.

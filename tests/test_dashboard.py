@@ -70,6 +70,41 @@ def test_pod_transcript_active_vs_closed():
     assert w.pods["p1"]["status"] == "closed"
 
 
+def test_ingest_stream_groups_by_stream_id_and_kind():
+    # The Watcher groups streamed chunks by stream_id (one per model call)
+    # and accumulates them per kind (thinking/content/tool_call). The window
+    # is a 2-slot ring: a new stream_id shifts the ring (current -> previous,
+    # new -> current), so only the current + previous model call are retained.
+    w = Watcher(root="/nonexistent")
+    # Segment 1 (stream_id "s1"): thinking + content.
+    w.ingest_stream({"stream_id": "s1", "role": "leader", "model": "qwen",
+                     "kind": "thinking", "text": "let me "})
+    w.ingest_stream({"stream_id": "s1", "role": "leader", "model": "qwen",
+                     "kind": "thinking", "text": "think..."})
+    w.ingest_stream({"stream_id": "s1", "role": "leader", "model": "qwen",
+                     "kind": "content", "text": "reply"})
+    assert len(w.stream_segments) == 1
+    seg1 = w.stream_segments[0]
+    assert seg1["stream_id"] == "s1"
+    assert seg1["kinds"]["thinking"] == "let me think..."
+    assert seg1["kinds"]["content"] == "reply"
+    # Segment 2 (stream_id "s2"): a new model call -> shift the ring.
+    w.ingest_stream({"stream_id": "s2", "role": "ic", "model": "qwen",
+                     "kind": "tool_call", "text": '{"summary": "s"}'})
+    assert len(w.stream_segments) == 2
+    assert w.stream_segments[0]["stream_id"] == "s2"  # current
+    assert w.stream_segments[1]["stream_id"] == "s1"  # previous
+    # Segment 3 (stream_id "s3"): a new model call -> drop the oldest.
+    w.ingest_stream({"stream_id": "s3", "role": "leader", "model": "qwen",
+                     "kind": "thinking", "text": "again"})
+    assert len(w.stream_segments) == 2
+    assert w.stream_segments[0]["stream_id"] == "s3"  # current
+    assert w.stream_segments[1]["stream_id"] == "s2"  # previous (s1 dropped)
+    # The snapshot exposes the 2-slot ring.
+    snap = w.snapshot()
+    assert [s["stream_id"] for s in snap["stream"]] == ["s3", "s2"]
+
+
 # --- file polling (temp dir) ---------------------------------------------------
 
 def test_poll_reads_new_lines_incrementally(tmp_path):

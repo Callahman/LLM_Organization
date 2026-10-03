@@ -37,23 +37,51 @@ def _role():
     )
 
 
-def _install_fake_httpx(monkeypatch, reply):
-    """Inject a fake httpx module whose post() records the request and
-    returns *reply* as the response body. Returns the recorded request."""
-    seen = {}
+def _reply_to_sse_lines(reply):
+    """Convert a non-streaming reply to SSE lines (one data chunk + [DONE]).
 
-    def post(url, headers=None, json=None, timeout=None):
+    The backend now reads a *streaming* response, so the fake reply (in the
+    non-streaming ``message`` shape) is re-shaped into a single ``delta`` chunk
+    — enough to exercise the accumulation + _parse path without a real server.
+    """
+    choices = reply.get("choices") or []
+    if choices:
+        choice = dict(choices[0])
+        if "message" in choice:
+            choice["delta"] = choice.pop("message")
+        reply = dict(reply, choices=[choice])
+    return ["data: " + json.dumps(reply), "data: [DONE]"]
+
+
+def _install_fake_httpx(monkeypatch, reply):
+    """Inject a fake httpx module whose stream() records the request and yields
+    the reply as a single SSE chunk. Returns the recorded request."""
+    seen = {}
+    sse_lines = _reply_to_sse_lines(reply)
+
+    def stream(method, url, headers=None, json=None, timeout=None):
+        seen["method"] = method
         seen["url"] = url
         seen["headers"] = headers
         seen["payload"] = json
         seen["timeout"] = timeout
-        return types.SimpleNamespace(
+        resp = types.SimpleNamespace(
             raise_for_status=lambda: None,
-            json=lambda: reply,
+            iter_lines=lambda: iter(sse_lines),
         )
 
+        class _Ctx:
+            def __enter__(self):
+                return resp
+            def __exit__(self, *a):
+                return False
+        return _Ctx()
+
     mod = types.ModuleType("httpx")
-    mod.post = post
+    mod.stream = stream
+    mod.Timeout = lambda **kw: kw  # fake httpx.Timeout (invoke passes connect/read/...)
+    mod.TimeoutException = type("TimeoutException", (Exception,), {})
+    mod.HTTPError = type("HTTPError", (Exception,), {})
     monkeypatch.setitem(sys.modules, "httpx", mod)
     return seen
 
@@ -109,6 +137,65 @@ def test_tools_mode_missing_schema_degrades_to_empty_object(monkeypatch):
     backend.invoke(role, "ctx")
     params = seen["payload"]["tools"][0]["function"]["parameters"]
     assert params == {"type": "object"}
+
+
+# --- streaming (the rewrite) ---------------------------------------------------
+
+def test_streaming_request_sends_stream_true(monkeypatch):
+    seen = _install_fake_httpx(
+        monkeypatch, _tool_reply({"summary": "s", "confidence": 0.9}))
+    backend = OpenAIBackend(model="m", base_url="http://localhost:5001/v1")
+    backend.invoke(_role(), "ctx")
+    assert seen["payload"]["stream"] is True
+
+
+def test_reasoning_streamed_before_tool_call_is_handled(monkeypatch):
+    # The model streams reasoning_content (its chain-of-thought) first, then
+    # the forced tool call. The rewrite must read the reasoning (to advance the
+    # stream) and still assemble the tool call's arguments into the envelope.
+    reply = {"choices": [{"message": {
+        "content": None,
+        "reasoning_content": "The user wants a summary; let me produce one.",
+        "tool_calls": [
+            {"function": {"name": TOOL_NAME,
+                          "arguments": '{"summary": "s", "confidence": 0.7}'}}
+        ],
+    }}]}
+    _install_fake_httpx(monkeypatch, reply)
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    out = backend.invoke(_role(), "ctx")
+    assert out == {"summary": "s", "confidence": 0.7}
+
+
+def test_on_stream_fires_per_chunk_for_each_kind(monkeypatch):
+    # The model streams reasoning_content (thinking), content (reply), and
+    # tool_calls (tool call). The on_stream callback must fire for each kind,
+    # with (stream_id, role_id, model, kind, text) — the source for the
+    # dashboard's live "model stream" window.
+    reply = {"choices": [{"message": {
+        "content": "plain reply",
+        "reasoning_content": "The user wants a summary; let me produce one.",
+        "tool_calls": [
+            {"function": {"name": TOOL_NAME,
+                          "arguments": '{"summary": "s", "confidence": 0.7}'}}
+        ],
+    }}]}
+    _install_fake_httpx(monkeypatch, reply)
+    backend = OpenAIBackend(model="qwen", base_url="http://x/v1")
+    calls = []
+    backend.on_stream = lambda sid, rid, model, kind, text: calls.append(
+        (sid, rid, model, kind, text))
+    backend.invoke(_role(), "ctx")
+    kinds = [c[3] for c in calls]
+    assert "thinking" in kinds
+    assert "content" in kinds
+    assert "tool_call" in kinds
+    # each call has (stream_id, role_id, model, kind, text)
+    for sid, rid, model, kind, text in calls:
+        assert sid  # non-empty stream_id
+        assert rid == "leader"  # the role's id
+        assert model == "qwen"  # the model
+        assert text  # non-empty text
 
 
 # --- legacy json mode ---------------------------------------------------------

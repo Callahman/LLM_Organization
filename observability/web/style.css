@@ -130,6 +130,37 @@ canvas {
   overflow-y: auto;
 }
 
+/* Live "model stream" window (current + previous model call). */
+.model-stream {
+  height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.model-stream.busy { color: var(--text); border-color: #2c4a5a; }
+
+.stream-head {
+  color: var(--accent);
+  font-weight: 600;
+  margin: 8px 0 4px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 2px;
+}
+
+.stream-head:first-child { margin-top: 0; }
+
+.stream-line { white-space: pre-wrap; word-break: break-word; }
+
+.stream-thinking { color: #b388ff; }
+.stream-content { color: #80ed99; }
+.stream-tool_call { color: #ffd166; }
+
 @media (max-width: 900px) {
   .charts, .monitor { grid-template-columns: 1fr; }
 }
