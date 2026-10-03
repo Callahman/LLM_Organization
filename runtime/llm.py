@@ -36,10 +36,13 @@ class LLMBackend(ABC):
 
     @abstractmethod
     def invoke(self, role, context: str,
-               reasoning: Reasoning = Reasoning.LOW) -> Dict[str, Any]:
+               reasoning: Reasoning = Reasoning.LOW,
+               timeout: Optional[float] = None) -> Dict[str, Any]:
         """Given a role and its context/prompt, return the role's structured
         output (a dict containing the shared output envelope). `reasoning`
-        selects the model's thinking level (complex -> on, simple -> off)."""
+        selects the model's thinking level (complex -> on, simple -> off).
+        `timeout` (optional) is a per-invoke wall-clock budget (seconds);
+        `None` uses the backend's default."""
         raise NotImplementedError
 
 
@@ -81,7 +84,11 @@ class StubBackend(LLMBackend):
         return outputs[idx]
 
     def invoke(self, role, context: str,
-               reasoning: Reasoning = Reasoning.LOW) -> Dict[str, Any]:
+               reasoning: Reasoning = Reasoning.LOW,
+               timeout: Optional[float] = None) -> Dict[str, Any]:
+        # `timeout` (a per-invoke wall-clock budget) is accepted for interface
+        # parity with the real/wrapper backends but unused here: the StubBackend
+        # is deterministic and makes no network calls.
         self.calls.append((role.id, context))
         self.reasoning_log.append(reasoning)
         return self._next(role.id)

@@ -25,12 +25,43 @@ def _role():
     return Role(id="leader", architype="leader", status="active")
 
 
+def _reply_to_sse_lines(reply):
+    """Convert a non-streaming reply to SSE lines (one data chunk + [DONE]).
+
+    The backend now reads a *streaming* response, so the fake reply (in the
+    non-streaming ``message`` shape) is re-shaped into a single ``delta`` chunk
+    — enough to exercise the accumulation + _parse path without a real server.
+    """
+    choices = reply.get("choices") or []
+    if choices:
+        choice = dict(choices[0])
+        if "message" in choice:
+            choice["delta"] = choice.pop("message")
+        reply = dict(reply, choices=[choice])
+    return ["data: " + json.dumps(reply), "data: [DONE]"]
+
+
 def _install_fake_httpx(monkeypatch, reply):
-    def post(url, headers=None, json=None, timeout=None):
-        return types.SimpleNamespace(
-            raise_for_status=lambda: None, json=lambda: reply)
+    sse_lines = _reply_to_sse_lines(reply)
+
+    def stream(method, url, headers=None, json=None, timeout=None):
+        resp = types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            iter_lines=lambda: iter(sse_lines),
+        )
+
+        class _Ctx:
+            def __enter__(self):
+                return resp
+            def __exit__(self, *a):
+                return False
+        return _Ctx()
+
     mod = types.ModuleType("httpx")
-    mod.post = post
+    mod.stream = stream
+    mod.Timeout = lambda **kw: kw  # fake httpx.Timeout (invoke passes connect/read/...)
+    mod.TimeoutException = type("TimeoutException", (Exception,), {})
+    mod.HTTPError = type("HTTPError", (Exception,), {})
     monkeypatch.setitem(sys.modules, "httpx", mod)
 
 

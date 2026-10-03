@@ -296,8 +296,14 @@ class OpenAIBackend(LLMBackend):
         return ("nested-type: " + ", ".join(problems)) if problems else ""
 
     def invoke(self, role, context: str,
-               reasoning: Reasoning = Reasoning.LOW) -> Dict[str, Any]:
+               reasoning: Reasoning = Reasoning.LOW,
+               timeout: Optional[float] = None) -> Dict[str, Any]:
         import httpx  # lazy: only the api path needs it
+        # `timeout` (a per-invoke wall-clock budget) is accepted for interface
+        # parity with the wrapper backends. It is NOT enforced here: the
+        # progress-based idle timeout (the `read` timeout) is the primary guard
+        # within the invoke, and a `TimeoutBackend` wrapper (when present)
+        # enforces the overall per-invoke budget.
         t0 = time.time()
         payload = self._payload(role, context)
         payload["stream"] = True
