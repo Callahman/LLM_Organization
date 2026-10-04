@@ -235,6 +235,11 @@ class Watcher:
                 }
                 for p in (self.pods[k] for k in sorted(self.pods))
             ]
+            # Oldest first, newest last: the ring is [current, previous], so
+            # emit it reversed -> [previous, current]. The dashboard renders
+            # in array order, so the previous call sits on top and the current
+            # (growing) call at the bottom — the most recent output is always
+            # at the bottom, like a terminal.
             stream = [
                 {
                     "stream_id": s["stream_id"],
@@ -243,7 +248,7 @@ class Watcher:
                     "kinds": {k: v[-4000:] for k, v in s["kinds"].items()},
                     "updated": s["updated"],
                 }
-                for s in self.stream_segments
+                for s in reversed(self.stream_segments)
             ]
             return {
                 "ts": time.time(),

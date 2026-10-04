@@ -39,19 +39,13 @@ header h1 { margin: 0; font-size: 18px; font-weight: 600; }
 
 .status.live { color: #80ed99; border-color: #2c4a3a; }
 
-main { padding: 16px 20px 30px; }
-
-.charts {
+main {
+  padding: 16px 20px 30px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
-}
-
-.monitor {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  margin-top: 14px;
+  grid-auto-rows: 280px;   /* each tile is 280px tall */
+  align-items: stretch;
 }
 
 .card {
@@ -60,6 +54,9 @@ main { padding: 16px 20px 30px; }
   border-radius: 10px;
   padding: 12px 14px;
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .card h2 {
@@ -69,16 +66,26 @@ main { padding: 16px 20px 30px; }
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  flex: 0 0 auto;
 }
 
 canvas {
   width: 100%;
-  height: 220px;
+  flex: 1 1 auto;
+  min-height: 0;
   display: block;
 }
 
+/* The Model Stream is a big 2x2 tile: 2 tiles wide (full width) and 2 tiles
+   tall, at the bottom of the grid. */
+.model-stream-card {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+
 .pod-live {
-  height: 260px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -103,7 +110,8 @@ canvas {
   list-style: none;
   margin: 0;
   padding: 0;
-  height: 260px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -132,7 +140,8 @@ canvas {
 
 /* Live "model stream" window (current + previous model call). */
 .model-stream {
-  height: 320px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -162,5 +171,14 @@ canvas {
 .stream-tool_call { color: #ffd166; }
 
 @media (max-width: 900px) {
-  .charts, .monitor { grid-template-columns: 1fr; }
+  main {
+    grid-template-columns: 1fr;
+    grid-auto-rows: auto;
+  }
+  .model-stream-card {
+    grid-column: span 1;
+    grid-row: span 1;
+  }
+  canvas { flex: none; height: 220px; }
+  .pod-live, .model-stream, .pod-list { flex: none; height: 260px; }
 }

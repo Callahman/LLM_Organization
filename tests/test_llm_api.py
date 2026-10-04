@@ -12,7 +12,7 @@ import types
 
 import pytest
 
-from runtime.llm import StubBackend
+from runtime.llm import Reasoning, StubBackend
 from runtime.llm_api import (
     TOOL_NAME,
     OpenAIBackend,
@@ -196,6 +196,225 @@ def test_on_stream_fires_per_chunk_for_each_kind(monkeypatch):
         assert rid == "leader"  # the role's id
         assert model == "qwen"  # the model
         assert text  # non-empty text
+
+
+# --- bounded timeout retries ---------------------------------------------------
+
+def _install_failing_httpx(monkeypatch, fail_times, reply):
+    """Inject a fake httpx whose stream() raises a ReadTimeout for the first
+    `fail_times` attempts, then yields `reply` as a single SSE chunk. Returns a
+    dict with the attempt count and the ReadTimeout class (for assertions)."""
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda s: None)  # no real backoff
+    sse_lines = _reply_to_sse_lines(reply)
+    mod = types.ModuleType("httpx")
+    mod.Timeout = lambda **kw: kw
+    mod.TimeoutException = type("TimeoutException", (Exception,), {})
+    ReadTimeout = type("ReadTimeout", (mod.TimeoutException,), {})
+    mod.HTTPError = type("HTTPError", (Exception,), {})
+    calls = {"n": 0}
+
+    def stream(method, url, headers=None, json=None, timeout=None):
+        calls["n"] += 1
+        if calls["n"] <= fail_times:
+            raise ReadTimeout("simulated idle timeout")
+        resp = types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            iter_lines=lambda: iter(sse_lines),
+        )
+
+        class _Ctx:
+            def __enter__(self):
+                return resp
+            def __exit__(self, *a):
+                return False
+        return _Ctx()
+
+    mod.stream = stream
+    monkeypatch.setitem(sys.modules, "httpx", mod)
+    return {"calls": calls, "ReadTimeout": ReadTimeout}
+
+
+def test_timeout_is_retried_then_succeeds(monkeypatch):
+    # The first attempt times out (a ReadTimeout), the second succeeds. The
+    # backend must retry the whole request (bounded) and return the reply.
+    fake = _install_failing_httpx(
+        monkeypatch, fail_times=1,
+        reply=_tool_reply({"summary": "s", "confidence": 0.9}))
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    out = backend.invoke(_role(), "ctx")
+    assert out == {"summary": "s", "confidence": 0.9}
+    assert fake["calls"]["n"] == 2  # one timeout + one success
+
+
+def test_timeout_exhausts_retries_then_raises(monkeypatch):
+    # Every attempt times out. After max_retries retries (default 3 -> 4 total
+    # attempts), the timeout is re-raised (a visible failure, never silent).
+    fake = _install_failing_httpx(
+        monkeypatch, fail_times=99,
+        reply=_tool_reply({"summary": "s", "confidence": 0.9}))
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    with pytest.raises(fake["ReadTimeout"]):
+        backend.invoke(_role(), "ctx")
+    assert fake["calls"]["n"] == 4  # 1 + 3 retries
+
+
+def test_timeout_retry_respects_max_retries_zero(monkeypatch):
+    # max_retries=0 disables retries: a single timeout is raised immediately.
+    fake = _install_failing_httpx(
+        monkeypatch, fail_times=99,
+        reply=_tool_reply({"summary": "s", "confidence": 0.9}))
+    backend = OpenAIBackend(model="m", base_url="http://x/v1", max_retries=0)
+    with pytest.raises(fake["ReadTimeout"]):
+        backend.invoke(_role(), "ctx")
+    assert fake["calls"]["n"] == 1  # no retries
+
+
+# --- truncated output (the rewrite) --------------------------------------------
+
+def _install_truncating_httpx(monkeypatch, trunc_times, good_reply,
+                              finish_reason="length"):
+    """Inject a fake httpx whose stream() returns a TRUNCATED submit_output
+    call (the JSON cut off mid-string, an unterminated string) for the first
+    `trunc_times` attempts, then `good_reply`. The truncated reply's final
+    chunk carries `finish_reason` (default "length"; pass "" to exercise the
+    heuristic path where the server reports no finish_reason). Returns the
+    attempt count."""
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda s: None)  # no real backoff
+    mod = types.ModuleType("httpx")
+    mod.Timeout = lambda **kw: kw
+    mod.TimeoutException = type("TimeoutException", (Exception,), {})
+    mod.HTTPError = type("HTTPError", (Exception,), {})
+    calls = {"n": 0}
+
+    def _sse_truncated():
+        # A truncated submit_output call: the JSON is cut off mid-string
+        # (unterminated), and the final chunk reports finish_reason.
+        truncated_args = '{"summary": "Stood up the fleet'  # no closing quote
+        chunks = [
+            {"choices": [{"delta": {
+                "tool_calls": [{"function": {"name": TOOL_NAME,
+                                             "arguments": truncated_args}}]}}]},
+        ]
+        if finish_reason:
+            chunks.append({"choices": [{"delta": {},
+                                        "finish_reason": finish_reason}]})
+        else:
+            chunks.append({"choices": [{"delta": {}}]})
+        lines = ["data: " + json.dumps(c) for c in chunks]
+        lines.append("data: [DONE]")
+        return lines
+
+    def stream(method, url, headers=None, json=None, timeout=None):
+        calls["n"] += 1
+        lines = (_sse_truncated() if calls["n"] <= trunc_times
+                 else _reply_to_sse_lines(good_reply))
+        resp = types.SimpleNamespace(
+            raise_for_status=lambda: None,
+            iter_lines=lambda: iter(lines),
+        )
+
+        class _Ctx:
+            def __enter__(self):
+                return resp
+            def __exit__(self, *a):
+                return False
+        return _Ctx()
+
+    mod.stream = stream
+    monkeypatch.setitem(sys.modules, "httpx", mod)
+    return {"calls": calls}
+
+
+def test_truncated_output_is_retried_then_succeeds(monkeypatch):
+    # The first attempt returns a truncated submit_output call (the generation
+    # budget was exhausted mid-JSON, finish_reason="length"); the second
+    # succeeds. The backend must retry the whole request (bounded) and return
+    # the good reply — a truncation is transient, unlike a malformed shape.
+    fake = _install_truncating_httpx(
+        monkeypatch, trunc_times=1,
+        good_reply=_tool_reply({"summary": "s", "confidence": 0.9}))
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    out = backend.invoke(_role(), "ctx")
+    assert out == {"summary": "s", "confidence": 0.9}
+    assert fake["calls"]["n"] == 2  # one truncation + one success
+
+
+def test_truncation_exhausts_retries_then_raises(monkeypatch):
+    # Every attempt returns a truncated output. After max_retries retries
+    # (default 3 -> 4 total attempts), the OpenAIOutputError is re-raised
+    # (a visible failure, never silent) — and it is flagged truncated.
+    fake = _install_truncating_httpx(
+        monkeypatch, trunc_times=99,
+        good_reply=_tool_reply({"summary": "s", "confidence": 0.9}))
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    with pytest.raises(OpenAIOutputError) as exc:
+        backend.invoke(_role(), "ctx")
+    assert fake["calls"]["n"] == 4  # 1 + 3 retries
+    assert exc.value.truncated is True
+
+
+def test_truncation_heuristic_without_finish_reason(monkeypatch):
+    # A server that does NOT report finish_reason: a truncation is still
+    # detected by the heuristic (a truncation-shaped parse failure on a
+    # plausible, unbalanced JSON prefix) and retried.
+    fake = _install_truncating_httpx(
+        monkeypatch, trunc_times=1,
+        good_reply=_tool_reply({"summary": "s", "confidence": 0.9}),
+        finish_reason="")
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    out = backend.invoke(_role(), "ctx")
+    assert out == {"summary": "s", "confidence": 0.9}
+    assert fake["calls"]["n"] == 2
+
+
+def test_malformed_shape_is_not_retried(monkeypatch):
+    # A parse failure that is a *malformed shape* the model chose (garbage that
+    # is not a plausible JSON prefix) is NOT a truncation and is NOT retried —
+    # it is raised immediately and flagged truncated=False.
+    reply = {"choices": [{"message": {
+        "content": None,
+        "tool_calls": [
+            {"function": {"name": TOOL_NAME, "arguments": "{not json"}}],
+    }}]}
+    _install_fake_httpx(monkeypatch, reply)
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    with pytest.raises(OpenAIOutputError) as exc:
+        backend.invoke(_role(), "ctx")
+    assert exc.value.truncated is False
+
+
+# --- reasoning level (thinking steering) ----------------------------------------
+
+def test_low_reasoning_directs_no_thinking(monkeypatch):
+    # LOW (routine work) steers the model to answer directly with no extended
+    # chain-of-thought: the system message carries the directive and the user
+    # message carries the Qwen3 /no_think marker (the thinking is what eats
+    # the generation budget and truncates the submit_output JSON).
+    seen = _install_fake_httpx(
+        monkeypatch, _tool_reply({"summary": "s", "confidence": 0.9}))
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    backend.invoke(_role(), "ctx", reasoning=Reasoning.LOW)
+    messages = seen["payload"]["messages"]
+    system = next(m for m in messages if m["role"] == "system")
+    user = next(m for m in messages if m["role"] == "user")
+    assert "chain-of-thought" in system["content"]  # the no-thinking directive
+    assert "/no_think" in user["content"]  # the Qwen3 native toggle
+
+
+def test_high_reasoning_thinks_fully(monkeypatch):
+    # HIGH (complex work) thinks fully: no no-thinking directive and no
+    # /no_think marker (the model's chain-of-thought is wanted).
+    seen = _install_fake_httpx(
+        monkeypatch, _tool_reply({"summary": "s", "confidence": 0.9}))
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    backend.invoke(_role(), "ctx", reasoning=Reasoning.HIGH)
+    messages = seen["payload"]["messages"]
+    system = next(m for m in messages if m["role"] == "system")
+    user = next(m for m in messages if m["role"] == "user")
+    assert "chain-of-thought" not in system["content"]
+    assert "/no_think" not in user["content"]
 
 
 # --- legacy json mode ---------------------------------------------------------

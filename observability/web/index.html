@@ -12,38 +12,34 @@
   <span id="status" class="status">connecting…</span>
 </header>
 <main>
-  <section class="charts">
-    <div class="card">
-      <h2>Agents over time (by department)</h2>
-      <canvas id="chart-agents"></canvas>
-    </div>
-    <div class="card">
-      <h2>Code edits over time</h2>
-      <canvas id="chart-edits"></canvas>
-    </div>
-    <div class="card">
-      <h2>Tool calls over time (by outcome)</h2>
-      <canvas id="chart-tools"></canvas>
-    </div>
-    <div class="card">
-      <h2>Cycle duration per iteration</h2>
-      <canvas id="chart-cycles"></canvas>
-    </div>
-  </section>
-  <section class="monitor">
-    <div class="card">
-      <h2>Model stream — live (current + previous call)</h2>
-      <div id="model-stream" class="model-stream">no model activity</div>
-    </div>
-    <div class="card">
-      <h2>Active pod — live</h2>
-      <div id="active-pod" class="pod-live">no active pod</div>
-    </div>
-    <div class="card">
-      <h2>Historical pods (last 10)</h2>
-      <ul id="pod-list" class="pod-list"></ul>
-    </div>
-  </section>
+  <div class="card">
+    <h2>Agents over time (by department)</h2>
+    <canvas id="chart-agents"></canvas>
+  </div>
+  <div class="card">
+    <h2>Code edits over time</h2>
+    <canvas id="chart-edits"></canvas>
+  </div>
+  <div class="card">
+    <h2>Tool calls over time (by outcome)</h2>
+    <canvas id="chart-tools"></canvas>
+  </div>
+  <div class="card">
+    <h2>Cycle duration per iteration</h2>
+    <canvas id="chart-cycles"></canvas>
+  </div>
+  <div class="card">
+    <h2>Active pod — live</h2>
+    <div id="active-pod" class="pod-live">no active pod</div>
+  </div>
+  <div class="card">
+    <h2>Historical pods (last 10)</h2>
+    <ul id="pod-list" class="pod-list"></ul>
+  </div>
+  <div class="card model-stream-card">
+    <h2>Model stream — live (current + previous call)</h2>
+    <div id="model-stream" class="model-stream">no model activity</div>
+  </div>
 </main>
 <script src="/web/app.js"></script>
 </body>

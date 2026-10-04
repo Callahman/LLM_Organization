@@ -100,9 +100,10 @@ def test_ingest_stream_groups_by_stream_id_and_kind():
     assert len(w.stream_segments) == 2
     assert w.stream_segments[0]["stream_id"] == "s3"  # current
     assert w.stream_segments[1]["stream_id"] == "s2"  # previous (s1 dropped)
-    # The snapshot exposes the 2-slot ring.
+    # The snapshot exposes the 2-slot ring, oldest first (previous on top,
+    # current at the bottom — the most recent output is always at the bottom).
     snap = w.snapshot()
-    assert [s["stream_id"] for s in snap["stream"]] == ["s3", "s2"]
+    assert [s["stream_id"] for s in snap["stream"]] == ["s2", "s3"]
 
 
 # --- file polling (temp dir) ---------------------------------------------------

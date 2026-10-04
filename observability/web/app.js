@@ -278,6 +278,14 @@ function podEntryText(e) {
   return JSON.stringify(e);
 }
 
+// Sticky-bottom: true if the pane is scrolled to (near) its bottom (within
+// 30px). Used to decide whether to auto-scroll after a re-render — if the
+// user scrolled up to read, we leave their position alone (no yank to the
+// bottom on every 1-second tick).
+function isAtBottom(el) {
+  return (el.scrollHeight - el.scrollTop - el.clientHeight) < 30;
+}
+
 function renderMonitor() {
   const pods = (state && state.pods) || [];
   const active = pods.filter((p) => p.status === 'active');
@@ -291,6 +299,7 @@ function renderMonitor() {
   }
   const p = active[0];
   pane.classList.add('busy');
+  const stick = isAtBottom(pane);  // captured BEFORE the rebuild
   pane.innerHTML = '';
   const head = document.createElement('div');
   head.className = 'pod-head';
@@ -302,7 +311,9 @@ function renderMonitor() {
     div.textContent = podEntryText(e);
     pane.appendChild(div);
   }
-  pane.scrollTop = pane.scrollHeight;
+  // Only snap to the bottom if the user was already there; if they scrolled
+  // up to read, leave their position alone.
+  if (stick) pane.scrollTop = pane.scrollHeight;
 }
 
 function renderPodList() {
@@ -350,6 +361,7 @@ function renderModelStream() {
     return;
   }
   pane.classList.add('busy');
+  const stick = isAtBottom(pane);  // captured BEFORE the rebuild
   pane.innerHTML = '';
   for (const seg of segments) {
     const head = document.createElement('div');
@@ -365,7 +377,9 @@ function renderModelStream() {
       pane.appendChild(div);
     }
   }
-  pane.scrollTop = pane.scrollHeight;
+  // Only snap to the bottom if the user was already there (within 30px); if
+  // they scrolled up to read the stream, leave their position alone.
+  if (stick) pane.scrollTop = pane.scrollHeight;
 }
 
 // ---------- render -------------------------------------------------------------
