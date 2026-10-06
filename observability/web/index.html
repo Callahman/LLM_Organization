@@ -10,10 +10,12 @@
 <header>
   <h1>Organization — Observability</h1>
   <span id="status" class="status">connecting…</span>
+  <span id="staleness" class="staleness"></span>
 </header>
 <main>
   <div class="card">
     <h2>Agents over time (by department)</h2>
+    <div id="headcount-chips" class="headcount-chips"></div>
     <canvas id="chart-agents"></canvas>
   </div>
   <div class="card">
@@ -21,7 +23,9 @@
     <canvas id="chart-edits"></canvas>
   </div>
   <div class="card">
-    <h2>Tool calls over time (by outcome)</h2>
+    <h2>Tool calls over time (outcome + caller)</h2>
+    <p class="chart-caption">File writes: see the code-edits chart (the model
+      has a single <code>submit_output</code> tool).</p>
     <canvas id="chart-tools"></canvas>
   </div>
   <div class="card">
@@ -29,15 +33,25 @@
     <canvas id="chart-cycles"></canvas>
   </div>
   <div class="card">
-    <h2>Active pod — live</h2>
+    <h2>Error mix over time</h2>
+    <p class="chart-caption">timeout · truncation · parse · transport · other
+      (from tool-call <code>error_type</code>).</p>
+    <canvas id="chart-errors"></canvas>
+  </div>
+  <div class="card">
+    <h2>Active pod — live transcript (most recent)</h2>
     <div id="active-pod" class="pod-live">no active pod</div>
   </div>
   <div class="card">
     <h2>Historical pods (last 10)</h2>
     <ul id="pod-list" class="pod-list"></ul>
   </div>
+  <div class="card">
+    <h2>Halt events (Safety / Morality)</h2>
+    <ul id="halt-list" class="pod-list"></ul>
+  </div>
   <div class="card model-stream-card">
-    <h2>Model stream — live (current + previous call)</h2>
+    <h2>Model stream — last model call (current + previous)</h2>
     <div id="model-stream" class="model-stream">no model activity</div>
   </div>
 </main>

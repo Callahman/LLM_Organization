@@ -24,6 +24,9 @@ archives/*
 state/role_memory/*
 !state/role_memory/.gitkeep
 state/org_chart.json
+# C1: the org structure (every department / team directory) — generated state.
+departments/*
+!departments/.gitkeep
 pods/transcripts/*
 !pods/transcripts/.gitkeep
 pods/artifacts/*

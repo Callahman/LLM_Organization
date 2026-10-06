@@ -162,7 +162,7 @@ def run_intake(
             {"converging": confidence >= confidence_threshold,
              "budget_left": question_budget - r + 1},
         )
-        out = backend.invoke(leader, ctx, reasoning=level)
+        out = backend.invoke(leader, ctx, reasoning=level, phase=1)
         confidence = as_float(out.get("confidence", 0.0))
         questions = as_str_list(out.get("questions", []))
         transcript.append(
@@ -199,7 +199,7 @@ def run_intake(
             1, leader,
             {"converging": confidence >= confidence_threshold, "budget_left": 0},
         )
-        out = backend.invoke(leader, ctx, reasoning=level)
+        out = backend.invoke(leader, ctx, reasoning=level, phase=1)
         confidence = as_float(out.get("confidence", 0.0))
         assumptions = as_str_list(out.get("assumptions", []))
         transcript.append(

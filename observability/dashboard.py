@@ -64,6 +64,7 @@ class Watcher:
             "tool_calls": os.path.join(h, "tool_calls.jsonl"),
             "cycles": os.path.join(h, "cycles.jsonl"),
             "stream": os.path.join(h, "stream.jsonl"),
+            "halt_events": os.path.join(h, "halt_events.jsonl"),
         }
         self.transcripts_dir = os.path.join(root, "pods", "transcripts")
         self._offsets: Dict[str, int] = {}
@@ -74,11 +75,15 @@ class Watcher:
         self.code_edits: List[Dict[str, Any]] = []
         self.tool_calls: List[Dict[str, Any]] = []
         self.cycles: List[Dict[str, Any]] = []
+        self.halt_events: List[Dict[str, Any]] = []
         self.pods: Dict[str, Dict[str, Any]] = {}
         # Live "model stream" window: a 2-slot ring (current + previous
         # segment). Each segment = one model call (one stream_id), with its
         # streamed content accumulated per kind (thinking/content/tool_call).
         self.stream_segments: List[Dict[str, Any]] = []
+        # A6: the ts of the last streamed chunk (for the staleness gauge —
+        # seconds since the model last produced output).
+        self.last_stream_ts: float = 0.0
 
     # --- ingestion (pure state mutations) -----------------------------------
 
@@ -105,6 +110,9 @@ class Watcher:
     def ingest_cycle(self, e: Dict[str, Any]) -> None:
         self.cycles.append(e)
 
+    def ingest_halt(self, e: Dict[str, Any]) -> None:
+        self.halt_events.append(e)
+
     def ingest_pod_transcript(
         self, pod_id: str, entries: List[Dict[str, Any]]
     ) -> None:
@@ -125,6 +133,9 @@ class Watcher:
         stream_id = e.get("stream_id", "")
         if not stream_id:
             return
+        # A6: record the ts of the last streamed chunk (for the staleness
+        # gauge). The record may carry an explicit ts; otherwise use now.
+        self.last_stream_ts = float(e.get("ts") or time.time())
         kind = e.get("kind", "")
         text = e.get("text", "")
         # A new stream_id = a new segment (a new model call): shift the ring.
@@ -147,15 +158,13 @@ class Watcher:
     # --- file polling --------------------------------------------------------
 
     def seed_transcripts(self) -> None:
-        """Record the size of every **existing** pod transcript file without
-        ingesting its content.
-
-        Called once when the dashboard starts: 'Historical pods' must only
-        populate as pods are spun up (files created or rewritten *after* the
-        dashboard starts), not from prior runs' transcript files. ``poll()``
-        skips a transcript file whose size equals the recorded offset, so the
-        seeded offsets suppress the existing files until they change.
-        """
+        """Ingest every **existing** pod transcript as **closed history** (from
+        a prior run) so the historical list is populated at startup (A1). The
+        offsets are set to the file sizes so the content isn't re-ingested until
+        the file changes; the current run's pods are created *after* startup, so
+        they aren't pre-existing and still appear live in the active pane.
+        Pre-existing pods are marked closed regardless of their entries (the
+        prior run is over), so a stale *active* pod isn't re-shown as active."""
         if not os.path.isdir(self.transcripts_dir):
             return
         for name in os.listdir(self.transcripts_dir):
@@ -163,9 +172,28 @@ class Watcher:
                 continue
             path = os.path.join(self.transcripts_dir, name)
             try:
+                with open(path, "r", encoding="utf-8") as f:
+                    entries = [json.loads(ln) for ln in f if ln.strip()]
+            except (OSError, json.JSONDecodeError):
+                continue
+            try:
                 self._offsets[path] = os.path.getsize(path)
             except OSError:
-                pass
+                continue
+            self.seed_pod_transcript(name[:-len(".jsonl")], entries)
+
+    def seed_pod_transcript(
+        self, pod_id: str, entries: List[Dict[str, Any]]
+    ) -> None:
+        """Ingest a **pre-existing** transcript as closed history (A1). The pod
+        is marked closed regardless of its entries (the prior run is over), so
+        it appears in the historical list, not the active pane."""
+        self.pods[pod_id] = {
+            "id": pod_id,
+            "status": "closed",
+            "entries": entries,
+            "updated": time.time(),
+        }
 
     def _read_new_lines(self, path: str) -> List[str]:
         if not os.path.exists(path):
@@ -220,6 +248,8 @@ class Watcher:
                         self.ingest_tool_call(e)
                     elif key == "stream":
                         self.ingest_stream(e)
+                    elif key == "halt_events":
+                        self.ingest_halt(e)
                     else:
                         self.ingest_cycle(e)
             self._poll_transcripts()
@@ -252,6 +282,10 @@ class Watcher:
             ]
             return {
                 "ts": time.time(),
+                # A6: the ts of the last streamed chunk (for the staleness
+                # gauge — the dashboard computes seconds-since = ts -
+                # last_stream_ts).
+                "last_stream_ts": self.last_stream_ts,
                 "agents": {
                     "by_department": dict(self.agents_by_dept),
                     "total": sum(self.agents_by_dept.values()),
@@ -260,6 +294,7 @@ class Watcher:
                 "code_edits": self.code_edits[-SNAPSHOT_CAP:],
                 "tool_calls": self.tool_calls[-SNAPSHOT_CAP:],
                 "cycles": self.cycles[-SNAPSHOT_CAP:],
+                "halt_events": self.halt_events[-SNAPSHOT_CAP:],
                 "pods": pods,
                 "stream": stream,
             }
