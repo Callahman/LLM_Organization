@@ -30,6 +30,7 @@ for a plain `StubBackend`).
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List, Optional
 
 from roles.base import Role, spin_personality, spin_sub_architype
@@ -84,8 +85,11 @@ def _head_ctx(head: Role, objective: str, digest: str) -> str:
         f"team objectives. Objective: {objective} | Mission digest: {digest} "
         "Set `decomposition` to a JSON OBJECT (not a string) whose "
         "`team_objectives` key is a JSON array of objects, each exactly "
-        "{\"manager_id\": <str>, \"objective\": <str>} (or "
-        "{\"ic_id\": <str>, \"objective\": <str>} if you direct ICs directly)."
+        "{\"manager_id\": <str>, \"team\": <str>, \"objective\": <str>} (or "
+        "{\"ic_id\": <str>, \"team\": <str>, \"objective\": <str>} if you "
+        "direct ICs directly). `team` is the team's directory name (a short "
+        "slug, e.g. \"pipelines\") — it becomes the team work dir "
+        "(departments/<dept>/<team>/) where the team's ICs write their work."
     )
 
 
@@ -101,24 +105,33 @@ def _manager_ctx(manager: Role, objective: str) -> str:
 
 def _ic_ctx(ic: Role, task: str) -> str:
     # The exact team work root (departments/<dept>/<team>/). The IC must write
-    # there — a bare top-level dir (e.g. "marketplace_ops/...") is refused by
-    # the permission layer as out_of_scope, so the prompt names the real root
-    # and the work_path must live under it (a dangling pointer otherwise).
-    team_root = (
-        f"departments/{ic.department}/{ic.team}"
-        if ic.department and ic.team else "your team directory"
-    )
+    # there — a bare top-level dir is refused by the permission layer as
+    # out_of_scope, so the prompt names the real root, shows a correct/wrong
+    # pair, and forbids the role's own id as a directory (the default the
+    # model falls into when no concrete root is given).
+    if ic.department and ic.team:
+        team_root = f"departments/{ic.department}/{ic.team}"
+        path_rules = (
+            f"Every path MUST start with {team_root}/ — e.g. correct: "
+            f"{team_root}/README.md; wrong: {ic.team}/README.md or "
+            f"{ic.id}/README.md (a bare top-level dir, or your own id as a "
+            f"directory, is refused as out_of_scope)."
+        )
+    else:
+        team_root = "your team directory"
+        path_rules = (
+            "Write under your team directory (departments/<dept>/<team>/); a "
+            "bare top-level path is refused as out_of_scope."
+        )
     return (
         f"PHASE 4 (IC {ic.id}): do the work in your team directory. Your team "
-        f"work directory is {team_root}/ — write ALL files there. A bare "
-        f"top-level path (e.g. '{ic.team or 'team'}/...') will be refused by "
-        f"the permission layer (out_of_scope). Task: {task} Set `summary` to "
-        f"a one-line summary of the work done and `work_path` to the path of "
-        f"the work (under {team_root}/). If your work requires changing code, "
-        "set `code_edits` to a JSON array of objects, each exactly "
-        "{\"path\": <str>, \"content\": <str>}. Each edit is gated by the "
-        f"permission layer: write under {team_root}/ only; the mission and "
-        "the rules are read-only."
+        f"work directory is {team_root}/ — write ALL files there. {path_rules} "
+        f"Task: {task} Set `summary` to a one-line summary of the work done "
+        f"and `work_path` to the path of the work (under {team_root}/). If "
+        "your work requires changing code, set `code_edits` to a JSON array "
+        "of objects, each exactly {\"path\": <str>, \"content\": <str>}. Each "
+        f"edit is gated by the permission layer: write under {team_root}/ "
+        "only; the mission and the rules are read-only."
     )
 
 
@@ -152,6 +165,125 @@ def _self_edit_log(history: Optional[HistoryStore], role_id: str):
     def log(msg: str) -> None:
         history._append("self_edits.jsonl", {"role": role_id, "msg": msg})
     return log
+
+
+def _repair_edit_paths(
+    ic: Role,
+    edits: List[Dict[str, Any]],
+    history: Optional[HistoryStore],
+) -> List[Dict[str, Any]]:
+    """Repair bare top-level paths the model emitted for its own team dir.
+
+    When a path's top-level component is the role's own id or team (the model
+    dropped the ``departments/<dept>/`` prefix), rewrite it into the
+    department scope the permission layer already grants in-dept roles. Only
+    such paths are repaired — any other out-of-scope path (another dept,
+    ``runtime/``, ``MISSION.md``) is left for the gate to refuse, so the
+    repair can never become a channel around the sandbox. Each repair is
+    logged visibly (``history/path_repairs.jsonl``) so the audit shows the
+    harness corrected the model.
+    """
+    own = {name for name in (ic.id, ic.team) if name}
+    repaired: List[Dict[str, Any]] = []
+    for edit in edits:
+        if not isinstance(edit, dict) or not ic.department:
+            repaired.append(edit)
+            continue
+        norm = str(edit.get("path", "")).replace("\\", "/")
+        parts = norm.split("/", 1)
+        top = parts[0]
+        if (
+            top in own
+            and len(parts) > 1            # a subpath (a file), not a bare dir
+            and not norm.startswith("departments/")
+        ):
+            fixed = "departments/%s/%s" % (ic.department, norm)
+            note = dict(edit)
+            note["path"] = fixed
+            note["_repaired_from"] = str(edit.get("path", ""))
+            if history is not None:
+                history._append(
+                    "path_repairs.jsonl",
+                    {"ts": time.time(), "role": ic.id,
+                     "from": str(edit.get("path", "")), "to": fixed},
+                )
+            repaired.append(note)
+        else:
+            repaired.append(edit)
+    return repaired
+
+
+def _run_self_edits(
+    ic: Role,
+    edits: List[Dict[str, Any]],
+    history: Optional[HistoryStore],
+) -> List[Dict[str, Any]]:
+    """Repair + apply + log one batch of self-edits for an IC (gated by the
+    permission layer). Returns the per-edit results (the gate's decisions)."""
+    edits = _repair_edit_paths(ic, edits, history)
+    results = apply_code_edits(ic, edits, log=_self_edit_log(history, ic.id))
+    if history is not None:
+        for r in results:
+            history.log_code_edit(
+                ic.id, r["path"], r["ok"],
+                error=r.get("error", ""),
+                department=ic.department,
+            )
+    return results
+
+
+def _retry_refused_edits(
+    ic: Role,
+    refused: List[Dict[str, Any]],
+    history: Optional[HistoryStore],
+    backend: LLMBackend,
+    phase: int = 4,
+) -> None:
+    """One corrective retry for refused self-edits: the model is shown the
+    specific refusal reasons (which name the role's team work dir) and asked
+    to re-propose the edits with corrected paths. Bounded to a single pass —
+    a second refusal stands (visible, never looped). Best-effort: a backend
+    failure just means no retry (the original refusals are already logged)."""
+    reasons = "\n".join(
+        "- %s — %s" % (r.get("path", ""), r.get("error", "")) for r in refused
+    )
+    ctx = (
+        f"PHASE 4 (IC {ic.id}) — self-edit correction. Some of your proposed "
+        f"code edits were REFUSED by the permission layer:\n{reasons}\n"
+        "Re-propose the refused edits with corrected paths (write under your "
+        "team work dir; the mission and the rules are read-only). Set "
+        "`code_edits` to a JSON array of objects, each exactly "
+        "{\"path\": <str>, \"content\": <str>}. If a refused edit cannot be "
+        "placed in an allowed scope, omit it."
+    )
+    try:
+        out = backend.invoke(ic, ctx, phase=phase)
+    except Exception:
+        return
+    edits = as_dict_list((out or {}).get("code_edits", []))
+    if not edits:
+        return
+    # One bounded corrective pass — the results are logged; no further retry.
+    _run_self_edits(ic, edits, history)
+
+
+def _apply_ic_self_edits(
+    ic: Role,
+    ic_out: Dict[str, Any],
+    history: Optional[HistoryStore],
+    backend: Optional[LLMBackend] = None,
+    phase: int = 4,
+) -> None:
+    """Collect, repair, and apply an IC's self-edit requests (gated by the
+    permission layer), with one corrective retry on refusal. Refusals,
+    repairs, and the retry are all recorded visibly (never silent)."""
+    edits = as_dict_list((ic_out or {}).get("code_edits", []))
+    if not edits:
+        return
+    results = _run_self_edits(ic, edits, history)
+    refused = [r for r in results if not r.get("ok")]
+    if refused and backend is not None:
+        _retry_refused_edits(ic, refused, history, backend, phase)
 
 
 def _ensure_role(
@@ -293,6 +425,7 @@ def _check_pod_triggers(
         senior,
         f"POD {pod.id} outcome to share up the line — decision: {pod.decision}. "
         "Produce an upward report of the pod's decision.",
+        phase=4,
     )
     # Chained-pod escalation: the starter's boss forms a second pod carrying
     # the first pod's decision artifact up the line (the §2.8 worked example).
@@ -377,7 +510,7 @@ def dispatch(
     `MemoryBackend.seed_cross_team` — a no-op for a plain stub)."""
     digest = mission_digest(mission)
     head_ids = [h.id for h in org.department_heads()]
-    out = backend.invoke(leader, _leader_ctx(digest, head_ids))
+    out = backend.invoke(leader, _leader_ctx(digest, head_ids), phase=4)
     dept_objectives = _decomposition_list(out, "department_objectives")
     if not dept_objectives:
         # The leader's Phase 4 decomposition came back empty — no work to
@@ -404,19 +537,27 @@ def dispatch(
                      "reason": "head not in the org (never created in Phase 3)"},
                 )
             continue
-        head_out = backend.invoke(head, _head_ctx(head, obj.get("objective", ""), digest))
+        head_out = backend.invoke(head, _head_ctx(head, obj.get("objective", ""), digest),
+                          phase=4)
         team_objectives = _decomposition_list(head_out, "team_objectives")
 
         team_reports: List[Dict[str, Any]] = []
         for t_obj in team_objectives:
             manager = org.get(t_obj.get("manager_id", ""))
             if manager is None and t_obj.get("manager_id"):
+                # `team` becomes the team work dir (departments/<dept>/<team>/).
+                # Fall back to the manager_id so it is NEVER empty — an empty
+                # team leaves the ICs with no concrete work root (the exact
+                # bug that got every self-edit refused as out_of_scope).
                 manager = _ensure_role(
                     org, head, t_obj.get("manager_id"), "manager",
-                    head.department, t_obj.get("team", ""), approver_fn,
+                    head.department,
+                    t_obj.get("team") or t_obj.get("manager_id", ""),
+                    approver_fn,
                 )
             if manager is not None:
-                mgr_out = backend.invoke(manager, _manager_ctx(manager, t_obj.get("objective", "")))
+                mgr_out = backend.invoke(manager, _manager_ctx(manager, t_obj.get("objective", "")),
+                         phase=4)
                 ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
                 ic_reports: List[Dict[str, Any]] = []
                 ic_outputs: List[Dict[str, Any]] = []  # full IC outputs (trigger A)
@@ -433,6 +574,7 @@ def dispatch(
                     ic_out = backend.invoke(
                         ic, _ic_ctx(ic, task.get("task", "")),
                         timeout=ic_timeout_seconds,
+                        phase=4,
                     )
                     ic_outputs.append(ic_out)
                     ic_ids.append(ic.id)
@@ -441,17 +583,10 @@ def dispatch(
                         {"from": ic.id, "summary": ic_out.get("summary", ""),
                          "pointer": pointer}
                     )
-                    # Self-edit: the IC may propose code edits (gated by the
-                    # permission layer).
-                    edits = as_dict_list(ic_out.get("code_edits", []))
-                    if edits:
-                        edit_results = apply_code_edits(
-                            ic, edits, log=_self_edit_log(history, ic.id))
-                        if history is not None:
-                            for r in edit_results:
-                                history.log_code_edit(
-                                    ic.id, r["path"], r["ok"],
-                                    error=r.get("error", ""))
+                    # Self-edit: the IC may propose code edits (repaired,
+                    # gated by the permission layer, one corrective retry on
+                    # refusal).
+                    _apply_ic_self_edits(ic, ic_out, history, backend, phase=4)
                 # Pods A/B/C (an add-on): disagreement / cross-team / routing.
                 _check_pod_triggers(
                     backend, org, manager, ic_ids, t_obj, ic_outputs, ic_tasks,
@@ -464,27 +599,24 @@ def dispatch(
                 # The head directs ICs directly (a department without managers).
                 ic = org.get(t_obj.get("ic_id", ""))
                 if ic is None and t_obj.get("ic_id"):
+                    # Fall back to the ic_id so the team (work dir) is never
+                    # empty (see the manager branch above).
                     ic = _ensure_role(
                         org, head, t_obj.get("ic_id"), "ic",
-                        head.department, t_obj.get("team", ""), approver_fn,
+                        head.department,
+                        t_obj.get("team") or t_obj.get("ic_id", ""),
+                        approver_fn,
                     )
                 if ic is None:
                     continue
                 ic_out = backend.invoke(
                     ic, _ic_ctx(ic, t_obj.get("objective", "")),
                     timeout=ic_timeout_seconds,
+                    phase=4,
                 )
-                # Self-edit: the IC may propose code edits (gated by the
-                # permission layer).
-                edits = as_dict_list(ic_out.get("code_edits", []))
-                if edits:
-                    edit_results = apply_code_edits(
-                        ic, edits, log=_self_edit_log(history, ic.id))
-                    if history is not None:
-                        for r in edit_results:
-                            history.log_code_edit(
-                                ic.id, r["path"], r["ok"],
-                                error=r.get("error", ""))
+                # Self-edit: the IC may propose code edits (repaired, gated by
+                # the permission layer, one corrective retry on refusal).
+                _apply_ic_self_edits(ic, ic_out, history, backend, phase=4)
                 # Pods A/B/C (an add-on): the head is the starter; the ICs are
                 # the members (an IC podding with a department head would be a
                 # 2-tier spread — a membership failure skips the pod).

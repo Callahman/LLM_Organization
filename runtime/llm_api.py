@@ -129,6 +129,10 @@ class OpenAIBackend(LLMBackend):
         # Forward each streamed chunk (the dashboard's live "model stream"
         # window): (stream_id, role_id, model, kind, text).
         self.on_stream: Optional[Callable[[str, str, str, str, str], None]] = None
+        # The phase of the in-flight invoke (set by invoke, read by _report):
+        # the backend is driven sequentially, so this is safe. Carried to the
+        # tool_calls row so the dashboard can segment calls by phase (A0).
+        self._current_phase: Optional[int] = None
 
     # --- request building ---------------------------------------------------
 
@@ -409,20 +413,46 @@ class OpenAIBackend(LLMBackend):
             return out
         return None
 
-    def _report(self, role, outcome: str, t0: float, error: str = "") -> None:
+    def _report(self, role, outcome: str, t0: float, error: str = "",
+             warning: str = "") -> None:
         if self.on_call is None:
             return
         try:
             self.on_call({
                 "ts": time.time(),
                 "role": getattr(role, "id", ""),
+                "department": getattr(role, "department", ""),
+                "phase": self._current_phase,
                 "mode": self.structured,
                 "outcome": outcome,
                 "error": error,
+                # D4: a non-fatal warning (e.g. a wrong-typed nested key) is
+                # logged in its own `warning` field — NOT the `error` field —
+                # so a warning doesn't look like a failure in the audit trail.
+                "warning": warning,
+                "error_type": self._error_type(outcome, error),
                 "latency": round(time.time() - t0, 3),
             })
         except Exception:
             pass  # observability must never break the pipeline
+
+    def _error_type(self, outcome: str, error: str) -> Optional[str]:
+        """Classify a failure (`timeout|truncation|parse|transport|other`) so
+        the dashboard can segment failures without pattern-matching the
+        free-form `error` string (A0). `None` on a successful call."""
+        if outcome in ("tool_call", "content_fallback"):
+            return None
+        e = (error or "").lower()
+        if "timeout" in e or "timed out" in e:
+            return "timeout"
+        if "truncat" in e:
+            return "truncation"
+        if "malformed" in e or "parse" in e or "no tool call" in e:
+            return "parse"
+        if ("connect" in e or "protocol" in e or "httpstatus" in e
+                or "reset" in e or "httpx" in e):
+            return "transport"
+        return "other"
 
     def _emit_stream(self, stream_id: str, role_id: str, kind: str,
                      text: str) -> None:
@@ -450,7 +480,8 @@ class OpenAIBackend(LLMBackend):
 
     def invoke(self, role, context: str,
                reasoning: Reasoning = Reasoning.LOW,
-               timeout: Optional[float] = None) -> Dict[str, Any]:
+               timeout: Optional[float] = None,
+               phase: Optional[int] = None) -> Dict[str, Any]:
         import httpx  # lazy: only the api path needs it
         # `reasoning` steers the model's thinking level (HIGH = full thinking,
         # LOW = answer directly with no extended chain-of-thought): the
@@ -462,6 +493,7 @@ class OpenAIBackend(LLMBackend):
         # timeout) is the primary guard within the invoke, and a `TimeoutBackend`
         # wrapper (when present) enforces the overall per-invoke budget.
         t0 = time.time()
+        self._current_phase = phase  # carried to the tool_calls row (A0)
         payload = self._payload(role, context, reasoning)
         payload["stream"] = True
         # Progress-based idle timeout: the `read` timeout is the max time to
@@ -488,6 +520,11 @@ class OpenAIBackend(LLMBackend):
         # error or a non-timeout transport error is NOT retried.
         max_attempts = 1 + self.max_retries
         for attempt in range(1, max_attempts + 1):
+            # D4: reset the attempt clock each retry so the reported latency is
+            # PER-ATTEMPT (not cumulative across retries + backoff sleeps, which
+            # was misleading — a 3rd-attempt success looked like it took the sum
+            # of all three attempts plus the backoffs).
+            t0 = time.time()
             reasoning_buf = ""
             content_buf = ""
             tool_args_buf = ""
@@ -548,8 +585,9 @@ class OpenAIBackend(LLMBackend):
                     {"choices": [{"message": message}]}, finish_reason)
                 # Observability: log (not reject) a wrong-typed nested key
                 # (e.g. a free-form string instead of a JSON object) so future
-                # free-forms are visible in tool_calls.jsonl.
-                self._report(role, outcome, t0, self._nested_type_warnings(out))
+                # free-forms are visible in tool_calls.jsonl. D4: it goes in the
+                # `warning` field (not `error`) — it's non-fatal.
+                self._report(role, outcome, t0, warning=self._nested_type_warnings(out))
                 return out
             except httpx.TimeoutException as e:
                 # A timeout (an idle/connect/read timeout): transient. Retry the

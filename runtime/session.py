@@ -46,6 +46,47 @@ class SessionResult:
     escalation: Optional[Dict[str, Any]] = None
 
 
+def build_backend(
+    raw: LLMBackend,
+    config: Dict[str, Any],
+    history: HistoryStore,
+    thinking_budget: ThinkingBudget,
+) -> LLMBackend:
+    """D5: the backend-wrapping factory — makes the
+    ``MemoryBackend(RoutingBackend(TimeoutBackend(raw)))`` chain + the
+    ``on_call``/``on_stream`` observability wiring explicit and testable (it
+    was previously implicit in ``Session.__init__``).
+
+    - Wires ``on_call``/``on_stream`` on the raw backend (if it supports them,
+      e.g. ``OpenAIBackend``) to the history audit trail.
+    - Wraps the raw backend in a ``TimeoutBackend`` (a per-invoke timeout).
+    - Wraps that in a ``RoutingBackend`` (complexity routing + thinking budget).
+    - Wraps that in a ``MemoryBackend`` (per-role isolated memory).
+    """
+    # Tool-call observability: if the raw backend supports per-call stats
+    # (OpenAIBackend), record each call's outcome to history/tool_calls.jsonl.
+    if hasattr(raw, "on_call"):
+        raw.on_call = history.log_tool_call
+    # Live "model stream" observability: if the raw backend supports per-chunk
+    # streaming (OpenAIBackend), forward each streamed chunk to
+    # history/stream.jsonl (the dashboard's live "model stream" window).
+    if hasattr(raw, "on_stream"):
+        raw.on_stream = history.log_stream
+    # Bound the actual backend call: a per-invoke timeout (a visible
+    # LLMTimeoutError, never silent) guards the real LLM call.
+    timed = TimeoutBackend(
+        raw, timeout_seconds=config.get("timeout_seconds", 60.0)
+    )
+    # Complexity routing: wrap the backend so every invoke is routed by task
+    # complexity (complex -> thinking on, simple -> off) and bounded by the
+    # per-session thinking budget.
+    routing = RoutingBackend(timed, thinking_budget, history)
+    # Wrap with per-role isolated memory: each role's past conversations / work
+    # are folded into its OWN prompt (and only its own), so reasoning is
+    # emergent rather than self-confirmation.
+    return MemoryBackend(routing)
+
+
 class Session:
     def __init__(
         self,
@@ -58,34 +99,15 @@ class Session:
         self.config = config or {}
         self.org = OrgState(history_dir=history_dir)
         self.history = HistoryStore(history_dir=history_dir)
-        # Tool-call observability: if the raw backend supports per-call stats
-        # (OpenAIBackend), record each call's outcome to
-        # history/tool_calls.jsonl (the dashboard's "tool calls" metric).
-        if hasattr(backend, "on_call"):
-            backend.on_call = self.history.log_tool_call
-        # Live "model stream" observability: if the raw backend supports
-        # per-chunk streaming (OpenAIBackend), forward each streamed chunk to
-        # history/stream.jsonl (the dashboard's live "model stream" window).
-        if hasattr(backend, "on_stream"):
-            backend.on_stream = self.history.log_stream
-        # Bound the actual backend call: a per-invoke timeout (a visible
-        # LLMTimeoutError, never silent) guards the real LLM call.
-        timed = TimeoutBackend(
-            backend, timeout_seconds=self.config.get("timeout_seconds", 60.0)
-        )
-        # Complexity routing: wrap the backend so every invoke is routed by
-        # task complexity (complex -> thinking on, simple -> off) and bounded
-        # by a per-session thinking budget.
+        # D5: the backend chain (MemoryBackend(RoutingBackend(TimeoutBackend(
+        # raw))) + the on_call/on_stream observability wiring) is built by the
+        # build_backend() factory (explicit + testable, not implicit here).
         self.thinking_budget = ThinkingBudget(
             max_high=self.config.get("thinking_budget", 10)
         )
-        routing = RoutingBackend(
-            timed, self.thinking_budget, self.history
+        self.backend = build_backend(
+            backend, self.config, self.history, self.thinking_budget
         )
-        # Wrap with per-role isolated memory: each role's past conversations /
-        # work are folded into its OWN prompt (and only its own), so reasoning
-        # is emergent rather than self-confirmation.
-        self.backend = MemoryBackend(routing)
         self.pods: List[Any] = []
         # Solo (single-role) leader pods: one per phase (P1/P2/P3/P5/P6), so the
         # observability dashboard can watch the leader's solo work (not just the
@@ -103,15 +125,18 @@ class Session:
 
     # --- schema enforcement (bounded retries) ------------------------------
 
-    def invoke_checked(self, role, context: str, max_retries: int = 2) -> Dict[str, Any]:
+    def invoke_checked(self, role, context: str, max_retries: int = 2,
+                   phase: Optional[int] = None) -> Dict[str, Any]:
         """Invoke the backend, retrying (bounded) on a malformed output. If
         still malformed after the retries, returns the last output with a
-        visible `__malformed__` flag (never silent)."""
-        output = self.backend.invoke(role, context)
+        visible `__malformed__` flag (never silent). The `phase` is passed
+        explicitly (D2) so the routing doesn't rely on parsing it from a
+        re-wrapped context."""
+        output = self.backend.invoke(role, context, phase=phase)
         attempts = 0
         while validate_envelope(output) and attempts < max_retries:
             attempts += 1
-            output = self.backend.invoke(role, context)
+            output = self.backend.invoke(role, context, phase=phase)
         if validate_envelope(output):
             output = dict(output)
             output["__malformed__"] = True
@@ -158,11 +183,13 @@ class Session:
         ]
         if decisions:
             ctx += " POD DECISIONS: " + "; ".join(decisions)
-        out = self.backend.invoke(self.leader, ctx)
+        out = self.backend.invoke(self.leader, ctx, phase=5)
         # Solo (P5): record the leader's synthesis step so the dashboard can
         # watch it (one transcript file, growing per round).
         self.solo.record("p5", "Phase 5: synthesis", self.cycles,
                          "synthesis", out)
+        # A1: close the solo pod when the synthesis phase completes.
+        self.solo.close("p5", f"synthesis verdict={out.get('verdict', 'complete')}")
         return out.get("verdict", "complete")
 
     # --- Phase 6 evaluation + continue/complete ----------------------------
@@ -214,12 +241,15 @@ class Session:
             "The goal is a high-quality deliverable, not just a working one. "
             "Choose 'complete' (stop) or 'continue' (another iteration, still "
             f"abiding by the original goal). Evaluation: {evaluation}",
+            phase=6,
         )
         decision = out.get("verdict", "complete")
         # Solo (P6): record the leader's continue/complete decision so the
         # dashboard can watch it (one transcript file, growing per round).
         self.solo.record("p6", "Phase 6: evaluation", self.cycles,
                          "decision", out)
+        # A1: close the solo pod when the evaluation phase completes.
+        self.solo.close("p6", f"eval decision={decision}")
         if decision == "continue" and self.cycles < max_iterations:
             return evaluation, "continue"
         return evaluation, "complete"
@@ -290,6 +320,10 @@ class Session:
                           "converged": intake.converged,
                           "rounds": intake.rounds,
                           "assumptions": intake.assumptions})
+        # A1: close the solo pod when the phase completes so the dashboard
+        # moves it to the historical list (not stuck on the active pane).
+        self.solo.close("p1", f"intake converged={intake.converged}, "
+                              f"{intake.rounds} rounds")
 
         # --- Phase 2: mission (permission flow) ---
         mission = self._phase(2, self.cycles, run_mission,
@@ -311,6 +345,9 @@ class Session:
                           "version": mission.version,
                           "attempts": mission.attempts,
                           "edits": len(mission.edits)})
+        # A1: close the solo pod when the mission phase completes.
+        self.solo.close("p2", f"mission approved={mission.approved}, "
+                              f"v{mission.version}")
         if not mission.approved:
             return self._escalate("mission not approved by the user", intake, mission)
         mission_draft = mission.edits[-1]["draft"]
@@ -329,6 +366,8 @@ class Session:
                          {"summary": "org bootstrapped",
                           "departments": len(self.org.department_heads()),
                           "roles": len(self.org.roles)})
+        # A1: close the solo pod when the bootstrap phase completes.
+        self.solo.close("p3", "org bootstrapped")
 
         # --- Phase 4: top-down dispatch (+ pods / resourcing / BAU) ---
         # The approver_fn lets the dispatch hire the managers/ICs it decomposes
@@ -475,6 +514,9 @@ class Session:
                           "version": mission.version,
                           "attempts": mission.attempts,
                           "edits": len(mission.edits)})
+        # A1: close the solo pod when the mission phase completes.
+        self.solo.close("p2", f"mission approved={mission.approved}, "
+                              f"v{mission.version}")
         if not mission.approved:
             return self._escalate("mission not approved by the user", intake, mission)
         mission_draft = mission.edits[-1]["draft"]
@@ -492,6 +534,8 @@ class Session:
                          {"summary": "org bootstrapped",
                           "departments": len(self.org.department_heads()),
                           "roles": len(self.org.roles)})
+        # A1: close the solo pod when the bootstrap phase completes.
+        self.solo.close("p3", "org bootstrapped")
 
         # --- Phases 4 & 5: iterate (bounded + goal-based stop) ---
         dispatch_results: List[Dict[str, Any]] = []

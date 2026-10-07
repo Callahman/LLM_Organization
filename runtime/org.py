@@ -385,6 +385,7 @@ def bootstrap(
             # larger per-invoke budget than the flat default so it doesn't hit
             # the 300s timeout. `None` uses the default.
             timeout=bootstrap_timeout_seconds,
+            phase=3,
         )
         candidate = _extract_department_heads(last_out)
         if _has_operational_head(candidate):

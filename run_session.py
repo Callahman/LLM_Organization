@@ -22,6 +22,7 @@ try:
 except ImportError:
     pass
 
+from runtime.config import load_config
 from runtime.llm_api import make_backend
 from runtime.session import Session
 from roles.leader import make_leader
@@ -85,6 +86,13 @@ def main() -> None:
              "continue the mission version (Phase 2), bootstrap additively "
              "(Phase 3), and re-save the org chart. Roles remember prior "
              "runs (their memory is loaded from / saved to disk).")
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="D7: preview what a run would do without mutating the org's "
+              "state — the run's audit trail (history/, departments/, state/, "
+              "MISSION.md, pods/) is written to a throwaway temp dir instead, "
+              "so the real org is left untouched. The pipeline still runs "
+              "end-to-end (you see the hires / mission draft / phases).")
     args = parser.parse_args()
 
     user_answer_fn, user_permission_fn, approver_fn = (
@@ -102,15 +110,24 @@ def main() -> None:
     # which has no idle bound at all). All can be overridden via the
     # environment (LLM_TIMEOUT_SECONDS / LLM_IC_TIMEOUT_SECONDS) without
     # touching this file.
-    def _env_float(name: str, default: float) -> float:
-        try:
-            return float(os.environ.get(name, default))
-        except (TypeError, ValueError):
-            return default
-    config = {
-        "timeout_seconds": _env_float("LLM_TIMEOUT_SECONDS", 3600),
-        "ic_timeout_seconds": _env_float("LLM_IC_TIMEOUT_SECONDS", 3600),
-    }
+    # D1: the config is loaded centrally (runtime/config.py) — every .env
+    # org-tuning knob is mapped to its Session config key (with the right
+    # cast), so a knob like CONFIDENCE_THRESHOLD actually changes behavior
+    # (before, only the two timeout backstops were passed and the rest used
+    # hardcoded defaults). Unknown/unused .env keys produce a visible warning.
+    config = load_config()
+    # D7: --dry-run previews a run without mutating the real org — the pipeline
+    # runs end-to-end, but its state (history/, departments/, state/,
+    # MISSION.md, pods/) is written to a throwaway temp dir instead. The
+    # pipeline's paths are relative to the CWD, so chdir'ing to a temp dir
+    # redirects every write.
+    dry_run_dir = None
+    if args.dry_run:
+        import tempfile
+        dry_run_dir = tempfile.mkdtemp(prefix="org_dry_run_")
+        os.chdir(dry_run_dir)
+        print(f"[dry-run] previewing in a throwaway dir: {dry_run_dir} "
+              f"(the real org is left untouched)")
     session = Session(
         backend=make_backend(),
         leader=make_leader(),
@@ -127,7 +144,9 @@ def main() -> None:
         user_answer_fn=user_answer_fn,
         user_permission_fn=user_permission_fn,
         approver_fn=approver_fn,
-        max_iterations=2,
+        # D6: the Phase 4/5 iteration cap is config-driven (MAX_ITERATIONS in
+        # .env, default 2) — not hardcoded.
+        max_iterations=config.get("max_iterations", 2),
         revisit=args.revisit,
     )
 

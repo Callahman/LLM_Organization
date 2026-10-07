@@ -149,6 +149,20 @@ def test_streaming_request_sends_stream_true(monkeypatch):
     assert seen["payload"]["stream"] is True
 
 
+def test_phase_threaded_to_tool_calls_row(monkeypatch):
+    """A0: the phase (from the call site) is carried to the tool_calls row via
+    the on_call callback (so the dashboard can segment calls by phase); the
+    error_type is None on a successful call."""
+    _install_fake_httpx(
+        monkeypatch, _tool_reply({"summary": "s", "confidence": 0.9}))
+    stats = []
+    backend = OpenAIBackend(model="m", base_url="http://localhost:5001/v1")
+    backend.on_call = stats.append
+    backend.invoke(_role(), "ctx", phase=4)
+    assert stats[0]["phase"] == 4
+    assert stats[0]["error_type"] is None
+
+
 def test_reasoning_streamed_before_tool_call_is_handled(monkeypatch):
     # The model streams reasoning_content (its chain-of-thought) first, then
     # the forced tool call. The rewrite must read the reasoning (to advance the

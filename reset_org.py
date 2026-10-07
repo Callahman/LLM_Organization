@@ -7,6 +7,9 @@ Deletes (recursively, relative to the project root):
 - ``MISSION.md`` — the current mission.
 - ``history/*.jsonl`` — the audit trails (org events, mission edits, intake,
   cycles, ...). The ``history/`` directory itself is kept.
+- ``pods/`` — pod artifacts + transcripts (the Phase 4 deliberation records).
+- ``reports/`` — the evaluation reports.
+- ``archives/`` — the archived sessions (beyond the rolling window).
 
 Without ``--yes`` the script only prints what it would delete (a dry run).
 """
@@ -23,15 +26,17 @@ DEPARTMENTS_DIR = "departments"
 STATE_DIR = "state"
 MISSION_FILE = "MISSION.md"
 HISTORY_GLOB = "history/*.jsonl"
+PODS_DIR = "pods"
+REPORTS_DIR = "reports"
+ARCHIVES_DIR = "archives"
 
 
 def _collect_targets() -> list:
     """Return the list of paths that would be deleted."""
     targets = []
-    if os.path.isdir(DEPARTMENTS_DIR):
-        targets.append(DEPARTMENTS_DIR)
-    if os.path.isdir(STATE_DIR):
-        targets.append(STATE_DIR)
+    for d in (DEPARTMENTS_DIR, STATE_DIR, PODS_DIR, REPORTS_DIR, ARCHIVES_DIR):
+        if os.path.isdir(d):
+            targets.append(d)
     if os.path.exists(MISSION_FILE):
         targets.append(MISSION_FILE)
     targets.extend(sorted(glob.glob(HISTORY_GLOB)))

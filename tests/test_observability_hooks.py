@@ -172,3 +172,71 @@ def test_history_store_observability_logs(tmp_path):
     assert stream[0]["text"] == "let me think"
     assert stream[1]["kind"] == "content"
     assert stream[1]["text"] == "reply"
+
+
+# --- A0: the new tool_calls / code_edits / invocations fields -----------------
+
+def test_backend_carries_phase_and_department(monkeypatch):
+    """A0: the tool_calls row carries `phase` (from the call site) and
+    `department` (from the role), and `error_type` is None on success."""
+    _install_fake_httpx(monkeypatch, _tool_reply({"summary": "s"}))
+    stats = []
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    backend.on_call = stats.append
+    role = Role(id="ic_x", architype="ic", department="engineering")
+    backend.invoke(role, "ctx", phase=4)
+    s = stats[0]
+    assert s["phase"] == 4
+    assert s["department"] == "engineering"
+    assert s["error_type"] is None
+
+
+def test_error_type_classifier():
+    """A0: `_error_type` classifies a failure (timeout|truncation|parse|
+    transport|other) and is None on a successful call."""
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    assert backend._error_type("tool_call", "") is None
+    assert backend._error_type("content_fallback", "") is None
+    assert backend._error_type(
+        "error", "LLM request timed out after 4 attempts") == "timeout"
+    assert backend._error_type(
+        "error", "truncated mid-JSON after 8192 tokens") == "truncation"
+    assert backend._error_type(
+        "error", "malformed structured output") == "parse"
+    assert backend._error_type(
+        "error", "httpx.ConnectError: connection refused") == "transport"
+    assert backend._error_type("error", "something unknown") == "other"
+
+
+def test_code_edit_carries_department(tmp_path):
+    """A0: `log_code_edit` carries `department` (so the dashboard can segment
+    edits by team without re-deriving it from the path)."""
+    h = HistoryStore(history_dir=str(tmp_path))
+    h.log_code_edit("ic_x", "departments/engineering/foo.py", True,
+                    department="engineering")
+    edits = [json.loads(l) for l in open(
+        str(tmp_path / "code_edits.jsonl"), encoding="utf-8")]
+    assert edits[0]["department"] == "engineering"
+
+
+def test_invocation_carries_ts(tmp_path):
+    """A0: `log_invocation` carries a `ts` (so the dashboard can chart the
+    granted-level distribution over time)."""
+    h = HistoryStore(history_dir=str(tmp_path))
+    h.log_invocation("leader", 4, "high", "high")
+    rows = [json.loads(l) for l in open(
+        str(tmp_path / "invocations.jsonl"), encoding="utf-8")]
+    assert rows[0]["phase"] == 4
+    assert isinstance(rows[0]["ts"], float) and rows[0]["ts"] > 0
+
+
+def test_watcher_ingests_halt_events():
+    """A0: the Watcher ingests `halt_events` and exposes them in the snapshot
+    (so the dashboard can chart Safety/Morality halts over time)."""
+    from observability.dashboard import Watcher
+    w = Watcher(root="/tmp/nonexistent")
+    w.ingest_halt({"ts": 1.0, "phase": 4, "decision": "halt",
+                   "safety": True, "morality": False})
+    snap = w.snapshot()
+    assert snap["halt_events"][0]["decision"] == "halt"
+    assert snap["halt_events"][0]["safety"] is True

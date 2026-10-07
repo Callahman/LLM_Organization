@@ -177,7 +177,7 @@ def run_mission(
     while attempts < reask_budget:
         attempts += 1
         ctx = _mission_context(intake_result, feedback, current_mission)
-        out = backend.invoke(leader, ctx)
+        out = backend.invoke(leader, ctx, phase=2)
         draft = _mission_draft(out)
         decision = user_permission_fn(draft)
 

@@ -144,7 +144,7 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
     **live** (the observability dashboard tails it for the active-pod view).
     """
     # 1. The starter sets the agenda.
-    out = backend.invoke(pod.starter, _pod_ctx(pod, "agenda"))
+    out = backend.invoke(pod.starter, _pod_ctx(pod, "agenda"), phase=4)
     pod.agenda = str(out.get("agenda", ""))
     pod.transcript.append({
         "kind": "agenda", "role": pod.starter.id,
@@ -162,7 +162,8 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
         disagreement = detect_disagreement(prev_outputs)
         for member in pod.members:
             level = classify_complexity(4, member, {"disagreement": disagreement})
-            out = backend.invoke(member, _pod_ctx(pod, "speak"), reasoning=level)
+            out = backend.invoke(member, _pod_ctx(pod, "speak"), reasoning=level,
+                                 phase=4)
             summary = str(out.get("summary", ""))
             this_round.append((member.id, summary))
             this_outputs.append(out)
@@ -180,7 +181,7 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
         prev_outputs = this_outputs
 
     # 3. The starter always closes, producing the decision.
-    out = backend.invoke(pod.starter, _pod_ctx(pod, "close"))
+    out = backend.invoke(pod.starter, _pod_ctx(pod, "close"), phase=4)
     pod.decision = str(out.get("decision", ""))
     pod.rationale = str(out.get("rationale", ""))
     pod.open_items = as_str_list(out.get("open_items", []))
@@ -313,5 +314,23 @@ class SoloTracker:
         transcript so the dashboard sees it live."""
         pod = self.pod_for(phase, topic)
         record_solo_step(pod, round_no, kind, output)
+        if self.transcripts_dir:
+            write_transcripts(pod, self.transcripts_dir)
+
+    def close(self, phase: str, reason: str = "") -> None:
+        """Emit a terminal `close` step for a solo pod's phase when it
+        completes, so the dashboard marks the pod **closed** (it moves from the
+        active pane to the historical list). `reason` is a short summary line
+        (e.g. "intake converged, 2 rounds", "mission approved v1")."""
+        pod = self.pods.get(phase)
+        if pod is None:
+            return
+        pod.closed_reason = reason
+        pod.transcript.append({
+            "kind": "close",
+            "role": pod.starter.id,
+            "summary": reason,
+            "decision": reason,
+        })
         if self.transcripts_dir:
             write_transcripts(pod, self.transcripts_dir)

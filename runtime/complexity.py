@@ -129,21 +129,29 @@ class RoutingBackend(LLMBackend):
 
     def invoke(self, role, context: str,
                reasoning: Optional[Reasoning] = None,
-               timeout: Optional[float] = None) -> Dict[str, Any]:
-        phase = parse_phase(context)
+               timeout: Optional[float] = None,
+               phase: Optional[int] = None) -> Dict[str, Any]:
+        # D2: the phase to LOG and to ROUTE (explicit from the call site, or
+        # parsed from the context as a fallback). The explicit phase is what
+        # matters: MemoryBackend re-wraps the context ("ROLE:...") before this
+        # runs, so the "PHASE N" marker is gone from the context — relying on
+        # parse_phase(context) routed non-explicit invokes (Phase 2 mission, IC
+        # work) to LOW and logged phase: -1.
+        log_phase = phase if phase is not None else parse_phase(context)
         level = (
             reasoning
             if reasoning is not None
-            else classify_complexity(phase, role, {})
+            else classify_complexity(log_phase, role, {})
         )
         granted = self.budget.allow(level)
         if self.history is not None:
             self.history.log_invocation(
-                role.id, phase, level.value, granted.value
+                role.id, log_phase, level.value, granted.value
             )
         # A per-invoke timeout override is only honored when the inner is a
         # TimeoutBackend (a raw backend like the StubBackend has no timeout
         # concept).
         if isinstance(self.inner, TimeoutBackend):
-            return self.inner.invoke(role, context, granted, timeout=timeout)
-        return self.inner.invoke(role, context, granted)
+            return self.inner.invoke(role, context, granted, timeout=timeout,
+                                     phase=log_phase)
+        return self.inner.invoke(role, context, granted, phase=log_phase)

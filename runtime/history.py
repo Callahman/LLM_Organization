@@ -70,11 +70,13 @@ class HistoryStore:
         granted: str,
     ) -> str:
         """Record a role invocation and the reasoning level requested vs
-        granted (the audit trail for where "thinking" was used)."""
+        granted (the audit trail for where "thinking" was used). Carries a `ts`
+        so the dashboard can chart granted-level distribution over time (A0)."""
         return self._append(
             "invocations.jsonl",
             {"role": role_id, "phase": phase,
-             "requested": requested, "granted": granted},
+             "requested": requested, "granted": granted,
+             "ts": time.time()},
         )
 
     # --- decision journal --------------------------------------------------
@@ -103,13 +105,15 @@ class HistoryStore:
     # --- observability logs (tiled by the dashboard; the org never reads them)
 
     def log_code_edit(self, role_id: str, path: str, ok: bool,
-                      error: str = "") -> str:
+                      error: str = "", department: str = "") -> str:
         """Record one agent self-edit result (``history/code_edits.jsonl``) —
-        the source for the "code edited over time" metric."""
+        the source for the "code edited over time" metric. Carries `department`
+        so the dashboard can segment edits by team without re-deriving it from
+        the path (A0)."""
         return self._append(
             "code_edits.jsonl",
             {"ts": time.time(), "role": role_id, "path": path,
-             "ok": bool(ok), "error": error},
+             "ok": bool(ok), "error": error, "department": department},
         )
 
     def log_tool_call(self, stat: Dict[str, Any]) -> str:
@@ -143,10 +147,12 @@ class HistoryStore:
     # --- halt-event log ----------------------------------------------------
 
     def log_halt(self, department: str, scope: str, reason: str) -> str:
-        """Log a Safety/Morality halt (scoped or global)."""
+        """Log a Safety/Morality halt (scoped or global). Carries a `ts` so the
+        dashboard can chart halts over time (A0)."""
         return self._append(
             "halt_events.jsonl",
-            {"department": department, "scope": scope, "reason": reason},
+            {"ts": time.time(), "department": department, "scope": scope,
+             "reason": reason},
         )
 
     # --- evaluation reports ------------------------------------------------

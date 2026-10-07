@@ -37,7 +37,8 @@ class LLMBackend(ABC):
     @abstractmethod
     def invoke(self, role, context: str,
                reasoning: Reasoning = Reasoning.LOW,
-               timeout: Optional[float] = None) -> Dict[str, Any]:
+               timeout: Optional[float] = None,
+               phase: Optional[int] = None) -> Dict[str, Any]:
         """Given a role and its context/prompt, return the role's structured
         output (a dict containing the shared output envelope). `reasoning`
         selects the model's thinking level (complex -> on, simple -> off).
@@ -85,7 +86,8 @@ class StubBackend(LLMBackend):
 
     def invoke(self, role, context: str,
                reasoning: Reasoning = Reasoning.LOW,
-               timeout: Optional[float] = None) -> Dict[str, Any]:
+               timeout: Optional[float] = None,
+               phase: Optional[int] = None) -> Dict[str, Any]:
         # `timeout` (a per-invoke wall-clock budget) is accepted for interface
         # parity with the real/wrapper backends but unused here: the StubBackend
         # is deterministic and makes no network calls.
@@ -114,7 +116,8 @@ class TimeoutBackend(LLMBackend):
 
     def invoke(self, role, context: str,
                reasoning: Reasoning = Reasoning.LOW,
-               timeout: Optional[float] = None) -> Dict[str, Any]:
+               timeout: Optional[float] = None,
+               phase: Optional[int] = None) -> Dict[str, Any]:
         box: Dict[str, Any] = {}
         # A per-invoke timeout override (e.g. a heavier Phase-4 IC work step
         # gets a larger budget than the default). `None` uses the default.
@@ -122,7 +125,8 @@ class TimeoutBackend(LLMBackend):
 
         def worker() -> None:
             try:
-                box["out"] = self.inner.invoke(role, context, reasoning)
+                box["out"] = self.inner.invoke(role, context, reasoning,
+                                              phase=phase)
             except Exception as e:  # propagate the real error, not a timeout
                 box["err"] = e
 
@@ -184,7 +188,8 @@ class MemoryBackend(LLMBackend):
 
     def invoke(self, role, context: str,
                reasoning: Reasoning = Reasoning.LOW,
-               timeout: Optional[float] = None) -> Dict[str, Any]:
+               timeout: Optional[float] = None,
+               phase: Optional[int] = None) -> Dict[str, Any]:
         memory = self._memory_for(role.id)
         # Before the invoke: fold the role's isolated memory into its prompt.
         full_prompt = assemble_prompt(role, context, memory=memory)
@@ -194,7 +199,7 @@ class MemoryBackend(LLMBackend):
         # has no `timeout` param), so fall back to a plain call on TypeError.
         try:
             result = self.inner.invoke(role, full_prompt, reasoning,
-                                       timeout=timeout)
+                                       timeout=timeout, phase=phase)
         except TypeError:
             result = self.inner.invoke(role, full_prompt, reasoning)
         # After the invoke: record the interaction (both sides) — what the

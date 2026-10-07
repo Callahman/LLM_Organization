@@ -70,6 +70,59 @@ def test_pod_transcript_active_vs_closed():
     assert w.pods["p1"]["status"] == "closed"
 
 
+def test_solo_pod_closes_on_close_entry():
+    # A1: a solo pod that emits a terminal `close` step (when its phase
+    # completes) is marked closed, so the dashboard moves it to the historical
+    # list (not stuck on the active pane).
+    w = Watcher(root="/nonexistent")
+    w.ingest_pod_transcript("solo_leader_p1", [
+        {"kind": "intake", "role": "leader", "summary": "intake converged"}])
+    assert w.pods["solo_leader_p1"]["status"] == "active"
+    w.ingest_pod_transcript("solo_leader_p1", [
+        {"kind": "intake", "role": "leader", "summary": "intake converged"},
+        {"kind": "close", "role": "leader",
+         "decision": "intake converged=True, 2 rounds"}])
+    assert w.pods["solo_leader_p1"]["status"] == "closed"
+
+
+def test_seed_transcripts_ingests_closed_history(tmp_path):
+    # A1: seed_transcripts ingests every **existing** transcript as closed
+    # history (from a prior run) so the historical list is populated at
+    # startup. The pod is marked closed regardless of its entries.
+    tdir = tmp_path / "pods" / "transcripts"
+    tdir.mkdir(parents=True)
+    (tdir / "solo_leader_p2.jsonl").write_text(
+        json.dumps({"kind": "mission", "role": "leader",
+                    "summary": "mission approved"}) + "\n",
+        encoding="utf-8")
+    w = Watcher(root=str(tmp_path))
+    w.seed_transcripts()
+    assert "solo_leader_p2" in w.pods
+    assert w.pods["solo_leader_p2"]["status"] == "closed"
+    assert w.pods["solo_leader_p2"]["entries"][0]["kind"] == "mission"
+
+
+def test_ingest_halt_event_appends_to_state():
+    # A6: the halt pane lists Safety/Morality halt events (from
+    # halt_events.jsonl). ingest_halt appends the event to the state.
+    w = Watcher(root="/nonexistent")
+    w.ingest_halt({"kind": "safety_halt", "reason": "policy violation",
+                   "ts": 1.0})
+    assert len(w.halt_events) == 1
+    assert w.halt_events[0]["kind"] == "safety_halt"
+    assert w.halt_events[0]["reason"] == "policy violation"
+
+
+def test_last_stream_ts_exposed_in_snapshot():
+    # A6: the staleness gauge reads "last stream chunk ts" from the snapshot
+    # (the dashboard computes seconds-since = ts - last_stream_ts).
+    w = Watcher(root="/nonexistent")
+    w.ingest_stream({"stream_id": "s1", "role": "leader", "model": "qwen",
+                     "kind": "content", "text": "hi", "ts": 123.0})
+    snap = w.snapshot()
+    assert snap["last_stream_ts"] == 123.0
+
+
 def test_ingest_stream_groups_by_stream_id_and_kind():
     # The Watcher groups streamed chunks by stream_id (one per model call)
     # and accumulates them per kind (thinking/content/tool_call). The window

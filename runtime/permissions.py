@@ -127,7 +127,16 @@ def edit_reason(role, path: str) -> tuple:
         return False, f"org_tooling: {role.id} is not active"
     # 7. Out of scope: a top-level dir that is not a recognized write scope.
     top = parts[0] if parts else rel
-    return False, (f"out_of_scope: '{top}' is not this role's team work dir "
+    # Name the role's concrete team dir so the refusal is actionable — the
+    # dispatch feeds this reason back for a corrective retry, so the model
+    # sees exactly where to write.
+    if role.department and role.team:
+        hint = (f" your team work dir is "
+                f"'departments/{role.department}/{role.team}/' — write there")
+    else:
+        hint = ""
+    return False, (f"out_of_scope: '{top}' is not a writable scope for this "
+                   f"role{hint}; the allowed scopes are the team work dir "
                    f"(departments/<dept>/<team>/), org tooling "
                    f"(runtime/org/roles/pods), MISSION.md, or a department "
                    f"policy")
