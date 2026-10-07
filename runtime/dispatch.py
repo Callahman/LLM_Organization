@@ -37,7 +37,7 @@ from roles.base import Role, spin_personality, spin_sub_architype
 from roles.worker import worker_output_schema
 from runtime.org import OrgState, hire
 from runtime.llm import LLMBackend
-from runtime.complexity import detect_disagreement
+from runtime.complexity import classify_complexity, detect_disagreement
 from runtime.history import HistoryStore
 from runtime.permissions import apply_code_edits
 from runtime.coerce import as_dict_list
@@ -257,7 +257,9 @@ def _retry_refused_edits(
         "placed in an allowed scope, omit it."
     )
     try:
-        out = backend.invoke(ic, ctx, phase=phase)
+        out = backend.invoke(ic, ctx,
+                             reasoning=classify_complexity(phase, ic, {}),
+                             phase=phase)
     except Exception:
         return
     edits = as_dict_list((out or {}).get("code_edits", []))
@@ -425,6 +427,7 @@ def _check_pod_triggers(
         senior,
         f"POD {pod.id} outcome to share up the line — decision: {pod.decision}. "
         "Produce an upward report of the pod's decision.",
+        reasoning=classify_complexity(4, senior, {}),
         phase=4,
     )
     # Chained-pod escalation: the starter's boss forms a second pod carrying
@@ -510,7 +513,8 @@ def dispatch(
     `MemoryBackend.seed_cross_team` — a no-op for a plain stub)."""
     digest = mission_digest(mission)
     head_ids = [h.id for h in org.department_heads()]
-    out = backend.invoke(leader, _leader_ctx(digest, head_ids), phase=4)
+    out = backend.invoke(leader, _leader_ctx(digest, head_ids),
+                         reasoning=classify_complexity(4, leader, {}), phase=4)
     dept_objectives = _decomposition_list(out, "department_objectives")
     if not dept_objectives:
         # The leader's Phase 4 decomposition came back empty — no work to
@@ -538,6 +542,7 @@ def dispatch(
                 )
             continue
         head_out = backend.invoke(head, _head_ctx(head, obj.get("objective", ""), digest),
+                          reasoning=classify_complexity(4, head, {}),
                           phase=4)
         team_objectives = _decomposition_list(head_out, "team_objectives")
 
@@ -557,6 +562,7 @@ def dispatch(
                 )
             if manager is not None:
                 mgr_out = backend.invoke(manager, _manager_ctx(manager, t_obj.get("objective", "")),
+                         reasoning=classify_complexity(4, manager, {}),
                          phase=4)
                 ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
                 ic_reports: List[Dict[str, Any]] = []
@@ -573,6 +579,7 @@ def dispatch(
                         continue
                     ic_out = backend.invoke(
                         ic, _ic_ctx(ic, task.get("task", "")),
+                        reasoning=classify_complexity(4, ic, {}),
                         timeout=ic_timeout_seconds,
                         phase=4,
                     )
@@ -611,6 +618,7 @@ def dispatch(
                     continue
                 ic_out = backend.invoke(
                     ic, _ic_ctx(ic, t_obj.get("objective", "")),
+                    reasoning=classify_complexity(4, ic, {}),
                     timeout=ic_timeout_seconds,
                     phase=4,
                 )

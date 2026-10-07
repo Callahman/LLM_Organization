@@ -187,9 +187,14 @@ class MemoryBackend(LLMBackend):
         memory.add_summary(decision, source=f"pod:{pod_id}", team=team)
 
     def invoke(self, role, context: str,
-               reasoning: Reasoning = Reasoning.LOW,
+               reasoning: Optional[Reasoning] = None,
                timeout: Optional[float] = None,
                phase: Optional[int] = None) -> Dict[str, Any]:
+        # Story 2 (A7): the default is `None`, NOT a hardcoded
+        # `Reasoning.LOW` — a `None` is forwarded to the inner (RoutingBackend),
+        # which then CLASSIFIES the level from the phase + role. A hardcoded
+        # LOW would force every non-explicit invoke to the low level and bypass
+        # the "complex -> thinking on" routing.
         memory = self._memory_for(role.id)
         # Before the invoke: fold the role's isolated memory into its prompt.
         full_prompt = assemble_prompt(role, context, memory=memory)

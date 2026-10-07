@@ -9,7 +9,7 @@ import os
 
 from roles.base import Role
 from roles.leader import make_leader
-from runtime.llm import StubBackend, Reasoning
+from runtime.llm import MemoryBackend, StubBackend, Reasoning
 from runtime.complexity import (
     classify_complexity, detect_disagreement, parse_phase,
     ThinkingBudget, RoutingBackend,
@@ -113,3 +113,41 @@ def test_routing_backend_uses_explicit_level():
     # An explicit HIGH (e.g. a pod round with disagreement) overrides phase routing.
     backend.invoke(ic, "POD pod_x: speak — topic", reasoning=Reasoning.HIGH)
     assert inner.reasoning_log == [Reasoning.HIGH]
+
+
+def test_live_path_high_reaches_router(tmp_path):
+    # Story 2 (A7): the live path (MemoryBackend -> RoutingBackend) routes
+    # `reasoning` — a `classify_complexity` HIGH reaches the router, and the
+    # default (`reasoning=None`) is CLASSIFIED by the router (no hardcoded LOW
+    # bypass).
+    inner = StubBackend()
+    routing = RoutingBackend(inner, ThinkingBudget(max_high=10))
+    memory = MemoryBackend(routing)
+    leader = make_leader()
+
+    # An explicit HIGH (a classify_complexity result) reaches the router.
+    level = classify_complexity(2, leader, {})
+    assert level is Reasoning.HIGH
+    memory.invoke(leader, "PHASE 2: draft the mission", reasoning=level, phase=2)
+    assert inner.reasoning_log[-1] is Reasoning.HIGH
+
+    # The default (`reasoning=None`) is classified by the router, not forced
+    # LOW: Phase 5 (synthesis) classifies HIGH and the router grants it.
+    memory.invoke(leader, "PHASE 5: synthesize", phase=5)
+    assert inner.reasoning_log[-1] is Reasoning.HIGH
+
+
+def test_live_path_budget_exhaustion_downgrades(tmp_path):
+    # Story 2: once the thinking budget is exhausted, a HIGH is downgraded to a
+    # lower level (the visible fallback).
+    inner = StubBackend()
+    routing = RoutingBackend(inner, ThinkingBudget(max_high=1))
+    memory = MemoryBackend(routing)
+    leader = make_leader()
+
+    memory.invoke(leader, "PHASE 2: draft the mission",
+                  reasoning=Reasoning.HIGH, phase=2)
+    assert inner.reasoning_log[-1] is Reasoning.HIGH   # within budget
+    memory.invoke(leader, "PHASE 2: draft the mission",
+                  reasoning=Reasoning.HIGH, phase=2)
+    assert inner.reasoning_log[-1] is Reasoning.LOW    # budget exhausted

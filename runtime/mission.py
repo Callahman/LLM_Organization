@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, List, Optional
 from roles.base import Role
 from runtime.intake import IntakeResult
 from runtime.llm import LLMBackend
+from runtime.complexity import classify_complexity
 
 
 @dataclass
@@ -177,7 +178,8 @@ def run_mission(
     while attempts < reask_budget:
         attempts += 1
         ctx = _mission_context(intake_result, feedback, current_mission)
-        out = backend.invoke(leader, ctx, phase=2)
+        out = backend.invoke(leader, ctx,
+                             reasoning=classify_complexity(2, leader, {}), phase=2)
         draft = _mission_draft(out)
         decision = user_permission_fn(draft)
 
