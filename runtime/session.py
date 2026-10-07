@@ -197,7 +197,11 @@ class Session:
         self.solo.record("p5", "Phase 5: synthesis", self.cycles,
                          "synthesis",
                          {**out, "thinking_budget_remaining":
-                              self.thinking_budget.remaining})
+                              self.thinking_budget.remaining,
+                           # Story 3 (A4): the BAU halt state is observable —
+                           # the dashboard can show an active halt.
+                           "bau_active": self.bau_active(),
+                           "bau_halt": self.bau_halt})
         # A1: close the solo pod when the synthesis phase completes.
         self.solo.close("p5", f"synthesis verdict={out.get('verdict', 'complete')}")
         return out.get("verdict", "complete")
@@ -631,9 +635,31 @@ class Session:
                     self.halt_bau(halt["department"], halt["scope"], halt["reason"])
                     self.queue_user_input({"kind": "safety_morality_halt", **halt})
 
+            # Story 3 (A10/B12): a GLOBAL Safety/Morality halt stops work
+            # before Phase 5 — the halt is CONSUMED, not just recorded
+            # (`bau_active()` is False only for a global halt).
+            if not self.bau_active():
+                return self._escalate("safety/morality halt (global)",
+                                      intake, mission)
+            if self.bau_halt:
+                # A SCOPED halt — do not stop; continue non-blocked work
+                # (visible note; full per-department blocking is a follow-up).
+                print(
+                    f"[session] scoped safety/morality halt in "
+                    f"{self.bau_halt.get('department')} — continuing "
+                    f"non-blocked work",
+                    file=sys.stderr,
+                )
+
             # Phase 5: synthesis.
             verdict = self._phase(5, self.cycles, self._synthesis)
             self.phases.append(5)
+
+            # Story 3 (B12): the same check before Phase 6 — a global halt
+            # does not run the continue/complete decision.
+            if not self.bau_active():
+                return self._escalate("safety/morality halt (global)",
+                                      intake, mission)
 
             # Phase 6: evaluation (decides continue / stop).
             evaluation, status = self._phase(6, self.cycles, self._evaluate,

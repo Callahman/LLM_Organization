@@ -118,6 +118,9 @@ def test_full_chain_hires_managers_and_ics(tmp_path):
 
 
 def test_bau_halt_during_phase4(tmp_path):
+    # Story 3 (A10/B12): a GLOBAL Phase 4 Safety/Morality halt stops the run
+    # before Phase 5 — the halt is CONSUMED, not just recorded (previously
+    # the cycle "still completed": the halt was set but never consumed).
     backend = StubBackend()
     backend.set_script("leader", _leader_script_full())
     backend.set_script("head_analytics", [
@@ -138,9 +141,42 @@ def test_bau_halt_during_phase4(tmp_path):
     # The halt is recorded and BAU is halted (global scope).
     assert session.bau_halt is not None
     assert session.bau_halt["department"] == "safety"
+    assert session.bau_halt["scope"] == "global"
     assert session.bau_active() is False
-    # The cycle still completes (the halt queues the needed user input).
+    # The run stops before Phase 5 (no synthesis, no evaluation).
+    assert result.status == "escalated"
+    assert 5 not in result.phases
+    assert 6 not in result.phases
+
+
+def test_scoped_bau_halt_during_phase4_continues(tmp_path):
+    # Story 3: a SCOPED Phase 4 halt does not stop the run (Phase 5 + 6 run)
+    # and the halt is recorded (observable).
+    backend = StubBackend()
+    backend.set_script("leader", _leader_script_full())
+    backend.set_script("head_analytics", [
+        {"decomposition": {"team_objectives": []}},
+    ])
+    user_answer_fn, user_permission_fn, approver_fn = _approve_fns()
+    session = Session(backend, make_leader(), history_dir=str(tmp_path))
+    phase4_halt_fn = lambda: {
+        "department": "safety", "scope": "scoped", "reason": "unsafe output",
+    }
+    result = session.run(
+        "build a data pipeline",
+        user_answer_fn, user_permission_fn, approver_fn,
+        phase4_halt_fn=phase4_halt_fn,
+        max_iterations=3,
+    )
+    # The run continues (non-blocked work) and completes.
     assert result.status == "complete"
+    assert 5 in result.phases
+    assert 6 in result.phases
+    # The halt is recorded (the scoped halt is observable) and BAU stays
+    # active under a scoped halt.
+    assert session.bau_halt is not None
+    assert session.bau_halt["scope"] == "scoped"
+    assert session.bau_active() is True
 
 
 # --- Story 1: persistence & crash recovery ---------------------------------
