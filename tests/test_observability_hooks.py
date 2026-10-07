@@ -92,7 +92,7 @@ def test_org_event_has_timestamp_and_department():
 # --- OpenAIBackend.on_call ----------------------------------------------------
 
 def test_backend_reports_tool_call_outcome(monkeypatch):
-    _install_fake_httpx(monkeypatch, _tool_reply({"summary": "s"}))
+    _install_fake_httpx(monkeypatch, _tool_reply({"summary": "s", "confidence": 0.5}))
     stats = []
     backend = OpenAIBackend(model="m", base_url="http://x/v1")
     backend.on_call = stats.append
@@ -108,7 +108,7 @@ def test_backend_reports_tool_call_outcome(monkeypatch):
 
 def test_backend_reports_content_fallback_outcome(monkeypatch):
     _install_fake_httpx(
-        monkeypatch, _content_reply('{"summary": "s"}'))
+        monkeypatch, _content_reply('{"summary": "s", "confidence": 0.5}'))
     stats = []
     backend = OpenAIBackend(model="m", base_url="http://x/v1")
     backend.on_call = stats.append
@@ -128,13 +128,13 @@ def test_backend_reports_error_outcome_and_raises(monkeypatch):
 
 
 def test_backend_on_call_exception_never_breaks_invoke(monkeypatch):
-    _install_fake_httpx(monkeypatch, _tool_reply({"summary": "s"}))
+    _install_fake_httpx(monkeypatch, _tool_reply({"summary": "s", "confidence": 0.5}))
     backend = OpenAIBackend(model="m", base_url="http://x/v1")
     def broken(stat):
         raise RuntimeError("observability must not break the pipeline")
     backend.on_call = broken
     out = backend.invoke(_role(), "ctx")  # must not raise
-    assert out == {"summary": "s"}
+    assert out == {"summary": "s", "confidence": 0.5}
 
 
 # --- HistoryStore observability logs ------------------------------------------
@@ -179,7 +179,7 @@ def test_history_store_observability_logs(tmp_path):
 def test_backend_carries_phase_and_department(monkeypatch):
     """A0: the tool_calls row carries `phase` (from the call site) and
     `department` (from the role), and `error_type` is None on success."""
-    _install_fake_httpx(monkeypatch, _tool_reply({"summary": "s"}))
+    _install_fake_httpx(monkeypatch, _tool_reply({"summary": "s", "confidence": 0.5}))
     stats = []
     backend = OpenAIBackend(model="m", base_url="http://x/v1")
     backend.on_call = stats.append

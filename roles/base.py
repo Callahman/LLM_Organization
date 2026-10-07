@@ -21,8 +21,14 @@ from typing import Any, Dict, List, Optional
 # Architypes (the four tiers).
 ARCHITYPES = ("leader", "department_head", "manager", "ic")
 
-# The shared output envelope keys.
+# The shared output envelope keys (what a role can produce; offered in every
+# output schema's `properties`).
 OUTPUT_ENVELOPE_KEYS = ("summary", "findings", "recommendation", "confidence")
+
+# The envelope keys every role output schema REQUIRES (the subset validation
+# enforces, per `roles/worker.py::_schema`). The optional keys (`findings` /
+# `recommendation`) are offered but not required — a role may omit them.
+REQUIRED_ENVELOPE_KEYS = ("summary", "confidence")
 
 
 @dataclass
@@ -102,15 +108,19 @@ class Role:
 def validate_envelope(output: Dict[str, Any]) -> List[str]:
     """Return a list of problems with a structured output (empty if valid).
 
-    Checks the shared envelope is present and well-formed. Roles may extend
-    the envelope with their own fields; only the envelope is validated here.
+    Validates the **required** envelope keys (``summary`` + ``confidence`` —
+    the subset every role output schema requires, ``REQUIRED_ENVELOPE_KEYS``)
+    and type-checks the keys that are present. Roles may extend the envelope
+    with their own fields; the optional envelope keys (``findings`` /
+    ``recommendation``) are NOT required (a role may omit them), so a missing
+    optional key is not a problem.
     """
     problems: List[str] = []
     if not isinstance(output, dict):
         return ["output is not a dict"]
-    for key in OUTPUT_ENVELOPE_KEYS:
+    for key in REQUIRED_ENVELOPE_KEYS:
         if key not in output:
-            problems.append(f"missing envelope key: {key!r}")
+            problems.append(f"missing required key: {key!r}")
     if "confidence" in output:
         try:
             c = float(output["confidence"])
@@ -120,6 +130,10 @@ def validate_envelope(output: Dict[str, Any]) -> List[str]:
             problems.append("confidence is not a number")
     if "findings" in output and not isinstance(output["findings"], list):
         problems.append("findings is not a list")
+    if "recommendation" in output and not isinstance(output["recommendation"], str):
+        problems.append("recommendation is not a string")
+    if "summary" in output and not isinstance(output["summary"], str):
+        problems.append("summary is not a string")
     return problems
 
 
