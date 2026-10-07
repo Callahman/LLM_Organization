@@ -9,7 +9,7 @@ B12 (Phase 4 halt recorded but not enforced), C1 (BAU rule inert).
 a **global** halt stops work before Phase 5/6; a **scoped** halt continues only
 non-blocked work. The halt is observable and testable.
 
-## Context (what exists today)
+## Context (before)
 - `runtime/session.py:389-396`: after Phase 4, `phase4_halt_fn()` is checked;
   on a halt, `self.halt_bau(...)` (sets `self.bau_halt`) and
   `self.queue_user_input(...)` are called — then the pipeline proceeds to Phase
@@ -19,27 +19,53 @@ non-blocked work. The halt is observable and testable.
 - `_escalate` (`runtime/session.py:259`) is the existing "stop and report" path
   (returns a `SessionResult` with `status="escalated"`).
 
+## Rollout (what was changed)
+- `halt_bau` (`runtime/session.py:158`) already stored the halt's `scope` in
+  `self.bau_halt` (task 1 — verified, no code change needed).
+- A global halt is now enforced **before Phase 5**
+  (`runtime/session.py:641`): `if not self.bau_active(): return
+  self._escalate("safety/morality halt (global)", intake, mission)` — reusing
+  the existing `_escalate` (A10/B12). Note: the story's condition "if
+  `bau_active()` is True **and** the halt is global" was self-contradictory
+  (`bau_active()` returns False exactly when the halt is global); the Goal +
+  Definition of done intent ("global halt → stop", with `bau_active()`
+  consumed) is implemented as `not bau_active()` (A4).
+- The same check is applied **before Phase 6** (`runtime/session.py:660`) — a
+  global halt does not run the continue/complete decision (B12).
+- A **scoped** halt does not stop; it logs the visible `[session] scoped
+  safety/morality halt in <dept> — continuing non-blocked work` note to
+  stderr (`runtime/session.py:648`).
+- The Phase 5 solo record now includes `bau_active` + `bau_halt`
+  (`runtime/session.py:204`) so the dashboard can show an active halt (A4).
+- Tests (`tests/test_session.py`):
+  - `test_bau_halt_during_phase4` **updated** — a global halt stops before
+    Phase 5 (`status == "escalated"`, `5 not in result.phases`); it previously
+    codified the old behavior ("the cycle still completes").
+  - `test_scoped_bau_halt_during_phase4_continues` **added** — a scoped halt
+    continues (Phase 5 + 6 run) and the halt is recorded.
+  (Written by the agent; **run by the user** per the rule.)
+
 ## Tasks
 
-- [ ] **Add a scoped-vs-global distinction to the halt.** In `halt_bau` (find it
+- [x] **Add a scoped-vs-global distinction to the halt.** In `halt_bau` (find it
   in `runtime/session.py` — the method that sets `self.bau_halt`), store the
   halt's `scope` (the `halt["scope"]` from the caller) so the pipeline can tell
   a global halt from a scoped one.
-- [ ] **Enforce the halt before Phase 5.** After the Phase 4 halt block
+- [x] **Enforce the halt before Phase 5.** After the Phase 4 halt block
   (`runtime/session.py:389-396`), add: if `self.bau_active()` is True **and** the
   halt is **global**, stop — `return self._escalate("safety/morality halt
   (global)", intake, mission)` (reuse the existing `_escalate`, session.py:259).
-- [ ] **Enforce the halt before Phase 6.** Apply the same check before the
+- [x] **Enforce the halt before Phase 6.** Apply the same check before the
   Phase 6 evaluation (session.py:403) so a global halt does not run the
   continue/complete decision.
-- [ ] **Scoped halt: continue non-blocked work.** For a **scoped** halt, do not
+- [x] **Scoped halt: continue non-blocked work.** For a **scoped** halt, do not
   stop, but log a visible `[session] scoped safety/morality halt in <dept> —
   continuing non-blocked work` note (so the behavior is observable). (Full
   per-department blocking is a follow-up.)
-- [ ] **Make `bau_active` observable.** Ensure `self.bau_active()` (or
+- [x] **Make `bau_active` observable.** Ensure `self.bau_active()` (or
   `self.bau_halt`) is included in a solo record for Phase 5 so the dashboard can
   show the active halt.
-- [ ] **Tests** (`tests/test_session.py`):
+- [x] **Tests** (`tests/test_session.py`):
   - (a) A **global** Phase 4 halt (via a `phase4_halt_fn` returning
     `{"department": "...", "scope": "global", "reason": "..."}`) stops the run
     before Phase 5 (assert `5 not in result.phases` or `result.status ==
@@ -51,3 +77,4 @@ non-blocked work. The halt is observable and testable.
 - A global Phase 4 halt stops work before Phase 5/6.
 - A scoped halt continues non-blocked work and is observable.
 - `bau_active()` is consumed in the pipeline (no longer dead).
+- The tests prove both behaviors (**run by the user** per the rule).
