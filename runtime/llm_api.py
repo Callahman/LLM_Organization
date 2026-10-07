@@ -24,9 +24,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from roles.base import validate_envelope
 from runtime.llm import LLMBackend, Reasoning, StubBackend
 
 # The single tool the model must call to submit its structured output.
@@ -41,6 +43,52 @@ TOOL_DESCRIPTION = (
 # structured outputs the pipeline reads. A wrong type (e.g. a free-form string)
 # is logged (not rejected) so future free-forms are visible in tool_calls.jsonl.
 _NESTED_OBJECT_KEYS = ("mission_draft", "decomposition", "org_recommendation")
+
+
+def _tool_call_problem(tc: Any) -> str:
+    """Story 4 (A9/R10): return a reason if a `tool_call` is malformed (not a
+    dict, missing `name`, or `args` not parseable), else '' (well-formed)."""
+    if not isinstance(tc, dict):
+        return f"tool_call is not a dict ({type(tc).__name__})"
+    if not tc.get("name"):
+        return "tool_call is missing `name`"
+    args = tc.get("args")
+    if args is None or isinstance(args, dict):
+        return ""  # no args, or a structured dict — well-formed
+    if isinstance(args, str):
+        try:
+            json.loads(args)
+            return ""  # a JSON string — parseable
+        except json.JSONDecodeError:
+            return f"tool_call `args` not parseable: {args[:100]!r}"
+    return f"tool_call `args` not parseable ({type(args).__name__})"
+
+
+def validate_and_quarantine(role, out: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """Story 4 (A8/A9/R10): envelope-validate an LLM output and quarantine a
+    malformed `tool_call`. Returns ``(output, events)`` where ``output`` is the
+    (possibly safe-fallback) envelope and ``events`` is a list of visible log
+    lines (the caller prints them + records them in the history log). Never
+    raises on a malformed shape — a visible note + a safe fallback, not a crash.
+    """
+    events: List[str] = []
+    role_id = getattr(role, "id", "")
+    # `validate_envelope` validates the required keys (`summary` + `confidence`)
+    # + type-checks present keys; a missing optional key is not a problem.
+    problems = validate_envelope(out)
+    if problems:
+        events.append(f"[llm] invalid envelope from {role_id}: "
+                      f"{'; '.join(problems)}")
+        # A safe fallback (a valid envelope + an `error` marker) — never a crash.
+        return {"summary": "", "findings": [], "recommendation": "",
+                "confidence": 0.0, "error": "invalid_envelope"}, events
+    if isinstance(out, dict) and "tool_call" in out:
+        reason = _tool_call_problem(out["tool_call"])
+        if reason:
+            events.append(f"[llm] quarantined malformed tool_call from "
+                          f"{role_id}: {reason}")
+            out["tool_call"] = None  # drop it — never propagate the bad call
+    return out, events
 
 # json.JSONDecodeError.msg prefixes that mean the input ENDED mid-value (a
 # truncation) rather than a complete-but-broken shape. A cut-off JSON fails
@@ -442,6 +490,8 @@ class OpenAIBackend(LLMBackend):
         free-form `error` string (A0). `None` on a successful call."""
         if outcome in ("tool_call", "content_fallback"):
             return None
+        if outcome == "quarantined":
+            return "quarantined"  # Story 4: a dropped malformed tool_call
         e = (error or "").lower()
         if "timeout" in e or "timed out" in e:
             return "timeout"
@@ -583,6 +633,22 @@ class OpenAIBackend(LLMBackend):
                                                            "arguments": tool_args_buf}}]
                 out, outcome = self._parse(
                     {"choices": [{"message": message}]}, finish_reason)
+                # Story 4 (A8/A9/R10): envelope-validate the output and
+                # quarantine a malformed tool_call (a visible note + a safe
+                # fallback / a dropped call — never a crash).
+                out, events = validate_and_quarantine(role, out)
+                for ev in events:
+                    print(ev, file=sys.stderr)
+                if any("invalid envelope" in ev for ev in events):
+                    # An invalid envelope: record it as an error (not the
+                    # standard success row) and return the safe fallback.
+                    self._report(role, "error", t0, error="; ".join(events))
+                    return out
+                if any("quarantined malformed tool_call" in ev for ev in events):
+                    # A quarantined tool_call: record it in the audit trail
+                    # (mirrors the existing `log_tool_call` wiring via on_call).
+                    self._report(role, "quarantined", t0,
+                                 error="; ".join(events))
                 # Observability: log (not reject) a wrong-typed nested key
                 # (e.g. a free-form string instead of a JSON object) so future
                 # free-forms are visible in tool_calls.jsonl. D4: it goes in the
