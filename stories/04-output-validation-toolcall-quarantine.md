@@ -1,5 +1,7 @@
 # Story 4 — Output validation & tool_call quarantine
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Findings:** A8 (`validate_envelope` never applied), A9 (broken `tool_call`
 not quarantined), R10 (malformed `tool_call` not quarantined).
 

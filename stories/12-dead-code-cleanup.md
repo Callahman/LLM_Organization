@@ -1,5 +1,7 @@
 # Story 12 — Dead-code cleanup
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Finding:** A5 (`invoke_checked` / `run_cycle` dead — D1/D2).
 
 **Goal:** remove (or wire) the dead `invoke_checked` / `run_cycle` functions so

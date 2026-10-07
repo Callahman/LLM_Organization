@@ -1,5 +1,7 @@
 # Story 3 — Safety halt enforcement
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Findings:** A4 (`bau_active` dead), A10 (BAU halt set but never consumed),
 B12 (Phase 4 halt recorded but not enforced), C1 (BAU rule inert).
 

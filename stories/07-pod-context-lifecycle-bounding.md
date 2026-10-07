@@ -1,5 +1,7 @@
 # Story 7 — Pod context & lifecycle bounding
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Findings:** A2 (`bounded_assembly` dead; `_pod_ctx` unbounded), B13 (chained
 pod runs on empty decision), B14 (no per-pod time/cost budget).
 

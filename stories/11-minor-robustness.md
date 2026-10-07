@@ -1,5 +1,7 @@
 # Story 11 — Minor robustness
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Findings:** B8 (stale role memories accumulate), B9 (memory bound not
 reproducible), B10 (intake trusts leader confidence), B11 (user-approval fns
 unguarded), B15 (bootstrap retry not corrective), B16 (total org size not

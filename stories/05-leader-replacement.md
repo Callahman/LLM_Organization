@@ -1,5 +1,7 @@
 # Story 5 — Leader replacement
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Finding:** A1 (`replace_leader` dead — never called, never tested).
 
 **Design (from the outline §2.2.1 + the refinement):** a **single head can
