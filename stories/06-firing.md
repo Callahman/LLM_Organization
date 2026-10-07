@@ -1,5 +1,7 @@
 # Story 6 — Firing
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Findings:** A3 (`fire`/`mark_inactive`/`_offload` dead — R7), R7 (firing is
 dead).
 

@@ -1,5 +1,7 @@
 # Story 9 — Concurrency safety
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Findings:** B5 (`HistoryStore` not safe under concurrent writers), B6
 (`TimeoutBackend` and httpx timeouts independent → zombie thread).
 

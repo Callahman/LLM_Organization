@@ -1,5 +1,7 @@
 # Story 2 — Complexity routing & thinking budget
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Findings:** A7 (`MemoryBackend` reasoning default bypasses routing), B17
 (`thinking_budget` consumed but not `.env`-loadable), A6 (`ThinkingBudget.
 remaining` dead).

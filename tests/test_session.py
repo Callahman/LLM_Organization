@@ -6,8 +6,15 @@ synthesis -> evaluation, with the **bounded** self-improving loop (Phase 6
 rule** (a Safety/Morality halt during Phase 4 is the only BAU halt).
 """
 
+import json
+import os
+
+import pytest
+
+from roles.base import Role
 from roles.leader import make_leader
-from runtime.llm import StubBackend
+from runtime.llm import MemoryBackend, StubBackend
+from runtime.org import OrgState
 from runtime.session import Session
 
 
@@ -134,3 +141,102 @@ def test_bau_halt_during_phase4(tmp_path):
     assert session.bau_active() is False
     # The cycle still completes (the halt queues the needed user input).
     assert result.status == "complete"
+
+
+# --- Story 1: persistence & crash recovery ---------------------------------
+
+
+def test_phase4_crash_leaves_recoverable_checkpoint(tmp_path, monkeypatch):
+    # Story 1 (B1/B4): a crash during Phase 4 must leave the pre-crash state
+    # recoverable — the checkpoint written after Phase 3 (phase <= 4) plus the
+    # persisted org chart + role memory.
+    backend = StubBackend()
+    backend.set_script("leader", _leader_script_full())
+    backend.set_script("head_analytics", [
+        {"decomposition": {"team_objectives": []}},
+    ])
+    state_dir = tmp_path / "state"
+    config = {
+        "org_chart_path": str(state_dir / "org_chart.json"),
+        "memory_dir": str(state_dir / "role_memory"),
+        "checkpoint_path": str(state_dir / "checkpoint.json"),
+        "pod_transcripts_dir": str(tmp_path / "pods" / "transcripts"),
+    }
+    session = Session(backend, make_leader(), config=config,
+                      history_dir=str(tmp_path / "history"))
+    user_answer_fn, user_permission_fn, approver_fn = _approve_fns()
+
+    import runtime.session as session_mod
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated crash in Phase 4")
+
+    # Monkeypatch a Phase 4 step (the dispatch) to raise mid-run.
+    monkeypatch.setattr(session_mod.dispatch, "dispatch", boom)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        session.run(
+            "build a data pipeline",
+            user_answer_fn, user_permission_fn, approver_fn,
+            max_iterations=3,
+        )
+    # The checkpoint written after Phase 3 survived the crash (phase <= 4).
+    cp_path = state_dir / "checkpoint.json"
+    assert cp_path.exists()
+    cp = json.loads(cp_path.read_text(encoding="utf-8"))
+    assert cp["phase"] <= 4
+    # The pre-crash state is recoverable: the org chart was saved with the
+    # bootstrapped head, and a role-memory file was saved.
+    chart = json.loads(
+        (state_dir / "org_chart.json").read_text(encoding="utf-8"))
+    assert "head_analytics" in chart["roles"]
+    mem_files = [p for p in os.listdir(state_dir / "role_memory")
+                 if p.endswith(".json")]
+    assert mem_files
+
+
+def test_org_state_save_is_atomic(tmp_path):
+    # Story 1 (B3): OrgState.save writes to `path + ".tmp"` then
+    # `os.replace`s — a mid-write crash (garbage left in the temp) must not
+    # corrupt the live chart, and a subsequent save consumes the temp.
+    org = OrgState(history_dir=str(tmp_path))
+    org.add_role(Role(id="r1", architype="ic", sub_architype="dev"))
+    path = tmp_path / "org_chart.json"
+    org.save(str(path))
+    good = path.read_text(encoding="utf-8")
+    json.loads(good)  # the live chart is valid JSON
+    # Simulate a mid-write crash: garbage left in the temp file.
+    with open(str(path) + ".tmp", "w", encoding="utf-8") as f:
+        f.write("GARBAGE-PARTIAL-WRITE")
+    # The live chart is intact (the temp is not the live file).
+    assert path.read_text(encoding="utf-8") == good
+    # A subsequent save atomically replaces the chart and consumes the temp.
+    org.add_role(Role(id="r2", architype="ic", sub_architype="qa"))
+    org.save(str(path))
+    chart = json.loads(path.read_text(encoding="utf-8"))
+    assert set(chart["roles"]) == {"r1", "r2"}
+    assert not os.path.exists(str(path) + ".tmp")
+
+
+def test_memory_backend_save_state_is_atomic(tmp_path):
+    # Story 1 (B7): MemoryBackend.save_state writes `<role_id>.json.tmp` then
+    # `os.replace`s — a mid-write crash must not corrupt the live memory, and
+    # a subsequent save consumes the temp.
+    backend = MemoryBackend(StubBackend())
+    memory = backend._memory_for("r1")
+    memory.add_summary("first interaction", source="intra-team")
+    directory = tmp_path / "role_memory"
+    backend.save_state(str(directory))
+    role_file = directory / "r1.json"
+    good = role_file.read_text(encoding="utf-8")
+    json.loads(good)  # the live memory is valid JSON
+    # Simulate a mid-write crash: garbage left in the temp file.
+    with open(str(role_file) + ".tmp", "w", encoding="utf-8") as f:
+        f.write("GARBAGE-PARTIAL-WRITE")
+    # The live memory is intact (the temp is not the live file).
+    assert role_file.read_text(encoding="utf-8") == good
+    # A subsequent save atomically replaces the memory and consumes the temp.
+    memory.add_summary("second interaction", source="intra-team")
+    backend.save_state(str(directory))
+    data = json.loads(role_file.read_text(encoding="utf-8"))
+    assert len(data["entries"]) == 2
+    assert not os.path.exists(str(role_file) + ".tmp")

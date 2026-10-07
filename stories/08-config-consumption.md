@@ -1,5 +1,7 @@
 # Story 8 — Config consumption
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Findings:** B18 (8 dead knobs in `ENV_TO_CONFIG`, loader warning can't catch
 them), C2 (8 `.env` knobs loaded but dead).
 

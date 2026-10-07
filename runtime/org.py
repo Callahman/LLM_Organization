@@ -102,7 +102,10 @@ class OrgState:
     def save(self, path: str = "state/org_chart.json") -> str:
         """Persist the org chart (every role + the role-definition catalog) to
         `path`. The event log is **not** persisted (it is already appended to
-        `history/org_events.jsonl`). Returns the path written."""
+        `history/org_events.jsonl`). The write is **atomic** (Story 1, B3):
+        the JSON goes to `path + ".tmp"` first, then `os.replace` swaps it in —
+        a crash mid-write leaves the previous good chart intact (no partial
+        JSON). Returns the path written."""
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
@@ -110,8 +113,10 @@ class OrgState:
             "roles": {rid: r.to_dict() for rid, r in self.roles.items()},
             "role_definitions": self.role_definitions,
         }
-        with open(path, "w", encoding="utf-8") as f:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
         return path
 
     @classmethod

@@ -1,5 +1,7 @@
 # Story 10 — Tiers.py safety invariants
 
+**Rule:** Tests may not be run by the agent — only the user may run tests.
+
 **Finding:** A11 (`tiers.py` `can_read_code` / `cross_team_read` /
 `can_communicate` dead).
 

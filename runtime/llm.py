@@ -224,13 +224,18 @@ class MemoryBackend(LLMBackend):
     def save_state(self, directory: str = "state/role_memory") -> int:
         """Persist each role's memory to `<directory>/<role_id>.json`.
         Returns the number of roles saved. This is what a --continue /
-        --revisit run loads so roles remember prior runs."""
+        --revisit run loads so roles remember prior runs. Each file is written
+        **atomically** (Story 1, B7): `<role_id>.json.tmp` first, then
+        `os.replace` swaps it in — a crash mid-write leaves the previous good
+        memory intact (no partial JSON)."""
         os.makedirs(directory, exist_ok=True)
         saved = 0
         for role_id, memory in self.role_memories.items():
             path = os.path.join(directory, f"{role_id}.json")
-            with open(path, "w", encoding="utf-8") as f:
+            tmp = os.path.join(directory, f"{role_id}.json.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(memory.to_dict(), f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
             saved += 1
         return saved
 

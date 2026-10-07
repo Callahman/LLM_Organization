@@ -17,6 +17,9 @@ drives the pipeline, and applies:
 
 from __future__ import annotations
 
+import json
+import os
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -421,6 +424,30 @@ class Session:
             cycles=self.cycles,
         )
 
+    # --- Checkpointing (crash recovery, Story 1) ---------------------------
+
+    def _checkpoint(self, phase: int, cycle: int) -> str:
+        """Write a mid-run checkpoint (Story 1, B1/B4): persist the org chart
+        + each role's memory + the event log, then record the phase/cycle
+        reached in `state/checkpoint.json` (`{"phase", "cycle", "ts"}`). A
+        crash after this point loses at most the work done since — the current
+        iteration's hires, not the whole run. The checkpoint file itself is
+        written atomically (tmp + `os.replace`). Returns the checkpoint path."""
+        org_chart_path = self.config.get("org_chart_path", "state/org_chart.json")
+        memory_dir = self.config.get("memory_dir", "state/role_memory")
+        checkpoint_path = self.config.get("checkpoint_path", "state/checkpoint.json")
+        self.org.save(org_chart_path)
+        self.backend.save_state(memory_dir)
+        self.org.write_events()
+        parent = os.path.dirname(checkpoint_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = checkpoint_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"phase": phase, "cycle": cycle, "ts": time.time()}, f)
+        os.replace(tmp, checkpoint_path)
+        return checkpoint_path
+
     # --- The self-improving loop (bounded) ---------------------------------
 
     def _phase(self, phase: int, cycle: int, fn, *args, **kwargs):
@@ -459,6 +486,25 @@ class Session:
         memory_dir = self.config.get("memory_dir", "state/role_memory")
         org_chart_path = self.config.get("org_chart_path", "state/org_chart.json")
         mission_path = self.config.get("mission_path", "MISSION.md")
+        checkpoint_path = self.config.get("checkpoint_path", "state/checkpoint.json")
+
+        # Story 1 (B4, minimal): a checkpoint left by a crashed run is
+        # discoverable — if one exists and this is not a revisit, surface it
+        # (full resume-from-checkpoint is a follow-up). A corrupted checkpoint
+        # is still surfaced (the phase/cycle read as "?").
+        if not revisit and os.path.exists(checkpoint_path):
+            cp_phase, cp_cycle = "?", "?"
+            try:
+                with open(checkpoint_path, encoding="utf-8") as f:
+                    cp = json.load(f)
+                cp_phase, cp_cycle = cp.get("phase", "?"), cp.get("cycle", "?")
+            except (OSError, ValueError):
+                pass
+            print(
+                f"[session] checkpoint found (phase {cp_phase}, cycle {cp_cycle}) "
+                f"— re-run to resume",
+                file=sys.stderr,
+            )
 
         # Load each role's persisted memory (so roles remember prior runs).
         self.backend.load_state(memory_dir)
@@ -528,6 +574,9 @@ class Session:
             bootstrap_timeout_seconds=self.config.get(
                 "bootstrap_timeout_seconds", self.config.get("ic_timeout_seconds")))
         self.org.write_events()
+        # Story 1 (B1): checkpoint after Phase 3 — a crash in Phase 4 loses at
+        # most the current iteration's hires, not the bootstrapped org.
+        self._checkpoint(3, 0)
         self.phases.append(3)
         # Solo (P3): record the leader's org-bootstrap.
         self.solo.record("p3", "Phase 3: org bootstrap", 0, "bootstrap",
@@ -577,6 +626,10 @@ class Session:
                 intake, mission, dispatch_results, verdict, max_iterations
             )
             self.phases.append(6)
+
+            # Story 1 (B1): checkpoint after each Phase 4 iteration — a crash
+            # in the NEXT iteration loses at most that iteration's hires.
+            self._checkpoint(4, self.cycles)
 
             if status != "continue":
                 break
