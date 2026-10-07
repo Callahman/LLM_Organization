@@ -178,6 +178,7 @@ knob; the important ones:
 | `ROLE_MEMORY_MAX_ENTRIES` | `20` | Max entries in a role's short-term memory |
 | `HISTORY_WINDOW_SESSIONS` | `50` | Rolling window before archiving |
 | `ARCHIVE_CAP_MB` | `1024` | Archive size cap (oldest deleted beyond this) |
+| `THINKING_BUDGET` | `10` | Max HIGH-reasoning (thinking) invokes per session before the budget forces a lower level |
 | `LLM_BACKEND` | `stub` (code) / `api` (`.env.example`) | `api` (real — the shipped default) or `stub` (offline) |
 | `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` | (empty) | Credentials for a real backend (`LLM_BACKEND=api`) |
 | `LLM_STRUCTURED` | `tools` | api backend's structured-output mode: `tools` (tool calls) or `json` (`json_object`) |

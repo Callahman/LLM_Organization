@@ -144,7 +144,8 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
     **live** (the observability dashboard tails it for the active-pod view).
     """
     # 1. The starter sets the agenda.
-    out = backend.invoke(pod.starter, _pod_ctx(pod, "agenda"), phase=4)
+    out = backend.invoke(pod.starter, _pod_ctx(pod, "agenda"),
+                         reasoning=classify_complexity(4, pod.starter, {}), phase=4)
     pod.agenda = str(out.get("agenda", ""))
     pod.transcript.append({
         "kind": "agenda", "role": pod.starter.id,
@@ -181,7 +182,8 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
         prev_outputs = this_outputs
 
     # 3. The starter always closes, producing the decision.
-    out = backend.invoke(pod.starter, _pod_ctx(pod, "close"), phase=4)
+    out = backend.invoke(pod.starter, _pod_ctx(pod, "close"),
+                         reasoning=classify_complexity(4, pod.starter, {}), phase=4)
     pod.decision = str(out.get("decision", ""))
     pod.rationale = str(out.get("rationale", ""))
     pod.open_items = as_str_list(out.get("open_items", []))

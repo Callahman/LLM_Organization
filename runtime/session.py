@@ -32,7 +32,9 @@ from runtime.org import OrgState, bootstrap
 from runtime import dispatch
 from runtime.pods import SoloTracker
 from runtime.history import HistoryStore
-from runtime.complexity import RoutingBackend, ThinkingBudget
+from runtime.complexity import (
+    RoutingBackend, ThinkingBudget, classify_complexity,
+)
 
 
 @dataclass
@@ -186,11 +188,16 @@ class Session:
         ]
         if decisions:
             ctx += " POD DECISIONS: " + "; ".join(decisions)
-        out = self.backend.invoke(self.leader, ctx, phase=5)
+        out = self.backend.invoke(self.leader, ctx,
+                                  reasoning=classify_complexity(5, self.leader, {}),
+                                  phase=5)
         # Solo (P5): record the leader's synthesis step so the dashboard can
-        # watch it (one transcript file, growing per round).
+        # watch it (one transcript file, growing per round). Story 2 (A6): the
+        # thinking-budget remainder is included so the dashboard can show it.
         self.solo.record("p5", "Phase 5: synthesis", self.cycles,
-                         "synthesis", out)
+                         "synthesis",
+                         {**out, "thinking_budget_remaining":
+                              self.thinking_budget.remaining})
         # A1: close the solo pod when the synthesis phase completes.
         self.solo.close("p5", f"synthesis verdict={out.get('verdict', 'complete')}")
         return out.get("verdict", "complete")
@@ -244,6 +251,7 @@ class Session:
             "The goal is a high-quality deliverable, not just a working one. "
             "Choose 'complete' (stop) or 'continue' (another iteration, still "
             f"abiding by the original goal). Evaluation: {evaluation}",
+            reasoning=classify_complexity(6, self.leader, {}),
             phase=6,
         )
         decision = out.get("verdict", "complete")
@@ -609,6 +617,12 @@ class Session:
                 ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
             )
             self.phases.append(4)
+            # Solo (P4): record the dispatch + the thinking-budget remainder so
+            # the dashboard can show the budget (Story 2, A6).
+            self.solo.record("p4", "Phase 4: dispatch", self.cycles, "dispatch",
+                             {"dispatches": len(dispatch_results),
+                              "thinking_budget_remaining":
+                                  self.thinking_budget.remaining})
 
             # A Safety/Morality halt during Phase 4 (the only BAU halt).
             if phase4_halt_fn is not None:

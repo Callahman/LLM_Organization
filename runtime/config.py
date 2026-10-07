@@ -40,6 +40,9 @@ ENV_TO_CONFIG: Dict[str, Tuple[str, Any]] = {
     "LLM_IC_TIMEOUT_SECONDS": ("ic_timeout_seconds", float),
     # D6: the Phase 4/5 iteration cap (was hardcoded 2 in run_session.py).
     "MAX_ITERATIONS": ("max_iterations", int),
+    # Story 2 (B17): the per-session HIGH-reasoning (thinking) budget — max
+    # HIGH invokes before the budget forces a lower level.
+    "THINKING_BUDGET": ("thinking_budget", int),
 }
 
 # The ``LLM_*`` keys read directly by ``make_backend`` (not mapped here, but
