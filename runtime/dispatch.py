@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Optional
 
 from roles.base import Role, spin_personality, spin_sub_architype
 from roles.worker import worker_output_schema
-from runtime.org import OrgState, hire
+from runtime.org import OrgState, hire, run_leader_replacement_vote
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity, detect_disagreement
 from runtime.history import HistoryStore
@@ -489,6 +489,7 @@ def dispatch(
     artifacts_dir: str = "pods/artifacts",
     transcripts_dir: str = "pods/transcripts",
     ic_timeout_seconds: Optional[float] = None,
+    new_leader: Optional[Role] = None,
 ) -> List[Dict[str, Any]]:
     """Run the Phase 4 top-down dispatch. Returns the leader's view: a list of
     department reports (each carrying the chain of team/IC reports up).
@@ -515,6 +516,23 @@ def dispatch(
     head_ids = [h.id for h in org.department_heads()]
     out = backend.invoke(leader, _leader_ctx(digest, head_ids),
                          reasoning=classify_complexity(4, leader, {}), phase=4)
+    # Story 5 (A1): a single head's leader-replacement proposal (with
+    # reasoning) triggers the per-head unanimous vote. The new-leader
+    # candidate is supplied by the caller (`new_leader`); without one, the
+    # proposal is logged but no vote runs (visible, not silent).
+    _leader_replacement = out.get("leader_replacement")
+    if (isinstance(_leader_replacement, dict)
+            and _leader_replacement.get("propose")):
+        if new_leader is not None:
+            run_leader_replacement_vote(
+                org, backend, new_leader, leader.id,
+                _leader_replacement.get("reasoning", ""), phase=4)
+        elif history is not None:
+            history._append(
+                "dispatch_skips.jsonl",
+                {"reason": "leader_replacement proposal but no new-leader "
+                           "candidate supplied — no vote run"},
+            )
     dept_objectives = _decomposition_list(out, "department_objectives")
     if not dept_objectives:
         # The leader's Phase 4 decomposition came back empty — no work to

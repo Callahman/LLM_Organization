@@ -11,6 +11,8 @@ IC cannot initiate a hire/fire.
 
 import os
 
+import pytest
+
 from roles.base import Role
 from roles.leader import make_leader
 from runtime.llm import StubBackend
@@ -19,6 +21,8 @@ from runtime.org import (
     bootstrap,
     hire,
     fire,
+    replace_leader,
+    run_leader_replacement_vote,
     ResourcingError,
     ResourcingVetoed,
 )
@@ -328,3 +332,78 @@ def test_ic_cannot_initiate_hire_or_fire(tmp_path):
         raise AssertionError("expected ResourcingError")
     except ResourcingError as e:
         assert "ICs cannot initiate" in str(e)
+
+
+# --- Story 5 (A1): leader replacement --------------------------------------
+
+
+def _replacement_org(tmp_path, n_heads: int = 2) -> OrgState:
+    """An org with a leader + `n_heads` department heads (for the vote tests)."""
+    org = OrgState(history_dir=str(tmp_path))
+    org.add_role(make_leader())
+    for i in range(n_heads):
+        org.add_role(_head(f"head_{i}", f"dept_{i}"))
+    return org
+
+
+def _vote_backend(votes):
+    """A StubBackend whose heads vote per `votes` (a head_id -> vote map)."""
+    backend = StubBackend()
+    for rid, vote in votes.items():
+        backend.set_script(rid, [{"summary": "vote", "vote": vote,
+                                  "confidence": 0.9}])
+    return backend
+
+
+def test_leader_replacement_unanimous_multi_head(tmp_path):
+    # (a) Unanimous (multi-head): two heads both vote "yes" -> the leader is
+    # replaced (the old leader is marked inactive, the new leader is active).
+    org = _replacement_org(tmp_path, n_heads=2)
+    new_leader = Role(id="new_leader", architype="leader", status="active")
+    backend = _vote_backend({"head_0": "yes", "head_1": "yes"})
+    result = run_leader_replacement_vote(org, backend, new_leader,
+                                         proposer_id="leader",
+                                         reasoning="the leader is stuck")
+    assert result is new_leader
+    assert org.get("leader").status == "inactive"    # old leader fired
+    assert org.get("new_leader").status == "active"  # new leader active
+
+
+def test_leader_replacement_partial_vote_not_replaced(tmp_path):
+    # (b) Partial (one "no"): the leader is NOT replaced (still active, the
+    # new leader is not added).
+    org = _replacement_org(tmp_path, n_heads=2)
+    new_leader = Role(id="new_leader", architype="leader", status="active")
+    backend = _vote_backend({"head_0": "yes", "head_1": "no"})
+    result = run_leader_replacement_vote(org, backend, new_leader,
+                                         proposer_id="leader",
+                                         reasoning="the leader is stuck")
+    assert result is None
+    assert org.get("leader").status == "active"  # still active
+    assert org.get("new_leader") is None         # not added
+
+
+def test_leader_replacement_vote_prompt_includes_reasoning(tmp_path):
+    # (c) The vote prompt sent to each head contains the proposer's reasoning
+    # (captured via the StubBackend's call audit).
+    org = _replacement_org(tmp_path, n_heads=2)
+    new_leader = Role(id="new_leader", architype="leader", status="active")
+    backend = _vote_backend({"head_0": "yes", "head_1": "yes"})
+    reasoning = ("the leader has been stuck for three cycles and cannot "
+                 "unblock the teams")
+    run_leader_replacement_vote(org, backend, new_leader,
+                                proposer_id="leader", reasoning=reasoning)
+    for rid in ("head_0", "head_1"):
+        prompts = [ctx for (r, ctx) in backend.calls if r == rid]
+        assert prompts, f"no vote prompt sent to {rid}"
+        assert reasoning in prompts[0], f"reasoning missing from {rid} prompt"
+
+
+def test_replace_leader_no_heads_raises(tmp_path):
+    # (d) No-heads: replace_leader raises when there are no department heads
+    # (the existing guard).
+    org = OrgState(history_dir=str(tmp_path))
+    org.add_role(make_leader())  # a leader, but no department heads
+    new_leader = Role(id="new_leader", architype="leader", status="active")
+    with pytest.raises(ResourcingError):
+        replace_leader(org, new_leader, agreeing_head_ids=[])
