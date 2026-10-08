@@ -407,3 +407,66 @@ def test_replace_leader_no_heads_raises(tmp_path):
     new_leader = Role(id="new_leader", architype="leader", status="active")
     with pytest.raises(ResourcingError):
         replace_leader(org, new_leader, agreeing_head_ids=[])
+
+
+# --- Story 6 (R7): firing --------------------------------------------------
+
+
+def _firing_org(tmp_path) -> OrgState:
+    """An org with a leader + head + manager + IC (for the fire tests)."""
+    org = OrgState(history_dir=str(tmp_path))
+    org.add_role(make_leader())
+    org.add_role(_head("head_a", "analytics"))
+    org.add_role(_mgr("mgr1", "analytics", "pipelines", "head_a"))
+    org.add_role(_ic("ic1", "analytics", "pipelines", "mgr1"))
+    return org
+
+
+def test_fire_ic_approved(tmp_path):
+    # (a) Fire an IC: approve a fire -> the role is marked inactive (in
+    # org.roles, not in org.active_roles()), _offload ran, and a "fired"
+    # event is logged.
+    org = _firing_org(tmp_path)
+    def approve(approver_type, action, target):
+        return {"decision": "approve", "rationale": "ok"}
+    plan = fire(org, org.get("leader"), "ic1", approve,
+                departments_dir=str(tmp_path))
+    # The role is marked inactive (kept in the org chart, not deleted).
+    assert org.get("ic1") is not None
+    assert org.get("ic1").status == "inactive"
+    assert all(r.id != "ic1" for r in org.active_roles())
+    # _offload ran (a plan was returned).
+    assert plan is not None and plan["target"] == "ic1"
+    # A "fired" event is logged.
+    assert any(e["kind"] == "fired" for e in org.events)
+
+
+def test_fire_vetoed(tmp_path):
+    # (b) Veto a fire: the approver vetoes -> the role stays active, a
+    # "fire_vetoed" event is logged.
+    org = _firing_org(tmp_path)
+    def veto(approver_type, action, target):
+        return {"decision": "veto", "rationale": "not needed"}
+    with pytest.raises(ResourcingVetoed):
+        fire(org, org.get("leader"), "ic1", veto,
+             departments_dir=str(tmp_path))
+    # The role stays active.
+    assert org.get("ic1").status == "active"
+    # A "fire_vetoed" event is logged.
+    assert any(e["kind"] == "fire_vetoed" for e in org.events)
+
+
+def test_fire_required_role_rejected(tmp_path):
+    # (c) Required role cannot be fired: firing a required department head is
+    # rejected (the role stays active).
+    org = OrgState(history_dir=str(tmp_path))
+    org.add_role(make_leader())
+    hr_head = _head("head_hr", "hr", required=True)
+    org.add_role(hr_head)
+    def approve(approver_type, action, target):
+        return {"decision": "approve", "rationale": "ok"}
+    with pytest.raises(ResourcingError):
+        fire(org, org.get("leader"), "head_hr", approve,
+             departments_dir=str(tmp_path))
+    # The role stays active.
+    assert org.get("head_hr").status == "active"
