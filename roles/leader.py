@@ -123,6 +123,17 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
             "required": ["department_objectives"],
         },
         "verdict": {"type": "string"},         # Phase 5/6: complete / continue / escalate
+        # Story 5 (A1): a leader-replacement proposal. A single head setting
+        # `propose=True` (with reasoning) triggers the per-head unanimous vote
+        # (§2.2.1). Optional at the top level (so it does not leak into the
+        # other phases).
+        "leader_replacement": {
+            "type": "object",
+            "properties": {
+                "propose": {"type": "boolean"},
+                "reasoning": {"type": "string"},
+            },
+        },
     },
     "required": ["summary", "confidence"],
 }

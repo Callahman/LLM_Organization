@@ -20,31 +20,53 @@ heads}`, and raises if there are no heads) — the wiring must preserve that.
 - The leader's output schema is in `roles/leader.py` (the `output_schema`
   dataclass).
 
+## Rollout (what was changed)
+- **Schema** (`roles/leader.py`): an optional `leader_replacement` field
+  (`{"propose": bool, "reasoning": str}`) on the leader output schema — a single
+  head setting `propose=True` (with reasoning) triggers the vote.
+- **Vote flow** (`runtime/org.py`): `run_leader_replacement_vote` (after
+  `replace_leader`) sends each active department head a vote prompt (current
+  leader id + proposer id + the proposer's reasoning verbatim), collects the
+  `{"vote": "yes"|"no"}` values, and calls `replace_leader` **only on unanimity**
+  (the unanimity + no-heads guards stay in `replace_leader`). A partial vote
+  logs `[org] leader-replacement vote not unanimous (N of M yes)` and does NOT
+  replace. The proposal, the votes, and the replacement are logged via
+  `org.log_event("leader_replacement_proposed"/"leader_replacement_voted"/
+  "leader_replaced", ...)`.
+- **Pipeline wiring** (`runtime/dispatch.py`): the Phase 4 dispatch detects the
+  `leader_replacement` proposal in the leader's output (right after the leader
+  invoke) and runs the vote flow. The new-leader candidate is a `dispatch`
+  parameter (`new_leader`, optional); without one, the proposal is logged but no
+  vote runs (visible, not silent).
+- **Tests** (`tests/test_org.py`): the four cases (unanimous multi-head, partial
+  rejected, reasoning-in-prompt, no-heads raises). (Written by the agent; **run
+  by the user** per the rule.)
+
 ## Tasks
 
-- [ ] **Add a `leader_replacement` proposal the leader can emit.** Extend the
+- [x] **Add a `leader_replacement` proposal the leader can emit.** Extend the
   leader's Phase 4/5 output schema (find the leader `output_schema` in
   `roles/leader.py`) with an optional `leader_replacement` field:
   `{"propose": bool, "reasoning": str}`. A single head setting `propose=True`
   triggers the vote.
-- [ ] **Build the per-head vote prompt.** When a `leader_replacement` proposal
+- [x] **Build the per-head vote prompt.** When a `leader_replacement` proposal
   with `propose=True` is detected, for **each** active department head, build a
   vote prompt that includes: the current leader's id, the proposer's id, and the
   **proposer's reasoning** (verbatim). The prompt asks the head to vote
   `{"vote": "yes"|"no"}`.
-- [ ] **Collect the votes and call `replace_leader` on unanimity.** Invoke each
+- [x] **Collect the votes and call `replace_leader` on unanimity.** Invoke each
   head with the vote prompt; collect the `vote` values. If **all** active heads
   vote "yes" (unanimous), call
   `org.replace_leader(leader, new_leader, agreeing_head_ids=[h.id for h in
   heads])`. If any head votes "no" (partial), do **not** replace — log a visible
   `[org] leader-replacement vote not unanimous (N of M yes)` note.
-- [ ] **Wire the trigger into the pipeline.** Detect the `leader_replacement`
+- [x] **Wire the trigger into the pipeline.** Detect the `leader_replacement`
   proposal in the Phase 4 dispatch (or Phase 5 synthesis) — find where the
   leader's output is consumed in `runtime/dispatch.py` / `runtime/session.py` —
   and run the vote flow there. Log the proposal, the votes, and the outcome via
   `org.log_event("leader_replacement_proposed"/"leader_replacement_voted"/
   "leader_replaced", ...)`.
-- [ ] **Tests** (`tests/test_org.py`):
+- [x] **Tests** (`tests/test_org.py`):
   - (a) **Unanimous (multi-head) case:** two department heads both vote "yes" →
     `replace_leader` is called and the leader is replaced.
   - (b) **Partial-vote (rejected) case:** one of two heads votes "no" → the

@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -553,3 +554,59 @@ def replace_leader(
     org.log_event("leader_replaced", None, new_leader.id,
                   {"agreeing_heads": agreeing_head_ids})
     return new_leader
+
+
+def run_leader_replacement_vote(
+    org: OrgState,
+    backend,
+    new_leader: Role,
+    proposer_id: str,
+    reasoning: str,
+    phase: Optional[int] = None,
+) -> Optional[Role]:
+    """Run the per-head leader-replacement vote (§2.2.1). A single head's
+    proposal (with reasoning) triggers the vote; the replacement proceeds only
+    on UNANIMOUS approval (every active department head votes yes — multiple,
+    not one). The unanimity + no-heads guards live in `replace_leader` (which
+    this calls only on a unanimous yes).
+
+    Each active department head is sent a vote prompt that includes the
+    current leader's id, the proposer's id, and the proposer's reasoning
+    (verbatim); the head votes ``{"vote": "yes"|"no"}``.
+
+    Returns the new leader on a unanimous replacement, or None when the vote
+    was not unanimous (the leader is NOT replaced).
+    """
+    heads = org.department_heads()
+    current = org.get("leader")
+    current_id = current.id if current is not None else "(no leader)"
+    # A single head triggered the vote (with reasoning) — log the proposal.
+    org.log_event("leader_replacement_proposed", proposer_id, current_id,
+                  {"reasoning": reasoning})
+    yes = 0
+    for h in heads:
+        prompt = (
+            f"LEADER-REPLACEMENT VOTE (head {h.id}): the current leader is "
+            f"{current_id}. {proposer_id} proposes replacing the leader with "
+            f"{new_leader.id}, reasoning (verbatim): {reasoning} "
+            "Vote {\"vote\": \"yes\"} to approve the replacement, or "
+            "{\"vote\": \"no\"} to reject it."
+        )
+        out = backend.invoke(h, prompt, phase=phase)
+        vote = str((out or {}).get("vote", "no")).lower()
+        if vote == "yes":
+            yes += 1
+    # Log the collected votes (the outcome is decided below).
+    org.log_event("leader_replacement_voted", proposer_id, current_id,
+                  {"yes": yes, "total": len(heads)})
+    if heads and yes == len(heads):
+        # Unanimous (and there are heads to vote) — replace.
+        replaced = replace_leader(org, new_leader,
+                                  agreeing_head_ids=[h.id for h in heads])
+        print(f"[org] leader-replacement vote unanimous ({yes} of "
+              f"{len(heads)} yes) - leader replaced", file=sys.stderr)
+        return replaced
+    # Partial (or no heads) — do NOT replace.
+    print(f"[org] leader-replacement vote not unanimous ({yes} of "
+          f"{len(heads)} yes)", file=sys.stderr)
+    return None
