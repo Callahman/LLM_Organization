@@ -71,14 +71,37 @@ def form_pod(
     starter_id: str,
     member_ids: List[str],
     topic: str,
+    cross_team: bool = False,
 ) -> Pod:
     """Form a pod from `roles`: the starter + members, validated against the
-    2–6 size and 1-tier-spread bounds (raises `PodMembershipError` if invalid)."""
+    2–6 size and 1-tier-spread bounds (raises `PodMembershipError` if invalid).
+
+    Story 10 (A11): also checks `tiers.can_communicate` for every member pair —
+    a pod is a working group, so its members must be able to talk to each other
+    (the communication gate). If a pair may not communicate, the pod is
+    rejected (a `PodMembershipError` with the reason, never silent).
+
+    **Cross-team pods** (``cross_team=True``) skip the communication gate: they
+    deliberately convene roles from different teams for a cross-team objective
+    (the roles are explicitly brought together, so the gate would wrongly
+    reject the pod)."""
     members = [roles[mid] for mid in member_ids]
     starter = roles[starter_id]
     ok, reason = tiers.validate_pod(members)
     if not ok:
         raise PodMembershipError(reason)
+    # Story 10 (A11): the communication gate — every member pair must be able
+    # to communicate (a pod is a working group, not a set of isolated roles).
+    # Cross-team pods skip the gate (they deliberately convene roles from
+    # different teams for a cross-team objective).
+    if not cross_team:
+        for i, a in enumerate(members):
+            for b in members[i + 1:]:
+                if not tiers.can_communicate(a, b):
+                    raise PodMembershipError(
+                        f"pod member pair {a.id} / {b.id} may not communicate "
+                        f"(the communication gate)"
+                    )
     return Pod(id=_next_pod_id(starter_id), starter=starter,
                members=members, topic=topic)
 

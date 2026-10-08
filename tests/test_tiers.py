@@ -137,3 +137,43 @@ def test_pod_size_bounds():
     assert "size" in reason
     # Two is fine.
     assert tiers.validate_pod([ic1, ic2])[0]
+
+
+# --- Story 10 (A11): safety invariants enforced / documented ---------------
+
+def test_can_communicate_enforced_in_form_pod():
+    """Story 10 (A11): a pod with a member pair that may not communicate is
+    rejected (the communication gate is wired into form_pod)."""
+    from runtime.pods import form_pod, PodMembershipError
+    # Two ICs on different teams that cannot communicate (no boss/report
+    # relationship, not same team).
+    mgr_a = _role("mgrA", "manager", department="analytics", team="etl", reports_to="head")
+    mgr_b = _role("mgrB", "manager", department="analytics", team="pipelines", reports_to="head")
+    ic_a = _role("icA", "ic", department="analytics", team="etl", reports_to="mgrA")
+    ic_b = _role("icB", "ic", department="analytics", team="pipelines", reports_to="mgrB")
+    # ic_a and ic_b cannot communicate (different teams, no boss/report link).
+    assert not tiers.can_communicate(ic_a, ic_b)
+    roles = {"mgrA": mgr_a, "icA": ic_a, "icB": ic_b}
+    try:
+        form_pod(roles, "mgrA", ["icA", "icB"], "topic")
+        raise AssertionError("expected PodMembershipError")
+    except PodMembershipError as e:
+        assert "communicate" in str(e)
+
+
+def test_can_read_code_advisory_note_present():
+    """Story 10 (A11): can_read_code is documented as advisory (the gap is
+    visible, not silently dead)."""
+    import inspect
+    doc = inspect.getdoc(tiers.can_read_code) or ""
+    assert "Advisory" in doc
+    assert "not yet enforced" in doc
+
+
+def test_cross_team_read_advisory_note_present():
+    """Story 10 (A11): cross_team_read is documented as advisory (the gap is
+    visible, not silently dead)."""
+    import inspect
+    doc = inspect.getdoc(tiers.cross_team_read) or ""
+    assert "Advisory" in doc
+    assert "not yet enforced" in doc
