@@ -125,8 +125,13 @@ class TimeoutBackend(LLMBackend):
 
         def worker() -> None:
             try:
+                # Story 9 (B6): thread the effective timeout down to the inner
+                # backend so the underlying HTTP call (httpx `read` timeout) is
+                # bounded to the TimeoutBackend's bound (no long-lived zombie
+                # thread). The inner backend (RoutingBackend -> OpenAIBackend)
+                # caps the httpx `read` timeout at the per-invoke timeout.
                 box["out"] = self.inner.invoke(role, context, reasoning,
-                                              phase=phase)
+                                              timeout=effective, phase=phase)
             except Exception as e:  # propagate the real error, not a timeout
                 box["err"] = e
 
@@ -134,6 +139,16 @@ class TimeoutBackend(LLMBackend):
         t.start()
         t.join(effective)
         if t.is_alive():
+            # Story 9 (B6): the daemon thread will finish when the (now-
+            # coordinated) httpx timeout trips. Add a visible note so the
+            # operator knows the bound (the underlying call is bounded to the
+            # TimeoutBackend's bound, not left as a long-lived zombie).
+            import sys
+            print(
+                f"[llm] invoke for {role.id} timed out at {effective}s - "
+                f"the underlying call is bounded to {effective}s",
+                file=sys.stderr,
+            )
             raise LLMTimeoutError(
                 f"backend invoke for {role.id} exceeded {effective}s"
             )

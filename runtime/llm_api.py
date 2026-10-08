@@ -586,8 +586,17 @@ class OpenAIBackend(LLMBackend):
                     f"{self.base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     json=payload,
-                    timeout=httpx.Timeout(connect=10.0, read=self.idle_timeout,
-                                          write=10.0, pool=10.0),
+                    # Story 9 (B6): the per-invoke `timeout` (threaded down from
+                    # the TimeoutBackend) caps the httpx `read` timeout so the
+                    # underlying HTTP call is bounded to the TimeoutBackend's
+                    # bound (no long-lived zombie thread). If no per-invoke
+                    # timeout is provided, keep the existing idle_timeout.
+                    timeout=httpx.Timeout(
+                        connect=10.0,
+                        read=(self.idle_timeout if timeout is None
+                              else min(self.idle_timeout, timeout)),
+                        write=10.0, pool=10.0,
+                    ),
                 ) as resp:
                     resp.raise_for_status()
                     for line in resp.iter_lines():

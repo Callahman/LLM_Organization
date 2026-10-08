@@ -21,14 +21,15 @@ from runtime.history import HistoryStore
 
 class SlowBackend(LLMBackend):
     """A backend that sleeps — to exercise the timeout guard. Conforms to the
-    `LLMBackend` interface (accepts the optional `reasoning` level and the
-    `phase` the wrappers pass through)."""
+    `LLMBackend` interface (accepts the optional `reasoning` level, the
+    `phase` the wrappers pass through, and the per-invoke `timeout` the
+    `TimeoutBackend` threads down — Story 9)."""
 
     def __init__(self, delay: float):
         self.delay = delay
 
     def invoke(self, role, context: str, reasoning: Reasoning = Reasoning.LOW,
-               phase: Optional[int] = None):
+               timeout: Optional[float] = None, phase: Optional[int] = None):
         time.sleep(self.delay)
         return {"summary": "ok", "findings": [], "recommendation": "", "confidence": 0.9}
 
