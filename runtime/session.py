@@ -103,7 +103,11 @@ class Session:
         self.leader = leader
         self.config = config or {}
         self.org = OrgState(history_dir=history_dir)
-        self.history = HistoryStore(history_dir=history_dir)
+        self.history = HistoryStore(
+            history_dir=history_dir,
+            window_sessions=self.config.get("history_window_sessions", 50),
+            archive_cap_mb=self.config.get("archive_cap_mb", 1024),
+        )
         # D5: the backend chain (MemoryBackend(RoutingBackend(TimeoutBackend(
         # raw))) + the on_call/on_stream observability wiring) is built by the
         # build_backend() factory (explicit + testable, not implicit here).
@@ -398,6 +402,7 @@ class Session:
             artifacts_dir=self.config.get("pod_artifacts_dir", "pods/artifacts"),
             transcripts_dir=self.config.get("pod_transcripts_dir", "pods/transcripts"),
             ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
+            config=self.config,
         )
         self.phases.append(4)
 
@@ -619,6 +624,7 @@ class Session:
                 artifacts_dir=self.config.get("pod_artifacts_dir", "pods/artifacts"),
                 transcripts_dir=self.config.get("pod_transcripts_dir", "pods/transcripts"),
                 ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
+                config=self.config,
             )
             self.phases.append(4)
             # Solo (P4): record the dispatch + the thinking-budget remainder so

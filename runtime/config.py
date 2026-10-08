@@ -26,12 +26,14 @@ ENV_TO_CONFIG: Dict[str, Tuple[str, Any]] = {
     "CONFIDENCE_THRESHOLD": ("confidence_threshold", float),
     "QUESTION_BUDGET_ROUNDS": ("question_budget", int),
     "MISSION_REASK_BUDGET": ("mission_reask_budget", int),
-    "POD_MIN_ROLES": ("pod_min_roles", int),
-    "POD_MAX_ROLES": ("pod_max_roles", int),
+    # Story 8 (B18/C2): the 4 plumb-ed knobs (POD_MAX_ROUNDS, DIRECT_IC_CAP,
+    # HISTORY_WINDOW_SESSIONS, ARCHIVE_CAP_MB) are consumed by their single
+    # consumers. The other 4 (POD_MIN_ROLES, POD_MAX_ROLES,
+    # CONTEXT_BUDGET_TOKENS, ROLE_MEMORY_MAX_ENTRIES) were dropped from this
+    # map so the "unused .env key" warning fires (visible, not silently
+    # ignored).
     "POD_MAX_ROUNDS": ("pod_max_rounds", int),
     "DIRECT_IC_CAP": ("direct_ic_cap", int),
-    "CONTEXT_BUDGET_TOKENS": ("context_budget_tokens", int),
-    "ROLE_MEMORY_MAX_ENTRIES": ("role_memory_max_entries", int),
     "HISTORY_WINDOW_SESSIONS": ("history_window_sessions", int),
     "ARCHIVE_CAP_MB": ("archive_cap_mb", int),
     # The two wall-clock timeout backstops (the primary bound is the backend's

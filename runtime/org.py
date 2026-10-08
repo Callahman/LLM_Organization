@@ -184,7 +184,8 @@ def resolve_role_definition(org: OrgState, role: Role) -> str:
 
 # --- 3-IC direct-report cap -----------------------------------------------
 
-def _check_ic_cap(org: OrgState, new_role: Role) -> None:
+def _check_ic_cap(org: OrgState, new_role: Role,
+                  direct_ic_cap: int = DIRECT_IC_CAP) -> None:
     if new_role.architype != "ic":
         return
     boss = org.get(new_role.reports_to) if new_role.reports_to else None
@@ -194,9 +195,9 @@ def _check_ic_cap(org: OrgState, new_role: Role) -> None:
         1 for r in org.active_roles()
         if r.architype == "ic" and r.reports_to == boss.id
     )
-    if direct_ics >= DIRECT_IC_CAP:
+    if direct_ics >= direct_ic_cap:
         raise ResourcingError(
-            f"{DIRECT_IC_CAP}-IC direct-report cap reached under {boss.id}; "
+            f"{direct_ic_cap}-IC direct-report cap reached under {boss.id}; "
             f"hire a manager to organize the ICs"
         )
 
@@ -451,6 +452,7 @@ def hire(
     new_role: Role,
     approver_fn: Callable[[str, str, Role], Dict[str, str]],
     departments_dir: str = "departments",
+    direct_ic_cap: int = DIRECT_IC_CAP,
 ) -> Role:
     """Hire a role through the approval matrix + role-definition resolution +
     the 3-IC cap + the approver's decision (HR / the Leader)."""
@@ -458,7 +460,7 @@ def hire(
     if not ok:
         raise ResourcingError(reason)
     def_key = resolve_role_definition(org, new_role)
-    _check_ic_cap(org, new_role)
+    _check_ic_cap(org, new_role, direct_ic_cap=direct_ic_cap)
     decision = approver_fn(approver_type, "hire", new_role)
     if decision.get("decision") != "approve":
         org.log_event("hire_vetoed", initiator.id, new_role.id, decision)

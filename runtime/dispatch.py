@@ -304,6 +304,7 @@ def _ensure_role(
     department: str,
     team: str,
     approver_fn,
+    direct_ic_cap: int = 3,
 ) -> Optional[Role]:
     """Get a role by ID, or create + hire it (through the approval matrix) if
     it doesn't exist yet. This is how the dispatch spins up the managers/ICs it
@@ -329,7 +330,8 @@ def _ensure_role(
         output_schema=worker_output_schema(architype),
     )
     try:
-        return hire(org, initiator, new_role, approver_fn)
+        return hire(org, initiator, new_role, approver_fn,
+                    direct_ic_cap=direct_ic_cap)
     except Exception:
         return None
 
@@ -393,6 +395,7 @@ def _check_pod_triggers(
     artifacts_dir: str,
     transcripts_dir: str = "pods/transcripts",
     starter_in_members: bool = True,
+    config: Optional[Dict[str, Any]] = None,
 ) -> None:
     """The pods A/B/C multi-trigger — form a pod when any trigger fires:
 
@@ -444,7 +447,8 @@ def _check_pod_triggers(
         )
     except PodMembershipError:
         return
-    run_pod(backend, pod, transcripts_dir=transcripts_dir)
+    run_pod(backend, pod, max_rounds=(config or {}).get("pod_max_rounds", 3),
+            transcripts_dir=transcripts_dir)
     # Write the pod's transcript (pods/transcripts/) + its decision artifact
     # (pods/artifacts/).
     write_transcripts(pod, transcripts_dir=transcripts_dir)
@@ -483,7 +487,9 @@ def _check_pod_triggers(
             except PodMembershipError:
                 chained = None
             if chained is not None:
-                run_pod(backend, chained, transcripts_dir=transcripts_dir)
+                run_pod(backend, chained,
+                        max_rounds=(config or {}).get("pod_max_rounds", 3),
+                        transcripts_dir=transcripts_dir)
                 write_transcripts(chained, transcripts_dir=transcripts_dir)
                 write_decision_artifact(chained, artifacts_dir=artifacts_dir)
         else:
@@ -532,6 +538,7 @@ def dispatch(
     transcripts_dir: str = "pods/transcripts",
     ic_timeout_seconds: Optional[float] = None,
     new_leader: Optional[Role] = None,
+    config: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Run the Phase 4 top-down dispatch. Returns the leader's view: a list of
     department reports (each carrying the chain of team/IC reports up).
@@ -630,6 +637,7 @@ def dispatch(
                     head.department,
                     t_obj.get("team") or t_obj.get("manager_id", ""),
                     approver_fn,
+                    direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
                 )
             if manager is not None:
                 mgr_out = backend.invoke(manager, _manager_ctx(manager, t_obj.get("objective", "")),
@@ -645,6 +653,7 @@ def dispatch(
                         ic = _ensure_role(
                             org, manager, task.get("ic_id"), "ic",
                             manager.department, manager.team, approver_fn,
+                            direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
                         )
                     if ic is None:
                         continue
@@ -671,6 +680,7 @@ def dispatch(
                     routing_rules, pods_out, history, artifacts_dir,
                     transcripts_dir,
                     starter_in_members=True,
+                    config=config,
                 )
                 team_reports.append(_upward_report(manager, ic_reports))
             else:
@@ -684,6 +694,7 @@ def dispatch(
                         head.department,
                         t_obj.get("team") or t_obj.get("ic_id", ""),
                         approver_fn,
+                        direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
                     )
                 if ic is None:
                     continue
@@ -704,6 +715,7 @@ def dispatch(
                     routing_rules, pods_out, history, artifacts_dir,
                     transcripts_dir,
                     starter_in_members=False,
+                    config=config,
                 )
                 team_reports.append(
                     _upward_report(
