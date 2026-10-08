@@ -23,12 +23,14 @@ records); a `TimeoutBackend` timeout actually bounds the underlying HTTP call
 
 ## Tasks
 
-- [ ] **Add a lock to `HistoryStore._append`.** In `runtime/history.py`, add a
+- [x] **Add a lock to `HistoryStore._append`.** In `runtime/history.py`, add a
   `threading.Lock` (e.g. `self._lock = threading.Lock()` in `__init__`,
   history.py:25-39) and wrap the size-check + `_rotate` + write in
   `with self._lock:` (history.py:48-51). This serializes all appends (and the
   rotation) so no two writers interleave or double-rotate.
-- [ ] **Coordinate the `TimeoutBackend` and httpx timeouts.** In
+  (Added `import threading` + `self._lock = threading.Lock()` in `__init__`;
+  wrapped the size-check + `_rotate` + write in `with self._lock:`.)
+- [x] **Coordinate the `TimeoutBackend` and httpx timeouts.** In
   `TimeoutBackend.invoke` (`runtime/llm.py:117-142`), pass the effective
   timeout down to the inner backend (thread it through `RoutingBackend` →
   `OpenAIBackend`) so the `httpx` `read` timeout is ≤ the `TimeoutBackend`
@@ -36,12 +38,16 @@ records); a `TimeoutBackend` timeout actually bounds the underlying HTTP call
   (`runtime/llm_api.py`) and use it as the `httpx.Timeout(read=...)` value
   (capped at the existing `idle_timeout`). If a per-invoke timeout is not
   provided, keep the existing `idle_timeout`.
-- [ ] **Bound the zombie on timeout.** After `TimeoutBackend` raises
+  (`TimeoutBackend.worker` now passes `timeout=effective` to the inner invoke;
+  `OpenAIBackend.invoke` uses `min(self.idle_timeout, timeout)` as the `read`
+  timeout when `timeout` is provided, else `self.idle_timeout`.)
+- [x] **Bound the zombie on timeout.** After `TimeoutBackend` raises
   `LLMTimeoutError` (llm.py:137-139), the daemon thread will finish when the
   (now-coordinated) httpx timeout trips. Add a visible `[llm] invoke for
   <role> timed out at <N>s — the underlying call is bounded to <N>s` note so
   the operator knows the bound.
-- [ ] **Tests** (`tests/test_history.py` or a new one):
+  (Added a visible `[llm]` note to stderr before raising `LLMTimeoutError`.)
+- [x] **Tests** (`tests/test_history.py` or a new one):
   - (a) **Concurrent appends:** spawn N threads each appending M records to the
     same `HistoryStore` log; assert the file has exactly N×M records and every
     line is valid JSON (no interleaved/corrupted records).
@@ -49,9 +55,32 @@ records); a `TimeoutBackend` timeout actually bounds the underlying HTTP call
     `OpenAIBackend.invoke` results in an `httpx.Timeout(read=...)` ≤ the bound
     (inspect the constructed `httpx.Timeout` via a stub, or assert the param is
     threaded through).
+  (Written by the agent; run by the user per the rule.)
 
 ## Definition of done
 - `HistoryStore` writes are serialized (concurrent appends produce no
   corruption).
 - A `TimeoutBackend` timeout bounds the underlying HTTP call (no long-lived
   zombie).
+
+## Rollout (what was changed)
+- **`runtime/history.py`** — added `import threading` + `self._lock =
+  threading.Lock()` in `HistoryStore.__init__`; wrapped the size-check +
+  `_rotate` + write in `_append` in `with self._lock:` (serializes all appends
+  and the rotation so no two writers interleave or double-rotate).
+- **`runtime/llm.py`** — `TimeoutBackend.worker` now passes `timeout=effective`
+  to the inner invoke (threading the effective timeout down to the inner
+  backend); added a visible `[llm] invoke for <role> timed out at <N>s — the
+  underlying call is bounded to <N>s` note to stderr before raising
+  `LLMTimeoutError`.
+- **`runtime/llm_api.py`** — `OpenAIBackend.invoke` now uses
+  `min(self.idle_timeout, timeout)` as the `httpx.Timeout(read=...)` value when
+  a per-invoke `timeout` is provided (else `self.idle_timeout`), so the
+  underlying HTTP call is bounded to the `TimeoutBackend`'s bound (no
+  long-lived zombie thread).
+- **`tests/test_history.py`** — added two tests: (a) `test_concurrent_appends_no_corruption`
+  (spawn 8 threads each appending 25 records to the same log; assert the file
+  has exactly 200 records and every line is valid JSON); (b)
+  `test_coordinated_timeout_caps_httpx_read` (assert a per-invoke timeout of 5s
+  results in an `httpx.Timeout(read=5.0)` — the param is threaded through and
+  capped at the `idle_timeout`).

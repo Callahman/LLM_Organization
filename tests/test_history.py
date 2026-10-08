@@ -81,3 +81,61 @@ def test_maintain_applies_window_and_cap(tmp_path):
     result = store.maintain()
     assert result["moved_to_archive"] == 3
     assert result["deleted_from_archive"] == 0  # far under the 1 GiB cap
+
+
+def test_concurrent_appends_no_corruption(tmp_path):
+    """Story 9 (B5): concurrent appends produce no interleaved/corrupted
+    records (the lock serializes the size-check + rotation + write)."""
+    import threading
+    store = HistoryStore(history_dir=str(tmp_path))
+    n_threads = 8
+    m_records = 25
+    def worker(tid):
+        for i in range(m_records):
+            store._append("concurrent.jsonl", {"tid": tid, "i": i})
+    threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # The file has exactly N*M records and every line is valid JSON.
+    records = _read_jsonl(os.path.join(str(tmp_path), "concurrent.jsonl"))
+    assert len(records) == n_threads * m_records
+    # Every record is valid (the JSON parsed without error).
+    for rec in records:
+        assert "tid" in rec and "i" in rec
+
+
+def test_coordinated_timeout_caps_httpx_read(tmp_path, monkeypatch):
+    """Story 9 (B6): a per-invoke timeout passed to OpenAIBackend.invoke
+    results in an httpx.Timeout(read=...) <= the bound (the param is threaded
+    through and capped at the idle_timeout)."""
+    import httpx
+    from runtime.llm_api import OpenAIBackend
+    from roles.base import Role
+    # Capture the httpx.Timeout constructed by the invoke.
+    captured = {}
+    real_timeout = httpx.Timeout
+    def fake_timeout(connect=None, read=None, write=None, pool=None, **kw):
+        captured['connect'] = connect
+        captured['read'] = read
+        captured['write'] = write
+        captured['pool'] = pool
+        return real_timeout(connect=connect, read=read, write=write, pool=pool, **kw)
+    monkeypatch.setattr(httpx, 'Timeout', fake_timeout)
+    # A stub that raises before the httpx call (so the invoke doesn't actually
+    # hit the network).
+    def fake_client(*args, **kwargs):
+        raise httpx.ConnectError("no network")
+    monkeypatch.setattr(httpx, 'Client', fake_client)
+    # An OpenAIBackend with idle_timeout=180s.
+    backend = OpenAIBackend(model="m", base_url="http://localhost:1", idle_timeout=180.0)
+    role = Role(id="r1", architype="ic", department="analytics", team="pipelines", reports_to="mgr")
+    # Call the invoke with a per-invoke timeout of 5s.
+    try:
+        backend.invoke(role, "ctx", timeout=5.0)
+    except Exception:
+        pass
+    # The httpx.Timeout(read=...) is <= the bound (5s).
+    assert captured['read'] <= 5.0
+    assert captured['read'] == 5.0

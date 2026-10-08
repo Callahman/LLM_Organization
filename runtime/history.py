@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -35,6 +36,10 @@ class HistoryStore:
         self.window_sessions = window_sessions
         self.archive_cap_mb = archive_cap_mb
         self.max_log_bytes = max_log_bytes
+        # Story 9 (B5): serialize all appends (and the rotation) so no two
+        # writers interleave or double-rotate (a zombie thread or a future
+        # concurrent-LLM-call refactor would otherwise create same-file races).
+        self._lock = threading.Lock()
         os.makedirs(history_dir, exist_ok=True)
         os.makedirs(archives_dir, exist_ok=True)
 
@@ -42,13 +47,17 @@ class HistoryStore:
 
     def _append(self, filename: str, record: Dict[str, Any]) -> str:
         path = os.path.join(self.history_dir, filename)
-        # Log rotation: when a log grows past the cap, rotate it (rename to
-        # <name>.<n>.jsonl) and start fresh. Rotated files stay in the history
-        # dir so the audit path remains resolvable.
-        if os.path.exists(path) and os.path.getsize(path) >= self.max_log_bytes:
-            self._rotate(path)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        # Story 9 (B5): serialize the size-check + rotation + write so no two
+        # writers interleave or double-rotate (the check-then-act at the size
+        # check was racy).
+        with self._lock:
+            # Log rotation: when a log grows past the cap, rotate it (rename to
+            # <name>.<n>.jsonl) and start fresh. Rotated files stay in the
+            # history dir so the audit path remains resolvable.
+            if os.path.exists(path) and os.path.getsize(path) >= self.max_log_bytes:
+                self._rotate(path)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
         return path
 
     def _rotate(self, path: str) -> None:
