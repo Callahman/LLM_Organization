@@ -30,6 +30,7 @@ for a plain `StubBackend`).
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Any, Dict, List, Optional
 
@@ -467,21 +468,27 @@ def _check_pod_triggers(
     )
     # Chained-pod escalation: the starter's boss forms a second pod carrying
     # the first pod's decision artifact up the line (the §2.8 worked example).
+    # A **chained pod on an empty first decision** is skipped (a visible note,
+    # never silent) — there is nothing to carry up the line.
     boss_id = starter.reports_to
     if boss_id and boss_id in roles:
-        boss = roles[boss_id]
-        try:
-            chained = chained_pod(
-                pod, roles, boss.id, [boss.id, starter.id],
-                f"escalation of {pod.topic}",
-                first_artifact_path=base + ".md",
-            )
-        except PodMembershipError:
-            chained = None
-        if chained is not None:
-            run_pod(backend, chained, transcripts_dir=transcripts_dir)
-            write_transcripts(chained, transcripts_dir=transcripts_dir)
-            write_decision_artifact(chained, artifacts_dir=artifacts_dir)
+        if pod.decision.strip():
+            boss = roles[boss_id]
+            try:
+                chained = chained_pod(
+                    pod, roles, boss.id, [boss.id, starter.id],
+                    f"escalation of {pod.topic}",
+                    first_artifact_path=base + ".md",
+                )
+            except PodMembershipError:
+                chained = None
+            if chained is not None:
+                run_pod(backend, chained, transcripts_dir=transcripts_dir)
+                write_transcripts(chained, transcripts_dir=transcripts_dir)
+                write_decision_artifact(chained, artifacts_dir=artifacts_dir)
+        else:
+            print("[pod] skipped chained pod (empty first decision)",
+                  file=sys.stderr)
     # Seed the members' memory with the cross-team `pod:<id>` entry (what
     # `RoleMemory.cross_team()` filters on). A no-op for a plain stub.
     seed = getattr(backend, "seed_cross_team", None)

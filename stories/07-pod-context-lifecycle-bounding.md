@@ -19,26 +19,45 @@ has a wall-clock/token budget.
 - There is no per-pod wall-clock/token budget (only the per-invoke timeout).
 - `run_pod` deliberation loop: `runtime/pods.py:159`.
 
+## Rollout (what was changed)
+- **`_pod_ctx`** (`runtime/pods.py`): refactored to use `bounded_assembly`
+  (imported from `runtime/context`). The header (and the agenda / input
+  artifacts / prior) is the **unbounded** "agenda" (it must survive); only the
+  transcript entries are the bounded "summaries" (oldest dropped first when
+  over budget). A `budget_tokens` param (default 4000) controls the budget.
+- **Chained pod** (`runtime/dispatch.py`): the `chained_pod` formation is now
+  guarded by `pod.decision.strip()` — an empty first decision skips the chained
+  pod with a visible `[pod] skipped chained pod (empty first decision)` note
+  (to stderr).
+- **Wall-clock budget** (`runtime/pods.py`): `run_pod` takes a
+  `pod_wall_clock_seconds` param (default 600); the deliberation loop checks
+  `time.monotonic()` at the start of each round and closes the pod early
+  (`closed_reason = "pod wall-clock budget exceeded"`) if the budget is
+  exceeded.
+- **Tests** (`tests/test_pods.py`): the three cases (token bounding, chained
+  pod skipped on empty decision, wall-clock budget). (Written by the agent;
+  **run by the user** per the rule.)
+
 ## Tasks
 
-- [ ] **Refactor `_pod_ctx` to use `bounded_assembly`.** In
+- [x] **Refactor `_pod_ctx` to use `bounded_assembly`.** In
   `runtime/pods.py:114`, replace the unbounded `"\n".join(parts)` with
   `bounded_assembly(parts, budget_tokens=...)` (import it from wherever it
   lives). Pass a token budget (e.g. `context_budget_tokens` — but see Story 8
   for making that knob live; for now use a constant default like 4000). Keep
   the "POD <id>: <kind> — <topic>" header **unbounded** (it must survive) and
   bound only the transcript entries.
-- [ ] **Skip the chained pod on an empty first decision.** In
+- [x] **Skip the chained pod on an empty first decision.** In
   `runtime/dispatch.py:433-446`, guard the `chained_pod` formation with
   `if boss_id and boss_id in roles and pod.decision.strip():` — if the first
   pod's decision is empty, skip the chained pod (log a visible `[pod] skipped
   chained pod (empty first decision)` note).
-- [ ] **Add a per-pod wall-clock budget** (B14, optional): wrap the `run_pod`
+- [x] **Add a per-pod wall-clock budget** (B14, optional): wrap the `run_pod`
   deliberation loop (`runtime/pods.py:159`) with a wall-clock check — if the
   elapsed time exceeds a per-pod budget (e.g. a `pod_wall_clock_seconds` param,
   default e.g. 600), close the pod early (`pod.closed_reason = "pod wall-clock
   budget exceeded"`). Reuse `time.monotonic()` for the timing.
-- [ ] **Tests** (`tests/test_pods.py`):
+- [x] **Tests** (`tests/test_pods.py`):
   - (a) **Token bounding:** build a pod with many long `speak` entries (total
     well over the budget); assert `_pod_ctx` output is ≤ the budget tokens (or
     truncated) and the header is intact.
