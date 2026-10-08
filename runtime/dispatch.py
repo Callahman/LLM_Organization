@@ -35,7 +35,14 @@ from typing import Any, Dict, List, Optional
 
 from roles.base import Role, spin_personality, spin_sub_architype
 from roles.worker import worker_output_schema
-from runtime.org import OrgState, hire, run_leader_replacement_vote
+from runtime.org import (
+    OrgState,
+    hire,
+    fire,
+    run_leader_replacement_vote,
+    ResourcingError,
+    ResourcingVetoed,
+)
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity, detect_disagreement
 from runtime.history import HistoryStore
@@ -326,6 +333,34 @@ def _ensure_role(
         return None
 
 
+def _fire_role(org, leader, role_id, reason, approver_fn, history=None):
+    """Fire a role (through the HR approver) — the dispatch's parallel to
+    `_ensure_role` (the hire path). The `fire` path marks the role inactive
+    (kept in the org chart, not deleted), offloads its work, and journals the
+    event. A veto / required-role rejection / missing approver is logged
+    visibly, never swallowed."""
+    if approver_fn is None:
+        if history is not None:
+            history._append("dispatch_skips.jsonl",
+                            {"role_id": role_id, "reason": reason,
+                             "why": "fire requested but no approver supplied"})
+        return None
+    try:
+        return fire(org, leader, role_id, approver_fn)
+    except ResourcingVetoed as e:
+        if history is not None:
+            history._append("dispatch_skips.jsonl",
+                            {"role_id": role_id, "reason": reason,
+                             "why": f"fire vetoed: {e}"})
+        return None
+    except ResourcingError as e:
+        if history is not None:
+            history._append("dispatch_skips.jsonl",
+                            {"role_id": role_id, "reason": reason,
+                             "why": f"fire rejected: {e}"})
+        return None
+
+
 # --- Pods A/B/C multi-trigger (an add-on to the dispatch) ------------------
 
 def _task_types(team_obj: Dict[str, Any], ic_tasks: List[Dict[str, Any]]) -> List[str]:
@@ -533,6 +568,17 @@ def dispatch(
                 {"reason": "leader_replacement proposal but no new-leader "
                            "candidate supplied — no vote run"},
             )
+    # Story 6 (R7): the leader's resourcing output can request firing roles
+    # (each `fire` entry is [role_id, reason]). The fire goes through the HR
+    # approver (a veto / required-role rejection / missing approver is logged,
+    # never swallowed).
+    _resourcing = out.get("resourcing")
+    if isinstance(_resourcing, dict):
+        for _fire_entry in _resourcing.get("fire", []):
+            if isinstance(_fire_entry, (list, tuple)) and _fire_entry:
+                _fire_role(org, leader, _fire_entry[0],
+                           _fire_entry[1] if len(_fire_entry) >= 2 else "",
+                           approver_fn, history)
     dept_objectives = _decomposition_list(out, "department_objectives")
     if not dept_objectives:
         # The leader's Phase 4 decomposition came back empty — no work to

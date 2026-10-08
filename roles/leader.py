@@ -134,6 +134,21 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
                 "reasoning": {"type": "string"},
             },
         },
+        # Story 6 (R7): resourcing decisions (firing). The leader can request
+        # firing roles; each `fire` entry is [role_id, reason]. Optional at the
+        # top level (so it does not leak into the other phases).
+        "resourcing": {
+            "type": "object",
+            "properties": {
+                "fire": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+            },
+        },
     },
     "required": ["summary", "confidence"],
 }
