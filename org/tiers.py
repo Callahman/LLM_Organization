@@ -100,6 +100,11 @@ def can_read_code(role, path: str) -> bool:
     Department heads and the leader **cannot read any code at all** — they see
     work only as it is brought to them (reports, summaries, decision
     artifacts). Managers and ICs can read code within their own department.
+
+    **Advisory (Story 10, A11):** this invariant is **not yet enforced** in the
+    live path — there is no code-read gate in the pipeline (the code path in
+    `runtime/permissions.py` is write-only via `apply_code_edits`/`write_file`).
+    The gap is documented here so it is visible, not silently dead.
     """
     if is_leader(role) or is_head(role):
         return False
@@ -109,7 +114,13 @@ def can_read_code(role, path: str) -> bool:
 def cross_team_read(role, path: str) -> bool:
     """True when a role is reading a *sibling team directory in the same
     department* (the duplication-check purpose, §2.4). This is the read that
-    must be logged in the audit trail."""
+    must be logged in the audit trail.
+
+    **Advisory (Story 10, A11):** this invariant is **not yet enforced** in the
+    live path — the duplication-check reads are not gated by it (no cross-team
+    read path exists to wire it into). The gap is documented here so it is
+    visible, not silently dead.
+    """
     if is_leader(role) or is_head(role):
         return False
     if not can_read(role, path):

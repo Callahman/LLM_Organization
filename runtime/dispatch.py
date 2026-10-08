@@ -444,6 +444,7 @@ def _check_pod_triggers(
         pod = form_pod(
             roles, starter.id, member_ids,
             _pod_topic(team_obj.get("objective", ""), triggers),
+            cross_team=bool(team_obj.get("cross_team")),
         )
     except PodMembershipError:
         return
