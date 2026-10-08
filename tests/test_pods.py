@@ -12,6 +12,7 @@ import os
 from roles.base import Role
 from runtime.llm import StubBackend
 from runtime import pods
+from runtime.org import OrgState
 
 
 def _role(rid, architype, department="", team="", reports_to=None, personality=""):
@@ -110,3 +111,77 @@ def test_deadlock_detection(tmp_path):
     pods.run_pod(backend, pod, max_rounds=5)
     assert pod.rounds <= 2
     assert "deadlock" in pod.closed_reason
+
+
+# --- Story 7 (A2/B13/B14): pod context & lifecycle bounding ----------------
+
+
+def test_pod_ctx_token_bounded():
+    # (a) Token bounding: a pod with many long speak entries (total well over
+    # the budget) -> _pod_ctx output is <= the budget tokens (the transcript
+    # is truncated) and the header is intact.
+    roles = _roles()
+    pod = pods.form_pod(roles, "ic1", ["ic1", "mgr1"], "topic")
+    # Add many long speak entries (total well over the 4000-token budget).
+    for i in range(40):
+        pod.transcript.append(
+            {"kind": "speak", "role": f"r{i}", "summary": "x" * 300})
+    ctx = pods._pod_ctx(pod, "speak", budget_tokens=4000)
+    from runtime.context import estimate_tokens
+    # The output is <= the budget tokens (the agenda + the summaries that fit).
+    assert estimate_tokens(ctx) <= 4000
+    # The header is intact (it must survive).
+    assert "POD" in ctx and pod.id in ctx
+
+
+def test_chained_pod_skipped_on_empty_decision(tmp_path, monkeypatch):
+    # (b) Chained pod skipped on empty decision: a first pod with an empty
+    # decision -> the chained pod is not formed (assert via a stub that the
+    # chained run_pod is not called).
+    import runtime.dispatch as d
+    roles = _roles()
+    org = OrgState(history_dir=str(tmp_path))
+    for r in roles.values():
+        org.add_role(r)
+    backend = StubBackend()
+    calls = []
+
+    def fake_run_pod(backend, pod, max_rounds=3, transcripts_dir=None, **kw):
+        calls.append(pod.id)
+        pod.decision = ""  # the first pod's decision is empty
+        return pod
+
+    monkeypatch.setattr(d, "run_pod", fake_run_pod)
+    # The starter is the manager (reports_to = the head, the boss).
+    d._check_pod_triggers(
+        backend, org, roles["mgr1"], ["ic1"],
+        {"cross_team": True, "objective": "test"},
+        [], [], [],
+        [], None,
+        str(tmp_path), str(tmp_path),
+    )
+    # The chained pod is not formed (run_pod is called only once, for the
+    # first pod).
+    assert len(calls) == 1
+
+
+def test_pod_wall_clock_budget(monkeypatch):
+    # (c) Wall-clock budget: a pod that exceeds the budget closes early with
+    # the budget-exceeded reason.
+    import time
+    roles = _roles()
+    pod = pods.form_pod(roles, "ic1", ["ic1", "mgr1"], "topic")
+    backend = StubBackend()
+    backend.set_script("ic1", [
+        {"summary": "agenda", "agenda": "a"},
+        {"summary": "speak"},
+        {"summary": "close", "decision": "d", "rationale": "r", "open_items": []},
+    ])
+    backend.set_script("mgr1", [{"summary": "speak"}])
+    # Stub time.monotonic to simulate elapsed time (each call returns a larger
+    # value, so the elapsed time quickly exceeds the budget).
+    times = iter([0.0, 100.0, 200.0, 300.0, 400.0, 500.0])
+    monkeypatch.setattr(time, "monotonic", lambda: next(times))
+    pods.run_pod(backend, pod, max_rounds=3, pod_wall_clock_seconds=50.0)
+    # The pod is closed early with the budget-exceeded reason.
+    assert pod.closed_reason == "pod wall-clock budget exceeded"

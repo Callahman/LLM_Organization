@@ -18,14 +18,16 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from org import tiers
 from roles.base import Role
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity, detect_disagreement
 from runtime.coerce import as_str_list
+from runtime.context import bounded_assembly
 
 
 class PodMembershipError(ValueError):
@@ -111,26 +113,36 @@ def senior_member(pod: Pod) -> Role:
     return min(pod.members, key=lambda m: tiers.tier_of(m))
 
 
-def _pod_ctx(pod: Pod, kind: str, prior: str = "") -> str:
+def _pod_ctx(pod: Pod, kind: str, prior: str = "",
+             budget_tokens: int = 4000) -> str:
     """Build a pod member's context. Starts with "POD" so the routing backend
-    parses it as Phase 4 (execution)."""
-    parts = [f"POD {pod.id}: {kind} — {pod.topic}"]
+    parses it as Phase 4 (execution). The header (and the agenda / input
+    artifacts / prior) is **unbounded** (it must survive); only the transcript
+    entries are token-bounded (via `bounded_assembly` — oldest dropped first
+    when over budget)."""
+    # The unbounded part (must survive): the header + agenda + input artifacts
+    # + prior.
+    header_parts = [f"POD {pod.id}: {kind} — {pod.topic}"]
     if pod.agenda:
-        parts.append(f"AGENDA: {pod.agenda}")
+        header_parts.append(f"AGENDA: {pod.agenda}")
     if pod.input_artifacts:
-        parts.append("INPUT ARTIFACTS: " + ", ".join(pod.input_artifacts))
+        header_parts.append("INPUT ARTIFACTS: " + ", ".join(pod.input_artifacts))
+    if prior:
+        header_parts.append(f"PRIOR: {prior}")
+    agenda = "\n".join(header_parts)
+    # The bounded part: the transcript entries (speak + carried_decision).
+    summaries: List[Tuple[str, str]] = []
     for entry in pod.transcript:
         if entry.get("kind") == "speak":
-            parts.append(f"  [{entry.get('role')}] {entry.get('summary', '')}")
+            summaries.append((entry.get("role", ""), entry.get("summary", "")))
         elif entry.get("kind") == "carried_decision":
-            parts.append(f"  (carried) {entry.get('decision', '')}")
-    if prior:
-        parts.append(f"PRIOR: {prior}")
-    return "\n".join(parts)
+            summaries.append(("(carried)", entry.get("decision", "")))
+    return bounded_assembly(agenda, summaries, budget_tokens)
 
 
 def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
-            transcripts_dir: Optional[str] = None) -> Pod:
+            transcripts_dir: Optional[str] = None,
+            pod_wall_clock_seconds: float = 600.0) -> Pod:
     """Run a pod's conversation:
 
     1. the **starter** sets the agenda (it manages the conversation);
@@ -157,7 +169,13 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
     # 2. Deliberation rounds (deadlock detection + disagreement routing).
     prev: List[tuple] | None = None
     prev_outputs: List[Dict[str, Any]] = []
+    start = time.monotonic()
     for round in range(1, max_rounds + 1):
+        # Wall-clock budget: if the elapsed time exceeds the per-pod budget,
+        # close the pod early (a visible note, never silent).
+        if time.monotonic() - start > pod_wall_clock_seconds:
+            pod.closed_reason = "pod wall-clock budget exceeded"
+            break
         this_round: List[tuple] = []
         this_outputs: List[Dict[str, Any]] = []
         disagreement = detect_disagreement(prev_outputs)
