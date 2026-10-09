@@ -1,7 +1,8 @@
 """The session runtime — drives Phases 1–6.
 
-`Session` loads roles, enforces schemas (bounded retries on malformed output),
-drives the pipeline, and applies:
+`Session` loads roles and drives the pipeline (malformed LLM output is
+envelope-validated in the backend chain — `OpenAIBackend` in
+`runtime/llm_api.py` — not here), and applies:
 
 - the **BAU rule**: operations continue business-as-usual when user input is
   pending (a mission permission, a tiebreaker, a Safety/Morality halt) — the
@@ -24,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from roles.base import Role, validate_envelope
+from roles.base import Role
 from runtime.llm import LLMBackend, MemoryBackend, TimeoutBackend
 from runtime.intake import run_intake, IntakeResult
 from runtime.mission import run_mission, MissionResult, load_mission
@@ -131,25 +132,6 @@ class Session:
         # BAU rule state.
         self.pending_user_input: List[Dict[str, Any]] = []
         self.bau_halt: Optional[Dict[str, Any]] = None
-
-    # --- schema enforcement (bounded retries) ------------------------------
-
-    def invoke_checked(self, role, context: str, max_retries: int = 2,
-                   phase: Optional[int] = None) -> Dict[str, Any]:
-        """Invoke the backend, retrying (bounded) on a malformed output. If
-        still malformed after the retries, returns the last output with a
-        visible `__malformed__` flag (never silent). The `phase` is passed
-        explicitly (D2) so the routing doesn't rely on parsing it from a
-        re-wrapped context."""
-        output = self.backend.invoke(role, context, phase=phase)
-        attempts = 0
-        while validate_envelope(output) and attempts < max_retries:
-            attempts += 1
-            output = self.backend.invoke(role, context, phase=phase)
-        if validate_envelope(output):
-            output = dict(output)
-            output["__malformed__"] = True
-        return output
 
     # --- BAU rule ----------------------------------------------------------
 
@@ -298,147 +280,6 @@ class Session:
             verdict="escalate",
             cycles=self.cycles,
             escalation=diagnosis,
-        )
-
-    # --- Single cycle (Phases 1–6) -----------------------------------------
-
-    def run_cycle(
-        self,
-        initial_prompt: str,
-        user_answer_fn: Callable[[List[str]], str],
-        user_permission_fn: Callable[[Dict[str, Any]], Dict[str, str]],
-        approver_fn: Callable[[str, str, Role], Dict[str, str]],
-        phase4_halt_fn: Optional[Callable[[], Optional[Dict[str, str]]]] = None,
-        max_iterations: int = 3,
-    ) -> SessionResult:
-        """Run one full pass (Phases 1–6) — the single-iteration form. The
-        main `run` method instead runs Phases 1-3 once and iterates Phases 4-5.
-        `phase4_halt_fn` may return a Safety/Morality halt
-        `{"department", "scope", "reason"}` during Phase 4 (the only
-        departments that may halt BAU)."""
-        self.cycles += 1
-        self.phases = []
-
-        # --- Phase 1: intake ---
-        intake = self._phase(1, self.cycles, run_intake,
-            self.backend,
-            self.leader,
-            initial_prompt,
-            user_answer_fn,
-            confidence_threshold=self.config.get("confidence_threshold", 0.8),
-            question_budget=self.config.get("question_budget", 5),
-            history_dir=self.org.history_dir,
-        )
-        self.phases.append(1)
-        # Solo (P1): record the leader's intake (clarifying Q&A convergence) so
-        # the dashboard can watch it (one transcript file, growing per round).
-        self.solo.record("p1", "Phase 1: intake", self.cycles, "intake",
-                         {"summary": f"intake converged={intake.converged} "
-                                     f"rounds={intake.rounds}",
-                          "confidence": intake.confidence,
-                          "converged": intake.converged,
-                          "rounds": intake.rounds,
-                          "assumptions": intake.assumptions})
-        # A1: close the solo pod when the phase completes so the dashboard
-        # moves it to the historical list (not stuck on the active pane).
-        self.solo.close("p1", f"intake converged={intake.converged}, "
-                              f"{intake.rounds} rounds")
-
-        # --- Phase 2: mission (permission flow) ---
-        mission = self._phase(2, self.cycles, run_mission,
-            self.backend,
-            self.leader,
-            intake,
-            user_permission_fn,
-            history_dir=self.org.history_dir,
-            reask_budget=self.config.get("mission_reask_budget", 3),
-        )
-        self.phases.append(2)
-        # Solo (P2): record the leader's mission draft + approval so the
-        # dashboard can watch it (one transcript file, growing per round).
-        self.solo.record("p2", "Phase 2: mission", self.cycles, "mission",
-                         {"summary": f"mission approved={mission.approved} "
-                                     f"version={mission.version} "
-                                     f"attempts={mission.attempts}",
-                          "approved": mission.approved,
-                          "version": mission.version,
-                          "attempts": mission.attempts,
-                          "edits": len(mission.edits)})
-        # A1: close the solo pod when the mission phase completes.
-        self.solo.close("p2", f"mission approved={mission.approved}, "
-                              f"v{mission.version}")
-        if not mission.approved:
-            return self._escalate("mission not approved by the user", intake, mission)
-        mission_draft = mission.edits[-1]["draft"]
-
-        # --- Phase 3: org bootstrap + resourcing ---
-        self._phase(3, self.cycles, bootstrap,
-            self.org, self.backend, self.leader, mission, approver_fn,
-            bootstrap_timeout_seconds=self.config.get(
-                "bootstrap_timeout_seconds", self.config.get("ic_timeout_seconds")))
-        self.org.write_events()
-        self.phases.append(3)
-        # Solo (P3): record the leader's org-bootstrap (department-head
-        # proposals + hires) so the dashboard can watch it (one transcript
-        # file, growing per round).
-        self.solo.record("p3", "Phase 3: org bootstrap", self.cycles, "bootstrap",
-                         {"summary": "org bootstrapped",
-                          "departments": len(self.org.department_heads()),
-                          "roles": len(self.org.roles)})
-        # A1: close the solo pod when the bootstrap phase completes.
-        self.solo.close("p3", "org bootstrapped")
-
-        # --- Phase 4: top-down dispatch (+ pods / resourcing / BAU) ---
-        # The approver_fn lets the dispatch hire the managers/ICs it decomposes
-        # onto (the full heads->managers->ICs chain). Pods A/B/C form as an
-        # add-on; the formed pods accumulate in `self.pods` so their decisions
-        # carry up to the leader's Phase 5 synthesis.
-        dispatch_results = self._phase(4, self.cycles, dispatch.dispatch,
-            self.backend, self.org, self.leader, mission_draft,
-            approver_fn=approver_fn,
-            pods_out=self.pods,
-            history=self.history,
-            routing_rules=self.config.get("pod_routing_rules", []),
-            artifacts_dir=self.config.get("pod_artifacts_dir", "pods/artifacts"),
-            transcripts_dir=self.config.get("pod_transcripts_dir", "pods/transcripts"),
-            ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
-            config=self.config,
-        )
-        self.phases.append(4)
-
-        # A Safety/Morality halt during Phase 4 (the only BAU halt).
-        if phase4_halt_fn is not None:
-            halt = phase4_halt_fn()
-            if halt:
-                self.halt_bau(halt["department"], halt["scope"], halt["reason"])
-                # Even on a scoped halt, the needed user input is queued; BAU
-                # continues for non-blocked work unless the halt is global.
-                self.queue_user_input({"kind": "safety_morality_halt", **halt})
-
-        # --- Phase 5: synthesis ---
-        verdict = self._phase(5, self.cycles, self._synthesis)
-        self.phases.append(5)
-
-        # --- Phase 6: evaluation + continue/complete ---
-        evaluation, status = self._phase(6, self.cycles, self._evaluate,
-            intake, mission, dispatch_results, verdict, max_iterations
-        )
-        self.phases.append(6)
-
-        # Rolling window + archive cap (Epic 7): old sessions move to the
-        # archives; the audit path stays resolvable.
-        self.history.maintain()
-
-        return SessionResult(
-            status=status,
-            phases=list(self.phases),
-            intake=intake,
-            mission=mission,
-            dispatch_results=dispatch_results,
-            pods=list(self.pods),
-            verdict=verdict,
-            evaluation=evaluation,
-            cycles=self.cycles,
         )
 
     # --- Checkpointing (crash recovery, Story 1) ---------------------------
