@@ -26,7 +26,8 @@ def test_vague_prompt_converges(tmp_path):
     backend.set_script("leader", [
         {"summary": "need more info", "questions": ["What is the output?"], "confidence": 0.4},
         {"summary": "narrowing", "questions": ["What is the success criterion?"], "confidence": 0.6},
-        {"summary": "understood", "questions": [], "confidence": 0.9},
+        {"summary": "understood", "questions": [], "confidence": 0.9,
+         "restated_goal": "build a thing that is accurate"},
     ])
 
     # Round 1 is the hard-coded goal question (no MISSION.md exists); the
@@ -57,7 +58,8 @@ def test_clear_prompt_short_circuits(tmp_path):
     backend = StubBackend()
     # Round 1: confident immediately (no questions).
     backend.set_script("leader", [
-        {"summary": "clear", "questions": [], "confidence": 0.9},
+        {"summary": "clear", "questions": [], "confidence": 0.9,
+         "restated_goal": "build a data pipeline that produces a weekly report"},
     ])
     # Isolated mission path in tmp_path (does not exist -> hard-coded goal
     # question at round 1), so the test does not depend on the repo root.
@@ -110,3 +112,68 @@ def test_budget_exhaustion_marks_assumptions(tmp_path):
     assert result.rounds == 3
     assert "assume weekly cadence" in result.assumptions
     assert os.path.exists(os.path.join(str(tmp_path), "intake.jsonl"))
+
+
+# --- Story 11 (B10, B11) ----------------------------------------------------
+
+def test_b10_no_convergence_without_restated_goal(tmp_path):
+    """Story 11 (B10): intake does not converge when the leader reports high
+    confidence but an empty `restated_goal` (prevents premature convergence on
+    a fuzzy goal)."""
+    leader = make_leader()
+    backend = StubBackend()
+    # Round 2: confident but no restated_goal (fuzzy goal) — no convergence.
+    # Round 3: confident and restated_goal — converged.
+    backend.set_script("leader", [
+        {"summary": "confident but fuzzy", "questions": ["What is the scope?"],
+         "confidence": 0.9, "restated_goal": ""},
+        {"summary": "restated", "questions": [], "confidence": 0.9,
+         "restated_goal": "build a data pipeline"},
+    ])
+    mission_path = os.path.join(str(tmp_path), "MISSION.md")
+    answers = iter(["a", "b"])
+    result = run_intake(
+        backend,
+        leader,
+        "build a thing",
+        user_answer_fn=lambda qs: next(answers),
+        confidence_threshold=0.8,
+        question_budget=5,
+        history_dir=str(tmp_path),
+        mission_path=mission_path,
+    )
+    # Round 1 is the hard-coded goal question (no MISSION.md); the Leader
+    # gets round 2 (fuzzy, no convergence) and round 3 (restated, converged).
+    assert result.converged
+    assert result.rounds == 3
+
+
+def test_b11_user_answer_fn_raises_is_retried_then_escalated(tmp_path):
+    """Story 11 (B11): a `user_answer_fn` that raises is retried then
+    escalated (not a crash)."""
+    from runtime.guard import UserApprovalError
+    leader = make_leader()
+    backend = StubBackend()
+    # Round 1: not confident, asks a question.
+    backend.set_script("leader", [
+        {"summary": "need more info", "questions": ["What is the output?"],
+         "confidence": 0.4},
+    ])
+    mission_path = os.path.join(str(tmp_path), "MISSION.md")
+    # The user_answer_fn always raises.
+    def failing_answer_fn(qs):
+        raise RuntimeError("simulated failure")
+    try:
+        run_intake(
+            backend,
+            leader,
+            "build a thing",
+            user_answer_fn=failing_answer_fn,
+            confidence_threshold=0.8,
+            question_budget=5,
+            history_dir=str(tmp_path),
+            mission_path=mission_path,
+        )
+        raise AssertionError("expected UserApprovalError")
+    except UserApprovalError as e:
+        assert "simulated failure" in str(e)

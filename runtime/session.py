@@ -443,6 +443,15 @@ class Session:
 
     # --- Checkpointing (crash recovery, Story 1) ---------------------------
 
+    def _active_role_ids(self):
+        """The active role ids for memory persistence (Story 11, B8): the
+        current org's role ids **plus the leader**. The leader drives the
+        whole session but is NOT a member of `self.org.roles` (only the
+        hired heads/managers/ICs are) — without it, the leader's memory
+        would be pruned as "stale" (and wiped in place), losing the
+        pre-crash state Story 1 (B1) requires to be recoverable."""
+        return {self.leader.id, *self.org.roles.keys()}
+
     def _checkpoint(self, phase: int, cycle: int) -> str:
         """Write a mid-run checkpoint (Story 1, B1/B4): persist the org chart
         + each role's memory + the event log, then record the phase/cycle
@@ -454,7 +463,11 @@ class Session:
         memory_dir = self.config.get("memory_dir", "state/role_memory")
         checkpoint_path = self.config.get("checkpoint_path", "state/checkpoint.json")
         self.org.save(org_chart_path)
-        self.backend.save_state(memory_dir)
+        # Story 11 (B8): prune stale (fired) roles' memories before saving —
+        # only the active role ids (the current org's role ids + the leader)
+        # are persisted.
+        self.backend.save_state(memory_dir,
+                                active_role_ids=self._active_role_ids())
         self.org.write_events()
         parent = os.path.dirname(checkpoint_path)
         if parent:
@@ -686,7 +699,11 @@ class Session:
 
         # Persist each role's memory (so it carries into the next run) and the
         # org chart (so a --revisit run loads it).
-        self.backend.save_state(memory_dir)
+        # Story 11 (B8): prune stale (fired) roles' memories before saving —
+        # only the active role ids (the current org's role ids + the leader)
+        # are persisted.
+        self.backend.save_state(memory_dir,
+                                active_role_ids=self._active_role_ids())
         self.org.save(org_chart_path)
 
         return SessionResult(

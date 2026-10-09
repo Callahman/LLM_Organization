@@ -38,6 +38,11 @@ REQUIRED_DEPARTMENTS = ("hr", "safety", "morality")
 # 3-IC direct-report cap for a non-manager (department head without a manager).
 DIRECT_IC_CAP = 3
 
+# Story 11 (B16): total org-size cap (default 60 roles). Enforced in the
+# bootstrap (head count) and Phase 4 (hires); on exceed, refuse with a visible
+# note (never silent).
+MAX_ORG_ROLES = 60
+
 
 class ResourcingError(ValueError):
     """A resourcing action that violates the approval matrix / caps."""
@@ -226,8 +231,9 @@ def _create_team_dir(role: Role, departments_dir: str) -> None:
 
 # --- Bootstrap -------------------------------------------------------------
 
-def _bootstrap_context(mission_result: MissionResult) -> str:
-    return (
+def _bootstrap_context(mission_result: MissionResult,
+                       retry_hint: str = "") -> str:
+    ctx = (
         "PHASE 3: propose the initial department heads for the mission. "
         "Produce org_recommendation with the department heads as a NON-EMPTY "
         "list — use the key `department_heads` (items: {id, department, "
@@ -242,6 +248,15 @@ def _bootstrap_context(mission_result: MissionResult) -> str:
         "and must NOT contain only the required departments: without "
         "operational heads, Phase 4 cannot dispatch any work."
     )
+    # Story 11 (B15): on a retry, append the previous attempt's failure reason
+    # so the leader can adjust (instead of re-sending the same context).
+    if retry_hint:
+        ctx += (
+            "\n\nPREVIOUS ATTEMPT FAILED — adjust your proposal. The leader "
+            f"reply did not include an operational department head. "
+            f"Diagnostic: {retry_hint}"
+        )
+    return ctx
 
 
 def _has_operational_head(heads: List[Dict[str, Any]]) -> bool:
@@ -382,9 +397,13 @@ def bootstrap(
     # operational department head (not just the required governance depts).
     proposed: List[Dict[str, Any]] = []
     last_out: Dict[str, Any] = {}
+    # Story 11 (B15): on a retry, append the previous attempt's failure reason
+    # to the context so the leader can adjust (instead of re-sending the same
+    # context).
+    retry_hint = ""
     for _ in range(max(1, head_retry_budget)):
         last_out = backend.invoke(
-            leader, _bootstrap_context(mission_result),
+            leader, _bootstrap_context(mission_result, retry_hint=retry_hint),
             # The Leader's head proposal is a resourcing decision -> thinking on.
             reasoning=classify_complexity(3, leader, {"is_decision": True}),
             # The head proposal is a heavy operation (it proposes 5-6 department
@@ -398,6 +417,13 @@ def bootstrap(
         if _has_operational_head(candidate):
             proposed = candidate
             break
+        # Story 11 (B15): build the retry hint from the previous attempt's
+        # failure reason (the top-level / `org_recommendation` keys).
+        rec = last_out.get("org_recommendation")
+        rec_keys = (list(rec.keys()) if isinstance(rec, dict)
+                    else type(rec).__name__)
+        top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
+        retry_hint = f"top-level keys: {top_keys}; org_recommendation: {rec_keys}"
     if not _has_operational_head(proposed):
         # Visible diagnostic: show exactly what the leader returned so the
         # cause is self-evident from the traceback (no re-run to debug).
@@ -412,6 +438,17 @@ def bootstrap(
             "work could be dispatched in Phase 4. Re-run the session.\n"
             f"  leader reply top-level keys: {top_keys}\n"
             f"  leader reply org_recommendation: {rec_keys}"
+        )
+    # Story 11 (B16): total org-size cap — refuse a bootstrap that proposes
+    # more heads than the cap (visible note, never silent).
+    current_roles = len(org.roles)
+    if current_roles + len(proposed) > MAX_ORG_ROLES:
+        raise BootstrapError(
+            f"Phase 3 proposed {len(proposed)} department heads, but the org "
+            f"already has {current_roles} roles — adding all heads would "
+            f"exceed the total org-size cap ({MAX_ORG_ROLES}). Refusing the "
+            "bootstrap (visible note, never silent). Re-run with a smaller "
+            "org recommendation."
         )
     created: List[Role] = []
     for spec in proposed:

@@ -10,6 +10,8 @@ role (within `max_entries_range`), and accumulates both conversations
 (the third carry-over path).
 """
 
+import os
+
 from roles.base import Role
 from runtime.llm import StubBackend, MemoryBackend
 
@@ -108,3 +110,39 @@ def test_seed_cross_team_entry():
     before = len(memory.entries)
     mem.seed_cross_team("ic1", "pod_mgr1_2", "", team="pipelines")
     assert len(memory.entries) == before
+
+
+# --- Story 11 (B8, B9) ------------------------------------------------------
+
+def test_b9_deterministic_memory_bound():
+    """Story 11 (B9): the same role id gets the same `max_entries` bound across
+    two fresh `MemoryBackend` instances (deterministic per role)."""
+    stub = StubBackend()
+    mem1 = MemoryBackend(stub, max_entries_range=(5, 20))
+    mem2 = MemoryBackend(stub, max_entries_range=(5, 20))
+    bound1 = mem1._memory_for("roleX").max_entries
+    bound2 = mem2._memory_for("roleX").max_entries
+    assert bound1 == bound2
+
+
+def test_b8_prune_stale_role_memories(tmp_path):
+    """Story 11 (B8): a `save_state` after a run with fired roles does not
+    re-persist the fired roles' memory files (stale memories are pruned)."""
+    stub = StubBackend()
+    mem = MemoryBackend(stub, max_entries_range=(5, 20))
+    # Simulate a run with active + fired roles.
+    mem._memory_for("active1")
+    mem._memory_for("active2")
+    mem._memory_for("stale1")
+    mem._memory_for("stale2")
+    directory = os.path.join(str(tmp_path), "role_memory")
+    saved = mem.save_state(directory, active_role_ids=["active1", "active2"])
+    assert saved == 2
+    # stale roles should be pruned from role_memories.
+    assert "stale1" not in mem.role_memories
+    assert "stale2" not in mem.role_memories
+    # Only the active roles' files are persisted.
+    assert os.path.exists(os.path.join(directory, "active1.json"))
+    assert os.path.exists(os.path.join(directory, "active2.json"))
+    assert not os.path.exists(os.path.join(directory, "stale1.json"))
+    assert not os.path.exists(os.path.join(directory, "stale2.json"))
