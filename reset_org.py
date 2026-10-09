@@ -43,6 +43,32 @@ def _collect_targets() -> list:
     return targets
 
 
+def wipe_state(verbose: bool = True) -> list:
+    """Wipe the generated state (the same logic as a ``reset_org --yes`` run).
+
+    Returns the list of paths that were deleted (empty if there was nothing to
+    reset). Each deletion is printed when ``verbose`` (the "visible, never
+    silent" philosophy). Reused by ``run_session.py`` for a fresh run (S16) so
+    a run with no ``MISSION.md`` starts from a clean slate."""
+    targets = _collect_targets()
+    if not targets:
+        if verbose:
+            print("Nothing to reset — no generated state found.")
+        return []
+    deleted = []
+    for t in targets:
+        if os.path.isdir(t):
+            shutil.rmtree(t)
+        elif os.path.exists(t):
+            os.remove(t)
+        deleted.append(t)
+        if verbose:
+            print(f"deleted: {t}")
+    if verbose:
+        print("Organization reset complete.")
+    return deleted
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Reset the organization (wipe generated state).")
@@ -62,13 +88,7 @@ def main() -> None:
             print(f"  {t}")
         return
 
-    for t in targets:
-        if os.path.isdir(t):
-            shutil.rmtree(t)
-        elif os.path.exists(t):
-            os.remove(t)
-        print(f"deleted: {t}")
-    print("Organization reset complete.")
+    wipe_state(verbose=True)
 
 
 if __name__ == "__main__":

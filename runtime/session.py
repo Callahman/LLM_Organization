@@ -346,6 +346,7 @@ class Session:
         phase4_halt_fn: Optional[Callable[[], Optional[Dict[str, str]]]] = None,
         max_iterations: int = 3,
         revisit: bool = False,
+        resume_from_phase: int = 1,
     ) -> SessionResult:
         """Run the pipeline: Phases 1-3 run **once** (intake, mission, org
         bootstrap), then Phases 4 & 5 **iterate** (dispatch, synthesis) for up
@@ -358,7 +359,13 @@ class Session:
         run (so a role remembers prior runs). A `revisit` run additionally
         loads the saved org chart + the current mission, re-clarifies the goal
         in Phase 1, continues the mission version in Phase 2, bootstraps
-        additively in Phase 3, and re-saves the org chart at the end."""
+        additively in Phase 3, and re-saves the org chart at the end.
+
+        ``resume_from_phase`` (S15): the phase to start from. A revisit from a
+        checkpoint at phase 3 or 4 skips Phases 1-3 (the org + mission are
+        loaded) and resumes from Phase 4 (the dispatch continues); the intake
+        + mission are not re-derived (``_escalate`` handles them being
+        ``None``)."""
         memory_dir = self.config.get("memory_dir", "state/role_memory")
         org_chart_path = self.config.get("org_chart_path", "state/org_chart.json")
         mission_path = self.config.get("mission_path", "MISSION.md")
@@ -399,68 +406,85 @@ class Session:
         self.phases = []
         self.cycles = 0
 
-        # --- Phase 1: intake (once) ---
-        intake = self._phase(1, 0, run_intake,
-            self.backend, self.leader, initial_prompt, user_answer_fn,
-            confidence_threshold=self.config.get("confidence_threshold", 0.8),
-            question_budget=self.config.get("question_budget", 5),
-            history_dir=self.org.history_dir,
-            current_mission=current_mission,
-            mission_path=mission_path,
-        )
-        self.phases.append(1)
-        # Solo (P1): record the leader's intake so the dashboard can watch it.
-        self.solo.record("p1", "Phase 1: intake", 0, "intake",
-                         {"summary": f"intake converged={intake.converged} "
-                                     f"rounds={intake.rounds}",
-                          "confidence": intake.confidence,
-                          "converged": intake.converged,
-                          "rounds": intake.rounds,
-                          "assumptions": intake.assumptions})
+        # S15: a resume-from-checkpoint skips Phases 1-3 (the org + mission
+        # are loaded in the revisit branch above) and resumes from Phase 4 —
+        # the dispatch continues without re-deriving the intake / mission.
+        if resume_from_phase >= 4 and revisit:
+            print(
+                f"[session] resuming from Phase 4 (skipping Phases 1-3; the "
+                f"org + mission are loaded, the dispatch continues)",
+                file=sys.stderr,
+            )
+            intake = None
+            mission = None
+            mission_draft = current_mission
+        else:
+            # --- Phase 1: intake (once) ---
+            intake = self._phase(1, 0, run_intake,
+                self.backend, self.leader, initial_prompt, user_answer_fn,
+                confidence_threshold=self.config.get("confidence_threshold", 0.8),
+                question_budget=self.config.get("question_budget", 5),
+                history_dir=self.org.history_dir,
+                current_mission=current_mission,
+                mission_path=mission_path,
+            )
+            self.phases.append(1)
+            # Solo (P1): record the leader's intake so the dashboard can
+            # watch it.
+            self.solo.record("p1", "Phase 1: intake", 0, "intake",
+                             {"summary": f"intake converged={intake.converged} "
+                                         f"rounds={intake.rounds}",
+                              "confidence": intake.confidence,
+                              "converged": intake.converged,
+                              "rounds": intake.rounds,
+                              "assumptions": intake.assumptions})
 
-        # --- Phase 2: mission (once) ---
-        mission = self._phase(2, 0, run_mission,
-            self.backend, self.leader, intake, user_permission_fn,
-            history_dir=self.org.history_dir,
-            reask_budget=self.config.get("mission_reask_budget", 3),
-            start_version=start_version,
-            current_mission=current_mission,
-        )
-        self.phases.append(2)
-        # Solo (P2): record the leader's mission draft + approval.
-        self.solo.record("p2", "Phase 2: mission", 0, "mission",
-                         {"summary": f"mission approved={mission.approved} "
-                                     f"version={mission.version} "
-                                     f"attempts={mission.attempts}",
-                          "approved": mission.approved,
-                          "version": mission.version,
-                          "attempts": mission.attempts,
-                          "edits": len(mission.edits)})
-        # A1: close the solo pod when the mission phase completes.
-        self.solo.close("p2", f"mission approved={mission.approved}, "
-                              f"v{mission.version}")
-        if not mission.approved:
-            return self._escalate("mission not approved by the user", intake, mission)
-        mission_draft = mission.edits[-1]["draft"]
+            # --- Phase 2: mission (once) ---
+            mission = self._phase(2, 0, run_mission,
+                self.backend, self.leader, intake, user_permission_fn,
+                history_dir=self.org.history_dir,
+                reask_budget=self.config.get("mission_reask_budget", 3),
+                start_version=start_version,
+                current_mission=current_mission,
+            )
+            self.phases.append(2)
+            # Solo (P2): record the leader's mission draft + approval.
+            self.solo.record("p2", "Phase 2: mission", 0, "mission",
+                             {"summary": f"mission approved={mission.approved} "
+                                         f"version={mission.version} "
+                                         f"attempts={mission.attempts}",
+                              "approved": mission.approved,
+                              "version": mission.version,
+                              "attempts": mission.attempts,
+                              "edits": len(mission.edits)})
+            # A1: close the solo pod when the mission phase completes.
+            self.solo.close("p2", f"mission approved={mission.approved}, "
+                                  f"v{mission.version}")
+            if not mission.approved:
+                return self._escalate("mission not approved by the user",
+                                      intake, mission)
+            mission_draft = mission.edits[-1]["draft"]
 
-        # --- Phase 3: org bootstrap (once) ---
-        self._phase(3, 0, bootstrap,
-            self.org, self.backend, self.leader, mission, approver_fn,
-            additive=revisit,
-            bootstrap_timeout_seconds=self.config.get(
-                "bootstrap_timeout_seconds", self.config.get("ic_timeout_seconds")))
-        self.org.write_events()
-        # Story 1 (B1): checkpoint after Phase 3 — a crash in Phase 4 loses at
-        # most the current iteration's hires, not the bootstrapped org.
-        self._checkpoint(3, 0)
-        self.phases.append(3)
-        # Solo (P3): record the leader's org-bootstrap.
-        self.solo.record("p3", "Phase 3: org bootstrap", 0, "bootstrap",
-                         {"summary": "org bootstrapped",
-                          "departments": len(self.org.department_heads()),
-                          "roles": len(self.org.roles)})
-        # A1: close the solo pod when the bootstrap phase completes.
-        self.solo.close("p3", "org bootstrapped")
+            # --- Phase 3: org bootstrap (once) ---
+            self._phase(3, 0, bootstrap,
+                self.org, self.backend, self.leader, mission, approver_fn,
+                additive=revisit,
+                bootstrap_timeout_seconds=self.config.get(
+                    "bootstrap_timeout_seconds",
+                    self.config.get("ic_timeout_seconds")))
+            self.org.write_events()
+            # Story 1 (B1): checkpoint after Phase 3 — a crash in Phase 4
+            # loses at most the current iteration's hires, not the
+            # bootstrapped org.
+            self._checkpoint(3, 0)
+            self.phases.append(3)
+            # Solo (P3): record the leader's org-bootstrap.
+            self.solo.record("p3", "Phase 3: org bootstrap", 0, "bootstrap",
+                             {"summary": "org bootstrapped",
+                              "departments": len(self.org.department_heads()),
+                              "roles": len(self.org.roles)})
+            # A1: close the solo pod when the bootstrap phase completes.
+            self.solo.close("p3", "org bootstrapped")
 
         # --- Phases 4 & 5: iterate (bounded + goal-based stop) ---
         dispatch_results: List[Dict[str, Any]] = []

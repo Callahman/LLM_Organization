@@ -14,6 +14,7 @@ watch and steer the Leader.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 
 try:
@@ -73,6 +74,48 @@ def _interactive_callbacks():
     return user_answer_fn, user_permission_fn, approver_fn
 
 
+def _decide_run_mode(args, mission_path, checkpoint_path):
+    """S15/S16: decide the run mode (fresh vs revisit) + the resume point.
+
+    The default mode is **revisit** (S15: ``run_session.py`` defaults to
+    ``--revisit`` when no mode flag is given). Returns
+    ``(mode, resume_point, resume_from_phase)`` where:
+
+    - ``mode`` is ``"fresh"`` or ``"revisit"``.
+    - ``resume_point`` is a string describing where the run starts (for the
+      visible log).
+    - ``resume_from_phase`` is the phase to start from (1 for a fresh run or a
+      revisit with no checkpoint; 4 for a revisit from a checkpoint at phase 3
+      or 4, which skips Phases 1-3).
+
+    Precedence:
+    1. ``--fresh`` (explicit) -> fresh.
+    2. ``MISSION.md`` absent -> fresh (S16: clear the environment).
+    3. ``checkpoint.json`` present -> revisit from the checkpointed phase/cycle.
+    4. no checkpoint -> revisit from the last phase (re-clarify from Phase 1).
+    """
+    if getattr(args, "fresh", False):
+        return "fresh", "Phase 1 (fresh, --forced)", 1
+    if not os.path.exists(mission_path):
+        return "fresh", "Phase 1 (fresh, no MISSION.md)", 1
+    if os.path.exists(checkpoint_path):
+        cp_phase, cp_cycle = 3, 0
+        try:
+            with open(checkpoint_path, encoding="utf-8") as f:
+                cp = json.load(f)
+            cp_phase, cp_cycle = cp.get("phase", 3), cp.get("cycle", 0)
+        except (OSError, ValueError):
+            pass
+        # A checkpoint at phase 3 or 4 -> resume from Phase 4 (skip Phases
+        # 1-3; the org + mission are loaded, the dispatch continues).
+        resume_from_phase = 4 if cp_phase >= 3 else cp_phase + 1
+        return ("revisit",
+                f"checkpoint phase {cp_phase}, cycle {cp_cycle}",
+                resume_from_phase)
+    return ("revisit",
+            "last phase (no checkpoint, re-clarify from Phase 1)", 1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the Organization pipeline.")
@@ -85,7 +128,14 @@ def main() -> None:
         help="revisit the current mission: re-clarify the goal (Phase 1), "
              "continue the mission version (Phase 2), bootstrap additively "
              "(Phase 3), and re-save the org chart. Roles remember prior "
-             "runs (their memory is loaded from / saved to disk).")
+             "runs (their memory is loaded from / saved to disk). This is the "
+             "DEFAULT mode (S15) — it resumes the current mission from the "
+             "last checkpoint / last phase.")
+    parser.add_argument(
+        "--fresh", action="store_true",
+        help="S15: force a FRESH run (clear the generated state first, then "
+             "start from Phase 1) — overrides the default --revisit mode. Use "
+             "this to start a brand-new mission.")
     parser.add_argument(
         "--dry-run", action="store_true",
         help="D7: preview what a run would do without mutating the org's "
@@ -128,6 +178,25 @@ def main() -> None:
         os.chdir(dry_run_dir)
         print(f"[dry-run] previewing in a throwaway dir: {dry_run_dir} "
               f"(the real org is left untouched)")
+
+    # S15/S16: decide the run mode (fresh vs revisit) + the resume point. The
+    # default mode is revisit (S15: run_session.py defaults to --revisit when
+    # no mode flag is given).
+    mission_path = config.get("mission_path", "MISSION.md")
+    checkpoint_path = config.get("checkpoint_path", "state/checkpoint.json")
+    run_mode, resume_point, resume_from_phase = _decide_run_mode(
+        args, mission_path, checkpoint_path)
+    print(f"[run-mode] mode={run_mode}, resume from: {resume_point}, "
+          f"resume_from_phase={resume_from_phase}")
+
+    # S16: a fresh run clears the generated state first (visible, never
+    # silent) — the same wipe logic as `reset_org --yes`, so a run with no
+    # MISSION.md starts from a clean slate.
+    if run_mode == "fresh":
+        import reset_org
+        print("[run-mode] fresh run — clearing the generated state first...")
+        reset_org.wipe_state(verbose=True)
+
     session = Session(
         backend=make_backend(),
         leader=make_leader(),
@@ -135,7 +204,7 @@ def main() -> None:
     )
 
     mode = "interactive" if args.interactive else "unattended"
-    if args.revisit:
+    if run_mode == "revisit":
         print("Revisiting the current mission (roles remember prior runs)...")
     else:
         print(f"Running the Organization pipeline ({mode})...")
@@ -147,7 +216,10 @@ def main() -> None:
         # D6: the Phase 4/5 iteration cap is config-driven (MAX_ITERATIONS in
         # .env, default 2) — not hardcoded.
         max_iterations=config.get("max_iterations", 2),
-        revisit=args.revisit,
+        revisit=(run_mode == "revisit"),
+        # S15: the resume-from phase (a revisit from a checkpoint at phase 3
+        # or 4 skips Phases 1-3 and resumes from Phase 4).
+        resume_from_phase=resume_from_phase,
     )
 
     print("=== Session complete ===")
