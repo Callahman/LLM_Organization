@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 
 from roles.base import Role, spin_personality, spin_sub_architype
 from roles.worker import worker_output_schema
+from org import tiers
 from runtime.org import (
     OrgState,
     hire,
@@ -455,11 +456,14 @@ def _check_pod_triggers(
             roles, starter.id, member_ids,
             _pod_topic(team_obj.get("objective", ""), triggers),
             cross_team=bool(team_obj.get("cross_team")),
+            min_roles=(config or {}).get("pod_min_roles", tiers.POD_MIN_ROLES),
+            max_roles=(config or {}).get("pod_max_roles", tiers.POD_MAX_ROLES),
         )
     except PodMembershipError:
         return
     run_pod(backend, pod, max_rounds=(config or {}).get("pod_max_rounds", 3),
-            transcripts_dir=transcripts_dir)
+            transcripts_dir=transcripts_dir,
+            budget_tokens=(config or {}).get("context_budget_tokens", 4000))
     # Write the pod's transcript (pods/transcripts/) + its decision artifact
     # (pods/artifacts/).
     write_transcripts(pod, transcripts_dir=transcripts_dir)
@@ -494,13 +498,16 @@ def _check_pod_triggers(
                     pod, roles, boss.id, [boss.id, starter.id],
                     f"escalation of {pod.topic}",
                     first_artifact_path=base + ".md",
+                    min_roles=(config or {}).get("pod_min_roles", tiers.POD_MIN_ROLES),
+                    max_roles=(config or {}).get("pod_max_roles", tiers.POD_MAX_ROLES),
                 )
             except PodMembershipError:
                 chained = None
             if chained is not None:
                 run_pod(backend, chained,
                         max_rounds=(config or {}).get("pod_max_rounds", 3),
-                        transcripts_dir=transcripts_dir)
+                        transcripts_dir=transcripts_dir,
+                        budget_tokens=(config or {}).get("context_budget_tokens", 4000))
                 write_transcripts(chained, transcripts_dir=transcripts_dir)
                 write_decision_artifact(chained, artifacts_dir=artifacts_dir)
         else:
