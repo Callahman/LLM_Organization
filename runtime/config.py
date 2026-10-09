@@ -26,16 +26,21 @@ ENV_TO_CONFIG: Dict[str, Tuple[str, Any]] = {
     "CONFIDENCE_THRESHOLD": ("confidence_threshold", float),
     "QUESTION_BUDGET_ROUNDS": ("question_budget", int),
     "MISSION_REASK_BUDGET": ("mission_reask_budget", int),
-    # Story 8 (B18/C2): the 4 plumb-ed knobs (POD_MAX_ROUNDS, DIRECT_IC_CAP,
+    # Story 8 (B18/C2): the 4 pod/context knobs (POD_MAX_ROUNDS, DIRECT_IC_CAP,
     # HISTORY_WINDOW_SESSIONS, ARCHIVE_CAP_MB) are consumed by their single
-    # consumers. The other 4 (POD_MIN_ROLES, POD_MAX_ROLES,
-    # CONTEXT_BUDGET_TOKENS, ROLE_MEMORY_MAX_ENTRIES) were dropped from this
-    # map so the "unused .env key" warning fires (visible, not silently
-    # ignored).
+    # consumers.
     "POD_MAX_ROUNDS": ("pod_max_rounds", int),
     "DIRECT_IC_CAP": ("direct_ic_cap", int),
     "HISTORY_WINDOW_SESSIONS": ("history_window_sessions", int),
     "ARCHIVE_CAP_MB": ("archive_cap_mb", int),
+    # S20 (wire-in): the 4 previously-dropped pod/context knobs are now plumbed
+    # to their consumers (pod size bounds in org/tiers.py::validate_pod, the
+    # context token budget in runtime/context.py::bounded_assembly, and the
+    # role-memory cap in runtime/llm.py::MemoryBackend).
+    "POD_MIN_ROLES": ("pod_min_roles", int),
+    "POD_MAX_ROLES": ("pod_max_roles", int),
+    "CONTEXT_BUDGET_TOKENS": ("context_budget_tokens", int),
+    "ROLE_MEMORY_MAX_ENTRIES": ("role_memory_max_entries", int),
     # The two wall-clock timeout backstops (the primary bound is the backend's
     # idle timeout, LLM_IDLE_TIMEOUT_SECONDS, read by make_backend).
     "LLM_TIMEOUT_SECONDS": ("timeout_seconds", float),

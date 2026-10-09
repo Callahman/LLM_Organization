@@ -72,6 +72,8 @@ def form_pod(
     member_ids: List[str],
     topic: str,
     cross_team: bool = False,
+    min_roles: int = tiers.POD_MIN_ROLES,
+    max_roles: int = tiers.POD_MAX_ROLES,
 ) -> Pod:
     """Form a pod from `roles`: the starter + members, validated against the
     2–6 size and 1-tier-spread bounds (raises `PodMembershipError` if invalid).
@@ -87,7 +89,8 @@ def form_pod(
     reject the pod)."""
     members = [roles[mid] for mid in member_ids]
     starter = roles[starter_id]
-    ok, reason = tiers.validate_pod(members)
+    ok, reason = tiers.validate_pod(members, min_roles=min_roles,
+                                    max_roles=max_roles)
     if not ok:
         raise PodMembershipError(reason)
     # Story 10 (A11): the communication gate — every member pair must be able
@@ -113,12 +116,15 @@ def chained_pod(
     member_ids: List[str],
     topic: str,
     first_artifact_path: str = "",
+    min_roles: int = tiers.POD_MIN_ROLES,
+    max_roles: int = tiers.POD_MAX_ROLES,
 ) -> Pod:
     """Form a second (chained escalation) pod that carries the first pod's
     **decision artifact** up the line. `first_artifact_path` is the first pod's
     decision-artifact markdown; the first pod's decision is also carried into
     the new pod's context."""
-    pod = form_pod(roles, starter_id, member_ids, topic)
+    pod = form_pod(roles, starter_id, member_ids, topic,
+                   min_roles=min_roles, max_roles=max_roles)
     pod.input_artifacts = [first_artifact_path] if first_artifact_path else []
     # Carry the first pod's decision into the context (via the transcript seed).
     pod.transcript.append({
@@ -165,7 +171,8 @@ def _pod_ctx(pod: Pod, kind: str, prior: str = "",
 
 def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
             transcripts_dir: Optional[str] = None,
-            pod_wall_clock_seconds: float = 600.0) -> Pod:
+            pod_wall_clock_seconds: float = 600.0,
+            budget_tokens: int = 4000) -> Pod:
     """Run a pod's conversation:
 
     1. the **starter** sets the agenda (it manages the conversation);
@@ -179,7 +186,8 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
     **live** (the observability dashboard tails it for the active-pod view).
     """
     # 1. The starter sets the agenda.
-    out = backend.invoke(pod.starter, _pod_ctx(pod, "agenda"),
+    out = backend.invoke(pod.starter,
+                         _pod_ctx(pod, "agenda", budget_tokens=budget_tokens),
                          reasoning=classify_complexity(4, pod.starter, {}), phase=4)
     pod.agenda = str(out.get("agenda", ""))
     pod.transcript.append({
@@ -204,8 +212,9 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
         disagreement = detect_disagreement(prev_outputs)
         for member in pod.members:
             level = classify_complexity(4, member, {"disagreement": disagreement})
-            out = backend.invoke(member, _pod_ctx(pod, "speak"), reasoning=level,
-                                 phase=4)
+            out = backend.invoke(member,
+                                 _pod_ctx(pod, "speak", budget_tokens=budget_tokens),
+                                 reasoning=level, phase=4)
             summary = str(out.get("summary", ""))
             this_round.append((member.id, summary))
             this_outputs.append(out)
@@ -223,7 +232,8 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
         prev_outputs = this_outputs
 
     # 3. The starter always closes, producing the decision.
-    out = backend.invoke(pod.starter, _pod_ctx(pod, "close"),
+    out = backend.invoke(pod.starter,
+                         _pod_ctx(pod, "close", budget_tokens=budget_tokens),
                          reasoning=classify_complexity(4, pod.starter, {}), phase=4)
     pod.decision = str(out.get("decision", ""))
     pod.rationale = str(out.get("rationale", ""))

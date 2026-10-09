@@ -1,8 +1,8 @@
-"""Story 8 (Config consumption) — every .env knob is consumed or dropped.
+"""Story 8 (Config consumption) — every .env knob is consumed (or warns).
 
 (a) A plumb-ed knob (POD_MAX_ROUNDS) actually reaches its consumer (run_pod).
-(b) A dropped knob (POD_MIN_ROLES) triggers the "unused .env key" warning
-    (visible, not silently ignored).
+(b) An unknown/typo'd knob (not in ENV_TO_CONFIG / LLM_BACKEND_KEYS) triggers
+    the "unused .env key" warning (visible, not silently ignored).
 """
 
 from __future__ import annotations
@@ -55,13 +55,14 @@ def test_pod_max_rounds_plumbed(monkeypatch, tmp_path):
     assert 5 in recorded
 
 
-def test_dropped_knob_warns(monkeypatch, capsys):
-    """Set a dropped knob in the env; assert the "unused .env key" warning is
-    printed (capture stderr)."""
+def test_unknown_knob_warns(monkeypatch, capsys):
+    """Set an unknown/typo'd knob in the .env file; assert the "unused .env key"
+    warning is printed (capture stderr)."""
     import runtime.config as c
-    # Mock _read_env_file_keys to return the dropped knob (POD_MIN_ROLES is no
-    # longer in ENV_TO_CONFIG, so the "unused .env key" warning fires).
-    monkeypatch.setattr(c, "_read_env_file_keys", lambda: {"POD_MIN_ROLES"})
+    # Mock _read_env_file_keys to return a key that is NOT in ENV_TO_CONFIG /
+    # LLM_BACKEND_KEYS (a typo'd knob — POD_MIN_ROLE is missing the trailing S),
+    # so the "unused .env key" warning fires.
+    monkeypatch.setattr(c, "_read_env_file_keys", lambda: {"POD_MIN_ROLE"})
     c.load_config()
     captured = capsys.readouterr()
-    assert "unused .env key: POD_MIN_ROLES" in captured.err
+    assert "unused .env key: POD_MIN_ROLE" in captured.err

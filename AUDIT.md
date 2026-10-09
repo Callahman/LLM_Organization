@@ -241,22 +241,6 @@ MemoryBackend( RoutingBackend( TimeoutBackend( raw ) ) )
 environment: `LLM_BACKEND=api` → `OpenAIBackend`; `stub` (or unset) →
 `StubBackend`.
 
-### 2.6 Documentation gaps (referenced-but-missing docs)
-
-The following docs are referenced in the repo but are **absent** from the
-current tree (the head commit `3ee30ab "Remove old epic"` suggests they were
-removed):
-
-| Missing doc | Referenced by |
-|---|---|
-| `Organization_Outline.md` | `README.md` (design spec); `SETUP.md` Step 0; `org/tiers.py` docstring (§2.4, §2.8); `roles/leader.py` docstring (§2.2, §2.2.1) |
-| `EXECUTION_CHECKLIST.md` | `README.md` (build tracker); `SETUP.md` Step 0 |
-| `OBSERVABILITY_CHECKLIST.md` | `SETUP.md` Step 0 |
-
-This is a **Medium** documentation finding (the design rationale is partially
-orphaned), recorded in §8.
-
----
 
 ## 3. WS2 — Directory-by-directory review
 
@@ -321,8 +305,8 @@ are the ones that matter for the interconnection map (§6).
 | `.env.example` | 4.6 | Config template | — | — | Documents every knob; pre-fills the localhost KoboldCpp/Qwen setup (`LLM_BACKEND=api`, port 5001). **Note:** `POD_MIN_ROLES` / `POD_MAX_ROLES` / `CONTEXT_BUDGET_TOKENS` / `ROLE_MEMORY_MAX_ENTRIES` are listed here but **intentionally not mapped** by `runtime/config.py` (dead knobs — an "unused .env key" warning fires). See §5.1 / §8. |
 | `.env` | 4.6 | Active config (git-ignored) | — | — | Present on disk. |
 | `.gitignore` | 1.3 | VCS ignore rules | — | — | Ignores `.env`, `.venv/`, `__pycache__/`, pytest caches, and the generated-state dir contents (with `.gitkeep` re-include). |
-| `README.md` | 4.0 | **Primary doc** | — | — | Overview, pipeline, invariants, layout, offline-by-design, quick start. References missing `Organization_Outline.md` / `EXECUTION_CHECKLIST.md` (§2.6). |
-| `SETUP.md` | 18.2 | **Setup & rollout doc** | — | — | Step-by-step (git, venv, deps, tests), configuration table, LLM backend, permission layer, troubleshooting, "what done looks like". References missing checklists (§2.6). |
+| `README.md` | 4.0 | **Primary doc** | — | — | Overview, pipeline, invariants, layout, offline-by-design, quick start. |
+| `SETUP.md` | 18.2 | **Setup & rollout doc** | — | — | Step-by-step (git, venv, deps, tests), configuration table, LLM backend, permission layer, troubleshooting, "what done looks like". |
 | `MISSION.md` | 0.2 | **Generated state** (mission) | — | — | v1, minimal ("a data pipeline" / "works"). Written by Phase 2; loaded on a revisit. Git-ignored. |
 | `AUDIT.md` | — | **This document** | — | — | The audit. |
 
@@ -331,7 +315,7 @@ are the ones that matter for the interconnection map (§6).
 | File | Size | Role | Key exports | Internal deps | Notes |
 |---|---|---|---|---|---|
 | `__init__.py` | 0.3 | Package doc | — | — | Lists the modules. |
-| `config.py` | 3.4 | **Central config loader** (D1) | `load_config()`; `ENV_TO_CONFIG`; `LLM_BACKEND_KEYS` | — | Maps `.env` org-tuning knobs → `Session` config keys (with casts); warns on unknown/unused `.env` keys (only keys actually in the `.env` file, to avoid Windows shell-var noise). 4 pod/context knobs intentionally dropped so the "unused" warning fires. |
+| `config.py` | 3.4 | **Central config loader** (D1) | `load_config()`; `ENV_TO_CONFIG`; `LLM_BACKEND_KEYS` | — | Maps `.env` org-tuning knobs → `Session` config keys (with casts); warns on unknown/unused `.env` keys (only keys actually in the `.env` file, to avoid Windows shell-var noise). All pod/context knobs are plumbed to their consumers (the 4 previously-dropped ones were wired in by S20). |
 | `llm.py` | 9.5 | **Backend interface + wrappers** | `Reasoning`; `LLMBackend`; `StubBackend`; `LLMTimeoutError`; `TimeoutBackend`; `MemoryBackend` | `runtime.context` | `TimeoutBackend` runs the invoke in a daemon thread (portable timeout). `MemoryBackend` adds per-role isolated memory + persistence (atomic writes, pruned to active roles). |
 | `llm_api.py` | 37.1 | **Real (api) backend** | `OpenAIBackend`; `make_backend()`; `validate_and_quarantine()`; `OpenAIOutputError` | `runtime.llm`, `roles.base` | OpenAI-compatible client (httpx, lazy import). Forced `submit_output` tool call for structured output; validation + quarantine of malformed output; idle timeout; bounded retries on timeout. The largest runtime module. |
 | `intake.py` | 6.9 | **Phase 1** | `run_intake()`; `IntakeResult` | `roles.base`, `runtime.llm`, `runtime.complexity`, `runtime.coerce`, `runtime.guard` | Clarifying Q&A loop; hard-coded goal question when no `MISSION.md`; `restated_goal` convergence gate; budget exhaustion → marked assumptions; audit to `history/intake.jsonl`. |
@@ -380,7 +364,7 @@ are the ones that matter for the interconnection map (§6).
 
 | ID | File | Anomaly | Severity |
 |---|---|---|---|
-| F-1 | `.env.example` | Lists 4 knobs (`POD_MIN_ROLES`, `POD_MAX_ROLES`, `CONTEXT_BUDGET_TOKENS`, `ROLE_MEMORY_MAX_ENTRIES`) that `runtime/config.py` **intentionally does not map** (dead — an "unused .env key" warning fires). The doc implies they are active. | Medium |
+| F-1 | `.env.example` | Lists 4 knobs (`POD_MIN_ROLES`, `POD_MAX_ROLES`, `CONTEXT_BUDGET_TOKENS`, `ROLE_MEMORY_MAX_ENTRIES`) that `runtime/config.py` **intentionally does not map** (dead — an "unused .env key" warning fires). The doc implies they are active. **Resolved by S20**: the 4 knobs are now plumbed to their consumers (wired in). | Medium |
 | F-2 | `README.md` "Layout" | Does not list `observability/` (which exists and is operator-owned). | Low |
 | F-3 | `state/checkpoint.json` | Present from a prior live run (phase 4, cycle 1) — a stale checkpoint; a fresh run overwrites it. | Info |
 | F-4 | `pods/transcripts/` | 16 pods from a prior live run (generated state). | Info |
@@ -530,13 +514,9 @@ are the ones that matter for the interconnection map (§6).
 - **Docstrings are strong** — every module and most functions carry a
   purpose, a worked example, and (where relevant) the in-code "Story N (X)"
   rationale.
-- **Referenced-but-missing docs** (§2.6): `Organization_Outline.md`,
-  `EXECUTION_CHECKLIST.md`, `OBSERVABILITY_CHECKLIST.md` are cited by
-  `README.md`, `SETUP.md`, and `org/tiers.py` / `roles/leader.py` docstrings
-  but are absent (head commit "Remove old epic"). The design rationale is
-  partially orphaned — **Medium** finding.
 - **`.env.example` dead-knobs** (F-1) — the config doc implies 4 knobs are
   active that the code intentionally does not map — **Medium** finding.
+  **Resolved by S20**: the 4 knobs are now plumbed to their consumers (wired in).
 
 ---
 

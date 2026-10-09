@@ -25,6 +25,94 @@ machine) are in `SETUP.md`.
 6. **Evaluation** — a bounded **continue/complete** decision (the
    self-improving loop).
 
+## Process diagram
+
+The full process — entry points → configuration → the LLM backend chain → the
+6-phase pipeline → state files → observability. Cylinder nodes `[(…)]` are
+on-disk state files; the backend-chain subgraph shows the **call flow**
+(outermost wrapper → innermost raw backend).
+
+```mermaid
+flowchart TD
+    subgraph ENTRY["Entry points"]
+        RS["run_session.py<br/>(--interactive / --revisit / --dry-run)"]
+        RO["reset_org.py<br/>(--yes)"]
+        BAT["run_org.bat<br/>(one-shot live run)"]
+    end
+
+    ENV[(".env")]
+    CFG["runtime/config.py<br/>load_config()"]
+    MKB["runtime/llm_api.py<br/>make_backend()"]
+
+    subgraph BACKEND["LLM backend chain (built by session.build_backend)<br/>call flow: outermost → innermost"]
+        MB["MemoryBackend<br/>(isolated per-role memory)"]
+        RB["RoutingBackend<br/>(complexity routing + thinking budget)"]
+        TB["TimeoutBackend<br/>(idle timeout + wall-clock backstop)"]
+        RAW["raw backend<br/>OpenAIBackend (api) / StubBackend (stub)"]
+    end
+
+    subgraph PIPE["6-phase pipeline (runtime/session.py)"]
+        P1["Phase 1 · Intake<br/>clarifying Q&A"]
+        P2["Phase 2 · Mission<br/>draft + user approval"]
+        P3["Phase 3 · Org bootstrap<br/>+ resourcing"]
+        P4["Phase 4 · Dispatch<br/>top-down + upward reports"]
+        P5["Phase 5 · Synthesis<br/>verdict"]
+        P6["Phase 6 · Evaluation<br/>continue / complete"]
+    end
+
+    MISSION[("MISSION.md")]
+    ORGCHART[("state/org_chart.json")]
+    CKPT[("state/checkpoint.json")]
+    MEM[("state/role_memory/*.json")]
+    DEPT[("departments/*_POLICY.md")]
+    HIST[("history/*.jsonl")]
+    PODS[("pods/transcripts/*")]
+
+    subgraph OBS["Observability (operator-owned, agent-write-locked)"]
+        DASH["observability/dashboard.py<br/>(read-only, stdlib)"]
+        WEB["web/ (index.html, app.js, style.css)"]
+        BROWSE["browser<br/>http://127.0.0.1:8090"]
+    end
+
+    DONE["SessionResult"]
+
+    BAT --> RS
+    BAT --> DASH
+    ENV --> CFG
+    ENV --> MKB
+    CFG --> RS
+    MKB --> RAW
+    RS --> MB
+    MB --> RB
+    RB --> TB
+    TB --> RAW
+
+    RS --> P1
+    P1 --> P2 --> P3 --> P4
+    P4 --> P5 --> P6
+    P6 -->|continue (bounded by MAX_ITERATIONS)| P4
+    P6 -->|complete| DONE
+
+    P2 -->|approve (only write path)| MISSION
+    P3 --> DEPT
+    P3 --> ORGCHART
+    P1 --> HIST
+    P2 --> HIST
+    P3 --> HIST
+    P4 --> HIST
+    P4 --> PODS
+    MB --> MEM
+    RS --> CKPT
+
+    HIST --> DASH
+    PODS --> DASH
+    DASH --> WEB --> BROWSE
+
+    RO -->|wipe| DEPT
+    RO -->|wipe| ORGCHART
+    RO -->|wipe| MISSION
+```
+
 ## Revisiting the mission (`--revisit`)
 
 Roles remember their past: each role's isolated memory is loaded from / saved
@@ -71,6 +159,7 @@ state/org_chart.json  the saved org chart (loaded on a --revisit run)
 history/              audit trail (intake, mission edits, org events, ...)
 archives/             rolled-over sessions (size-capped)
 reports/              offloading plans + evaluation reports
+observability/        read-only dashboard (operator-owned, agent-write-locked)
 tests/                unit tests (offline, deterministic)
 ```
 
@@ -80,6 +169,20 @@ The code ships with a deterministic `StubBackend` (scripted per role) so every
 loop, budget, and schema check is testable **without a live model** — the same
 offline-iteration idea as the prior design's `--feed-file`. A real backend is
 wired behind the same `LLMBackend` interface (see `SETUP.md`).
+
+## Observability
+
+`observability/` is a **read-only** dashboard (stdlib-only, no dependencies)
+that tails the audit trail and state in real time: it reads `history/*.jsonl`,
+`state/`, and `pods/transcripts/`, and serves a local web UI. It is
+**operator-owned and agent-write-locked** — the pipeline never writes to it.
+Start it with:
+
+```
+python observability/dashboard.py --port 8090
+```
+
+then open http://127.0.0.1:8090.
 
 ## Quick start
 

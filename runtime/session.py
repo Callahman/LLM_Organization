@@ -89,8 +89,13 @@ def build_backend(
     routing = RoutingBackend(timed, thinking_budget, history)
     # Wrap with per-role isolated memory: each role's past conversations / work
     # are folded into its OWN prompt (and only its own), so reasoning is
-    # emergent rather than self-confirmation.
-    return MemoryBackend(routing)
+    # emergent rather than self-confirmation. The per-role cap (the hi of the
+    # `max_entries_range`) is the ROLE_MEMORY_MAX_ENTRIES .env knob (S20
+    # wire-in).
+    return MemoryBackend(
+        routing,
+        max_entries_range=(5, config.get("role_memory_max_entries", 20)),
+    )
 
 
 class Session:
