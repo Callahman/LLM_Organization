@@ -16,7 +16,7 @@ import random
 import threading
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from runtime.context import RoleMemory, assemble_prompt
 
@@ -184,7 +184,13 @@ class MemoryBackend(LLMBackend):
     def _memory_for(self, role_id: str) -> RoleMemory:
         if role_id not in self.role_memories:
             lo, hi = self.max_entries_range
-            max_entries = random.randint(lo, hi)
+            # Story 11 (B9): seed the RNG with the role id so the `max_entries`
+            # bound is **stable per role across runs** (instead of re-randomized
+            # when a disk file is absent). Each role still gets a slightly
+            # different bound (within `max_entries_range`) so roles don't all
+            # perform identically — but the same role id always gets the same
+            # bound.
+            max_entries = random.Random(role_id).randint(lo, hi)
             self.role_memories[role_id] = RoleMemory(max_entries=max_entries)
         return self.role_memories[role_id]
 
@@ -241,13 +247,28 @@ class MemoryBackend(LLMBackend):
 
     # --- Persistence (across runs) -----------------------------------------
 
-    def save_state(self, directory: str = "state/role_memory") -> int:
+    def save_state(self, directory: str = "state/role_memory",
+                   active_role_ids: Optional[Iterable[str]] = None) -> int:
         """Persist each role's memory to `<directory>/<role_id>.json`.
         Returns the number of roles saved. This is what a --continue /
         --revisit run loads so roles remember prior runs. Each file is written
         **atomically** (Story 1, B7): `<role_id>.json.tmp` first, then
         `os.replace` swaps it in — a crash mid-write leaves the previous good
-        memory intact (no partial JSON)."""
+        memory intact (no partial JSON).
+
+        Story 11 (B8): when ``active_role_ids`` is given (the current org's
+        role ids), the role memories are **pruned** to only those ids before
+        saving — stale (fired) roles' memories are dropped, so the memory dir
+        does not grow without bound across runs."""
+        if active_role_ids is not None:
+            active = set(active_role_ids)
+            # Only prune if the active set is non-empty (an empty org state
+            # should not wipe all role memories — the org is populated during
+            # the run, not before).
+            if active:
+                stale = [rid for rid in self.role_memories if rid not in active]
+                for rid in stale:
+                    del self.role_memories[rid]
         os.makedirs(directory, exist_ok=True)
         saved = 0
         for role_id, memory in self.role_memories.items():

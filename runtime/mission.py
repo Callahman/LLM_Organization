@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, List, Optional
 from roles.base import Role
 from runtime.intake import IntakeResult
 from runtime.llm import LLMBackend
+from runtime.guard import guarded_call
 from runtime.complexity import classify_complexity
 
 
@@ -181,7 +182,9 @@ def run_mission(
         out = backend.invoke(leader, ctx,
                              reasoning=classify_complexity(2, leader, {}), phase=2)
         draft = _mission_draft(out)
-        decision = user_permission_fn(draft)
+        # Story 11 (B11): guard the user-approval callback (bounded retry,
+        # visible note, escalate on final failure — never a silent crash).
+        decision = guarded_call(user_permission_fn, draft)
 
         if decision.get("decision") == "approve":
             approved = True

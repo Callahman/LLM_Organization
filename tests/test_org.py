@@ -25,6 +25,8 @@ from runtime.org import (
     run_leader_replacement_vote,
     ResourcingError,
     ResourcingVetoed,
+    BootstrapError,
+    MAX_ORG_ROLES,
 )
 from runtime.mission import MissionResult
 
@@ -470,3 +472,40 @@ def test_fire_required_role_rejected(tmp_path):
              departments_dir=str(tmp_path))
     # The role stays active.
     assert org.get("head_hr").status == "active"
+
+
+# --- Story 11 (B16) ---------------------------------------------------------
+
+def test_b16_bootstrap_exceeds_org_size_cap(tmp_path):
+    """Story 11 (B16): a bootstrap that proposes more heads than the cap
+    refuses with a visible note (never silent)."""
+    org = OrgState(history_dir=str(tmp_path))
+    leader = make_leader()
+    backend = StubBackend()
+    # Propose more heads than the cap.
+    heads = [
+        {"id": f"head_{i}", "department": f"dept_{i}",
+         "sub_architype": f"head_of_dept_{i}", "required": False,
+         "mandate": "do the work"}
+        for i in range(MAX_ORG_ROLES + 1)
+    ]
+    backend.set_script("leader", [
+        {"summary": "propose",
+         "org_recommendation": {"department_heads": heads}},
+    ])
+    with pytest.raises(BootstrapError) as exc_info:
+        bootstrap(
+            org,
+            backend,
+            leader,
+            MissionResult(
+                approved=True,
+                attempts=1,
+                version=1,
+                mission_path=str(tmp_path / "MISSION.md"),
+            ),
+            approver_fn=_approve_all,
+            departments_dir=str(tmp_path / "departments"),
+            head_retry_budget=1,
+        )
+    assert "org-size cap" in str(exc_info.value)

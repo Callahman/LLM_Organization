@@ -43,6 +43,7 @@ from runtime.org import (
     run_leader_replacement_vote,
     ResourcingError,
     ResourcingVetoed,
+    MAX_ORG_ROLES,
 )
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity, detect_disagreement
@@ -315,6 +316,15 @@ def _ensure_role(
     if role is not None:
         return role
     if approver_fn is None:
+        return None
+    # Story 11 (B16): total org-size cap — refuse a hire that would exceed the
+    # cap (visible note, never silent).
+    if len(org.roles) >= MAX_ORG_ROLES:
+        print(
+            f"[dispatch] org-size cap reached ({MAX_ORG_ROLES}) — refusing to "
+            f"hire {role_id} (visible note, never silent).",
+            file=sys.stderr,
+        )
         return None
     # Spin a functional specialty + a stable behavioral bias so a spun
     # manager/IC is never left with an empty identity (the prompt rendered

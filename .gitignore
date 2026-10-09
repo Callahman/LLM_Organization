@@ -24,6 +24,10 @@ archives/*
 state/role_memory/*
 !state/role_memory/.gitkeep
 state/org_chart.json
+state/checkpoint.json
+# The mission markdown is generated state (written by the Phase 2 mission
+# flow; a revisit run loads it).
+MISSION.md
 # C1: the org structure (every department / team directory) — generated state.
 departments/*
 !departments/.gitkeep

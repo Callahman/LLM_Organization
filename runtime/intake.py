@@ -21,6 +21,7 @@ from roles.base import Role
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
 from runtime.coerce import as_float, as_str_list
+from runtime.guard import guarded_call
 
 
 @dataclass
@@ -63,7 +64,12 @@ def _assemble_context(
         "(scope, size, ownership, success criteria). Do not jump into scope or "
         "org-size clarifications until you understand the goal.\n"
         "- Only ask clarifying questions you genuinely need; when confident, "
-        "stop."
+        "stop.\n"
+        "- When you report confidence >= threshold, you MUST also restate the "
+        "goal in the `restated_goal` field (a one-sentence restatement of what "
+        "the organization is trying to accomplish). Convergence requires a "
+        "non-empty `restated_goal` — a fuzzy goal must not short-circuit the "
+        "intake."
     )
     if transcript:
         parts.append("Q&A SO FAR:")
@@ -151,7 +157,9 @@ def run_intake(
                     "questions": questions,
                 }
             )
-            answer = user_answer_fn(questions)
+            # Story 11 (B11): guard the user-approval callback (bounded retry,
+            # visible note, escalate on final failure — never a silent crash).
+            answer = guarded_call(user_answer_fn, questions)
             transcript.append({"role": "user", "round": r, "answer": answer})
             continue
         ctx = _assemble_context(initial_prompt, transcript,
@@ -165,18 +173,25 @@ def run_intake(
         out = backend.invoke(leader, ctx, reasoning=level, phase=1)
         confidence = as_float(out.get("confidence", 0.0))
         questions = as_str_list(out.get("questions", []))
+        # Story 11 (B10): the leader must restate the goal in the same output —
+        # convergence is gated on a non-empty `restated_goal` (prevents
+        # premature convergence on a fuzzy goal).
+        restated_goal = str(out.get("restated_goal", "")).strip()
         transcript.append(
             {
                 "role": "leader",
                 "round": r,
                 "confidence": confidence,
                 "questions": questions,
+                "restated_goal": restated_goal,
             }
         )
 
-        # Converged: confident enough (a clear prompt short-circuits here at
-        # round 1 with no questions).
-        if confidence >= confidence_threshold:
+        # Converged: confident enough AND the leader restated the goal (a clear
+        # prompt short-circuits here at round 1 with no questions). Story 11
+        # (B10): the `restated_goal` gate prevents premature convergence on a
+        # fuzzy goal.
+        if confidence >= confidence_threshold and restated_goal:
             converged = True
             break
 
@@ -187,7 +202,9 @@ def run_intake(
             break
 
         # Ask the user and continue.
-        answer = user_answer_fn(questions)
+        # Story 11 (B11): guard the user-approval callback (bounded retry,
+        # visible note, escalate on final failure — never a silent crash).
+        answer = guarded_call(user_answer_fn, questions)
         transcript.append({"role": "user", "round": r, "answer": answer})
     else:
         # Question budget exhausted: proceed with the best understanding,
