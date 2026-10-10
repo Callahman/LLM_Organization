@@ -33,6 +33,7 @@ from runtime.org import OrgState, bootstrap
 from runtime import dispatch
 from runtime.pods import SoloTracker
 from runtime.history import HistoryStore
+from runtime.timing import TimingTracker, TimingBackend
 from runtime.complexity import (
     RoutingBackend, ThinkingBudget, classify_complexity,
 )
@@ -123,6 +124,13 @@ class Session:
         self.backend = build_backend(
             backend, self.config, self.history, self.thinking_budget
         )
+        # Story 22: invoke timing — the TimingTracker accumulates per-role /
+        # per-department wall-clock time (appended to history/efficiency.jsonl,
+        # the dashboard's efficiency panel); the TimingBackend wraps the chain
+        # so every invoke is timed (transparent: it delegates all other
+        # attributes, e.g. save_state / load_state / seed_cross_team).
+        self.timing = TimingTracker(history_dir=history_dir)
+        self.backend = TimingBackend(self.backend, self.timing)
         self.pods: List[Any] = []
         # Solo (single-role) leader pods: one per phase (P1/P2/P3/P5/P6), so the
         # observability dashboard can watch the leader's solo work (not just the
@@ -509,6 +517,7 @@ class Session:
                 ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
                 config=self.config,
                 solo=self.solo,
+                timing=self.timing,
             )
             self.phases.append(4)
             # Solo (P4): record the dispatch + the thinking-budget remainder so

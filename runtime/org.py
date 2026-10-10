@@ -20,6 +20,7 @@ HR is non-functional, resourcing escalates to the user.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -539,16 +540,69 @@ def _offload(org: OrgState, target: Role, departments_dir: str) -> Dict[str, Any
     return plan
 
 
+def _subtree(org: OrgState, root_id: str) -> List[str]:
+    """The ``root`` + all of its **transitive reports** (the firing cascade,
+    Story 22). Computed over the active roles via their ``reports_to`` links:
+    firing a role that has its own reports fires the entire subtree, not just
+    the top. Returns a list of role ids (the root first)."""
+    children: Dict[str, List[str]] = {}
+    for r in org.active_roles():
+        if r.reports_to:
+            children.setdefault(r.reports_to, []).append(r.id)
+    seen: List[str] = [root_id]
+    stack: List[str] = [root_id]
+    while stack:
+        cur = stack.pop()
+        for ch in children.get(cur, []):
+            if ch not in seen:
+                seen.append(ch)
+                stack.append(ch)
+    return seen
+
+
+def _call_approver(approver_fn, approver_type: str, action: str, target: Role,
+                   detail: Optional[Dict[str, Any]] = None):
+    """Call the HR approver, passing the ``detail`` (e.g. the firing cascade
+    size, Story 22) as a 4th argument **when the approver accepts it**.
+    Backward compatible with 3-arg approvers (``detail`` is omitted) — so a
+    user-supplied ``approver_fn(approver_type, action, target)`` keeps working.
+
+    The cascade size is included in the **single** firing approval request
+    (not raised separately per cascaded role): one approver call covers the
+    whole subtree."""
+    accepts_detail = False
+    try:
+        params = inspect.signature(approver_fn).parameters
+        accepts_detail = (
+            any(p.kind == p.VAR_POSITIONAL for p in params.values())
+            or len(params) >= 4
+        )
+    except (TypeError, ValueError):
+        accepts_detail = False
+    if accepts_detail and detail is not None:
+        return approver_fn(approver_type, action, target, detail)
+    return approver_fn(approver_type, action, target)
+
+
 def fire(
     org: OrgState,
     initiator: Role,
     target_id: str,
     approver_fn: Callable[[str, str, Role], Dict[str, str]],
     departments_dir: str = "departments",
+    cascade: bool = True,
 ) -> Dict[str, Any]:
     """Fire a role through the approval matrix + the approver's decision (HR
     determines whether the firing is needed) + offloading. Required
-    departments cannot be fired."""
+    departments cannot be fired.
+
+    **Cascading** (Story 22): when ``cascade`` is True (the default), firing a
+    role that has its own reports fires the **entire report subtree** (the
+    target + all transitive reports), not just the top. The **cascade size**
+    (the number of roles that will be fired) is included in the **single** HR
+    approval request (via a 4th ``detail`` argument — not raised separately per
+    cascaded role). Set ``cascade`` to False to fire only the target (the
+    legacy behavior)."""
     target = org.get(target_id)
     if target is None:
         raise ResourcingError(f"unknown role: {target_id}")
@@ -559,15 +613,22 @@ def fire(
     approver_type, ok, reason = required_approver(initiator, target)
     if not ok:
         raise ResourcingError(reason)
-    decision = approver_fn(approver_type, "fire", target)
+    # The firing cascade (the target + its transitive reports).
+    subtree_ids = _subtree(org, target.id) if cascade else [target.id]
+    detail = {"cascade_size": len(subtree_ids), "cascade_role_ids": subtree_ids}
+    # The single HR approval request includes the cascade size.
+    decision = _call_approver(approver_fn, approver_type, "fire", target, detail)
     if decision.get("decision") != "approve":
-        org.log_event("fire_vetoed", initiator.id, target_id, decision)
+        org.log_event("fire_vetoed", initiator.id, target_id,
+                      {**decision, **detail})
         raise ResourcingVetoed(decision.get("rationale", "vetoed"))
     plan = _offload(org, target, departments_dir)
-    org.mark_inactive(target_id)
+    # Fire the whole subtree (the target first, then its reports).
+    for rid in subtree_ids:
+        org.mark_inactive(rid)
     org.log_event("fired", initiator.id, target_id,
                   {"approver": approver_type, "offloading": plan,
-                   "department": target.department})
+                   "department": target.department, **detail})
     return plan
 
 

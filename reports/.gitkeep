@@ -1,4 +1,0 @@
-# Marker so the reports/ directory is present on disk (consistent with its
-# managed siblings - history/, archives/, departments/). Its generated contents
-# (offloading/, evaluation/) are created on demand and ignored by .gitignore;
-# reset_org.py wipes the whole directory on a reset.

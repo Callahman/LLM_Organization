@@ -549,6 +549,45 @@ function renderHaltList() {
     '</li>').join('');
 }
 
+// Story 22: render the efficiency panel (per-role / per-department invoke
+// time). The snapshot's `efficiency` is a cumulative snapshot (the latest line
+// of history/efficiency.jsonl) with `per_role` and `per_department` maps
+// (role/department -> seconds). Rendered as two columns of sorted rows
+// (highest time first).
+function renderEfficiencyPanel() {
+  const el = $('efficiency-panel');
+  if (!el || !state) return;
+  const eff = state.efficiency;
+  if (!eff || (!eff.per_role && !eff.per_department)) {
+    el.textContent = 'no efficiency data yet';
+    el.classList.remove('busy');
+    return;
+  }
+  el.classList.add('busy');
+  const rows = (m) => Object.keys(m || {})
+    .map((k) => ({ k, v: m[k] }))
+    .sort((a, b) => b.v - a.v);
+  const roleRows = rows(eff.per_role);
+  const deptRows = rows(eff.per_department);
+  const fmt = (v) => (v < 60 ? Math.round(v * 10) / 10 + 's'
+                              : Math.floor(v / 60) + 'm ' + Math.round(v % 60) + 's');
+  const col = (title, list) => {
+    const body = list.length
+      ? list.map((r) => '<div class="eff-row"><span class="eff-key">' + r.k +
+          '</span><span class="eff-val">' + fmt(r.v) + '</span></div>').join('')
+      : '<div class="eff-empty">none</div>';
+    return '<div class="eff-col"><h3 class="eff-title">' + title + '</h3>' + body +
+      '</div>';
+  };
+  const total = eff.total_time ? '<div class="eff-total">total ' +
+    fmt(eff.total_time) + ' · ' + (eff.total_calls || 0) + ' invokes</div>' : '';
+  el.innerHTML = total +
+    '<div class="eff-cols">' +
+    col('per-role', roleRows) +
+    col('per-department', deptRows) +
+    '</div>';
+}
+
 // A6: staleness gauge — seconds since the last stream chunk (the model has
 // been silent for a while). Warns past a threshold (60s: the model is
 // probably stuck or the stream is broken).
@@ -619,6 +658,8 @@ function render() {
   renderMonitor();
   renderPodList();
   renderHaltList();
+  // Story 22: the efficiency panel (per-role / per-department invoke time).
+  renderEfficiencyPanel();
   renderModelStream();
 }
 
