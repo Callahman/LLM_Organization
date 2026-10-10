@@ -49,6 +49,7 @@ from runtime.org import (
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity, detect_disagreement
 from runtime.history import HistoryStore
+from runtime.timing import TimingTracker
 from runtime.permissions import apply_code_edits, read_file
 from runtime.coerce import as_dict_list
 from runtime.pods import (
@@ -77,8 +78,9 @@ def mission_digest(mission: Dict[str, Any]) -> str:
     return " | ".join(parts) if parts else "(no mission digest)"
 
 
-def _leader_ctx(digest: str, head_ids: List[str]) -> str:
-    return (
+def _leader_ctx(digest: str, head_ids: List[str],
+                efficiency_panel: str = "") -> str:
+    base = (
         "PHASE 4: decompose the mission into department objectives. "
         f"Mission digest: {digest} "
         "Set `decomposition` to a JSON OBJECT (not a string) whose "
@@ -88,6 +90,107 @@ def _leader_ctx(digest: str, head_ids: List[str]) -> str:
         "Do NOT invent new head_ids — only assign objectives to the heads that "
         "already exist in the org."
     )
+    # Story 22: the Leader is invoked with the efficiency panel (per-role /
+    # per-department invoke time) so it can act on an inefficient role or
+    # department.
+    if efficiency_panel:
+        base += " " + efficiency_panel
+    return base
+
+
+def _efficiency_panel_text(snap: Dict[str, Any]) -> str:
+    """Render the efficiency panel (per-role + per-department invoke time,
+    cumulative) as text for the Leader's Phase 4 context (Story 22)."""
+    per_role = snap.get("per_role", {})
+    per_dept = snap.get("per_department", {})
+    lines = [
+        "EFFICIENCY PANEL (per-role / per-department invoke time, cumulative):"
+    ]
+    if per_role:
+        lines.append("  per-role:")
+        for rid, t in sorted(per_role.items(), key=lambda kv: -kv[1]):
+            lines.append(f"    {rid}: {t:.1f}s")
+    if per_dept:
+        lines.append("  per-department:")
+        for dept, t in sorted(per_dept.items(), key=lambda kv: -kv[1]):
+            lines.append(f"    {dept}: {t:.1f}s")
+    if not per_role and not per_dept:
+        lines.append("  (no invoke time recorded yet)")
+    lines.append(
+        "If a role or department is inefficient, set `efficiency` with an "
+        "`action` (\"fire\" to fire it through HR resourcing — the firing "
+        "cascades to its report subtree; \"reassign\" to move it to a "
+        "different team, named in `new_team`; \"report\" to report the "
+        "inefficiency to the user without acting) and `target` (the role id or "
+        "department slug)."
+    )
+    return "\n".join(lines)
+
+
+def _reassign_role(org, leader, target_id, new_team, reasoning, history) -> None:
+    """Reassign a role to a different team (Story 22). The role's `team` (its
+    work-directory slug) is changed; the move is logged visibly (never
+    silent)."""
+    role = org.get(target_id)
+    if role is None:
+        if history is not None:
+            history._append("efficiency_reports.jsonl",
+                            {"ts": time.time(), "action": "reassign",
+                             "target": target_id, "reasoning": reasoning,
+                             "error": "unknown role"})
+        return
+    if not new_team:
+        if history is not None:
+            history._append("efficiency_reports.jsonl",
+                            {"ts": time.time(), "action": "reassign",
+                             "target": target_id, "reasoning": reasoning,
+                             "error": "no new_team specified"})
+        return
+    old_team = role.team
+    role.team = new_team
+    org.log_event("role_reassigned", leader.id, target_id,
+                  {"old_team": old_team, "new_team": new_team,
+                   "reasoning": reasoning})
+    if history is not None:
+        history._append("efficiency_reports.jsonl",
+                        {"ts": time.time(), "action": "reassign",
+                         "target": target_id, "old_team": old_team,
+                         "new_team": new_team, "reasoning": reasoning})
+
+
+def _process_efficiency(org, leader, eff: Dict[str, Any], approver_fn,
+                        history) -> None:
+    """Process the Leader's efficiency action (Story 22): fire / reassign /
+    report an inefficient role or department. All actions are logged visibly
+    (never silent)."""
+    action = eff.get("action")
+    target = eff.get("target")
+    reasoning = eff.get("reasoning", "")
+    if not action or not target:
+        return
+    if action == "fire":
+        # Fire the inefficient role through HR resourcing (cascades to its
+        # report subtree).
+        _fire_role(org, leader, target, f"efficiency: {reasoning}",
+                   approver_fn, history)
+    elif action == "reassign":
+        # Reassign the named role to a different team.
+        _reassign_role(org, leader, target, eff.get("new_team"), reasoning,
+                       history)
+    elif action == "report":
+        # Report the inefficiency to the user (no action).
+        org.log_event("efficiency_reported", leader.id, target,
+                      {"reasoning": reasoning})
+        if history is not None:
+            history._append("efficiency_reports.jsonl",
+                            {"ts": time.time(), "action": "report",
+                             "target": target, "reasoning": reasoning})
+    else:
+        if history is not None:
+            history._append("efficiency_reports.jsonl",
+                            {"ts": time.time(), "action": action,
+                             "target": target, "reasoning": reasoning,
+                             "error": "unknown efficiency action"})
 
 
 def _head_ctx(head: Role, objective: str, digest: str) -> str:
@@ -592,6 +695,7 @@ def dispatch(
     new_leader: Optional[Role] = None,
     config: Optional[Dict[str, Any]] = None,
     solo: Optional[SoloTracker] = None,
+    timing: Optional[TimingTracker] = None,
 ) -> List[Dict[str, Any]]:
     """Run the Phase 4 top-down dispatch. Returns the leader's view: a list of
     department reports (each carrying the chain of team/IC reports up).
@@ -616,8 +720,15 @@ def dispatch(
     `MemoryBackend.seed_cross_team` — a no-op for a plain stub)."""
     digest = mission_digest(mission)
     head_ids = [h.id for h in org.department_heads()]
-    out = backend.invoke(leader, _leader_ctx(digest, head_ids),
-                         reasoning=classify_complexity(4, leader, {}), phase=4)
+    # Story 22: the Leader is invoked with the efficiency panel (per-role /
+    # per-department invoke time) so it can act on an inefficient role or
+    # department.
+    efficiency_panel = ""
+    if timing is not None:
+        efficiency_panel = _efficiency_panel_text(timing.snapshot())
+    out = backend.invoke(
+        leader, _leader_ctx(digest, head_ids, efficiency_panel=efficiency_panel),
+        reasoning=classify_complexity(4, leader, {}), phase=4)
     # Story 5 (A1): a single head's leader-replacement proposal (with
     # reasoning) triggers the per-head unanimous vote. The new-leader
     # candidate is supplied by the caller (`new_leader`); without one, the
@@ -646,6 +757,12 @@ def dispatch(
                 _fire_role(org, leader, _fire_entry[0],
                            _fire_entry[1] if len(_fire_entry) >= 2 else "",
                            approver_fn, history)
+    # Story 22: the Leader's efficiency action (fire / reassign / report an
+    # inefficient role or department, based on the efficiency panel it was
+    # invoked with).
+    _efficiency = out.get("efficiency")
+    if isinstance(_efficiency, dict):
+        _process_efficiency(org, leader, _efficiency, approver_fn, history)
     dept_objectives = _decomposition_list(out, "department_objectives")
     if not dept_objectives:
         # The leader's Phase 4 decomposition came back empty — no work to

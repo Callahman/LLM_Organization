@@ -65,6 +65,7 @@ class Watcher:
             "cycles": os.path.join(h, "cycles.jsonl"),
             "stream": os.path.join(h, "stream.jsonl"),
             "halt_events": os.path.join(h, "halt_events.jsonl"),
+            "efficiency": os.path.join(h, "efficiency.jsonl"),
         }
         self.transcripts_dir = os.path.join(root, "pods", "transcripts")
         self._offsets: Dict[str, int] = {}
@@ -77,6 +78,11 @@ class Watcher:
         self.cycles: List[Dict[str, Any]] = []
         self.halt_events: List[Dict[str, Any]] = []
         self.pods: Dict[str, Dict[str, Any]] = {}
+        # Story 22: the efficiency panel (per-role / per-department invoke
+        # time). The efficiency log appends a *cumulative* snapshot after each
+        # invoke, so the dashboard renders the LATEST line as the current
+        # panel (not an accumulation).
+        self.efficiency: Optional[Dict[str, Any]] = None
         # Live "model stream" window: a 2-slot ring (current + previous
         # segment). Each segment = one model call (one stream_id), with its
         # streamed content accumulated per kind (thinking/content/tool_call).
@@ -112,6 +118,13 @@ class Watcher:
 
     def ingest_halt(self, e: Dict[str, Any]) -> None:
         self.halt_events.append(e)
+
+    def ingest_efficiency(self, e: Dict[str, Any]) -> None:
+        """Ingest one efficiency snapshot (from history/efficiency.jsonl). The
+        log appends a *cumulative* snapshot after each invoke, so each line is
+        the full current state — the dashboard keeps the LATEST line as the
+        current efficiency panel (per-role / per-department invoke time)."""
+        self.efficiency = e
 
     def ingest_pod_transcript(
         self, pod_id: str, entries: List[Dict[str, Any]]
@@ -250,6 +263,8 @@ class Watcher:
                         self.ingest_stream(e)
                     elif key == "halt_events":
                         self.ingest_halt(e)
+                    elif key == "efficiency":
+                        self.ingest_efficiency(e)
                     else:
                         self.ingest_cycle(e)
             self._poll_transcripts()
@@ -295,6 +310,9 @@ class Watcher:
                 "tool_calls": self.tool_calls[-SNAPSHOT_CAP:],
                 "cycles": self.cycles[-SNAPSHOT_CAP:],
                 "halt_events": self.halt_events[-SNAPSHOT_CAP:],
+                # Story 22: the efficiency panel (per-role / per-department
+                # invoke time) — the latest cumulative snapshot.
+                "efficiency": self.efficiency,
                 "pods": pods,
                 "stream": stream,
             }

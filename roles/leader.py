@@ -149,6 +149,30 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
                 },
             },
         },
+        # Story 22: efficiency actions. The Leader is invoked with the
+        # efficiency panel (per-role / per-department invoke time) in Phase 4
+        # and can act on an inefficient role or department. Optional at the top
+        # level (so it does not leak into the other phases). `action` is one of
+        # "fire" (fire through HR resourcing — the firing cascades to the
+        # whole report subtree), "reassign" (move the role to a different team,
+        # named in `new_team`), or "report" (report the inefficiency to the
+        # user without acting). `target` is the role id (or department slug).
+        "efficiency": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["fire", "reassign", "report"],
+                },
+                "target": {"type": "string"},
+                "new_team": {
+                    "type": "string",
+                    "description": "The team slug to reassign the role to (only for action=reassign).",
+                },
+                "reasoning": {"type": "string"},
+            },
+            "required": ["action", "target"],
+        },
     },
     "required": ["summary", "confidence"],
 }
