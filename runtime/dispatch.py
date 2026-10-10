@@ -49,7 +49,7 @@ from runtime.org import (
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity, detect_disagreement
 from runtime.history import HistoryStore
-from runtime.permissions import apply_code_edits
+from runtime.permissions import apply_code_edits, read_file
 from runtime.coerce import as_dict_list
 from runtime.pods import (
     Pod,
@@ -60,6 +60,7 @@ from runtime.pods import (
     write_transcripts,
     senior_member,
     chained_pod,
+    SoloTracker,
 )
 
 
@@ -223,6 +224,35 @@ def _repair_edit_paths(
     return repaired
 
 
+def _ic_pre_read(
+    ic: Role,
+    edits: List[Dict[str, Any]],
+    history: Optional[HistoryStore],
+) -> None:
+    """The IC reads the code it is about to change (gated by the **read gate**
+    — the read invariants: the sandbox, the mission lock, the meta-rule lock,
+    the department scope, the code-read invariants). This is the concrete
+    "a role reads a file" in the dispatch that the read gate wires into.
+
+    A **cross-team read** (a sibling team dir in the same department) is
+    **logged** (visible, not silent); a **refused read** is **logged**
+    (visible, never silent). The write gate remains authoritative — this is
+    the read observability step (the read of a new file is not an error)."""
+    def log(msg: str) -> None:
+        if history is not None:
+            history._append("self_edits.jsonl", {"role": ic.id, "msg": msg})
+    for edit in edits:
+        if not isinstance(edit, dict):
+            continue
+        path = edit.get("path", "")
+        if not path:
+            continue
+        try:
+            read_file(ic, path, log=log)
+        except PermissionError as e:
+            log(f"REFUSED read: {ic.id!r} -> {path!r}: {e}")
+
+
 def _run_self_edits(
     ic: Role,
     edits: List[Dict[str, Any]],
@@ -231,6 +261,10 @@ def _run_self_edits(
     """Repair + apply + log one batch of self-edits for an IC (gated by the
     permission layer). Returns the per-edit results (the gate's decisions)."""
     edits = _repair_edit_paths(ic, edits, history)
+    # The IC reads the code it is about to change (gated by the read gate —
+    # the read invariants; a cross-team read is logged, a refused read is
+    # logged, both visible, never silent).
+    _ic_pre_read(ic, edits, history)
     results = apply_code_edits(ic, edits, log=_self_edit_log(history, ic.id))
     if history is not None:
         for r in results:
@@ -557,6 +591,7 @@ def dispatch(
     ic_timeout_seconds: Optional[float] = None,
     new_leader: Optional[Role] = None,
     config: Optional[Dict[str, Any]] = None,
+    solo: Optional[SoloTracker] = None,
 ) -> List[Dict[str, Any]]:
     """Run the Phase 4 top-down dispatch. Returns the leader's view: a list of
     department reports (each carrying the chain of team/IC reports up).
@@ -641,6 +676,17 @@ def dispatch(
                           reasoning=classify_complexity(4, head, {}),
                           phase=4)
         team_objectives = _decomposition_list(head_out, "team_objectives")
+        # Solo (P4, head): record the head's decomposition (out-of-pod work)
+        # so the dashboard can watch any role's solo work, not just the
+        # leader's (Story 21).
+        if solo is not None:
+            solo.record(
+                "p4", "Phase 4: head decomposition", 0, "decompose",
+                {"summary": f"decomposed the department objective into "
+                            f"{len(team_objectives)} team objective(s)",
+                 "team_objectives": team_objectives},
+                role=head,
+            )
 
         team_reports: List[Dict[str, Any]] = []
         for t_obj in team_objectives:
@@ -662,6 +708,17 @@ def dispatch(
                          reasoning=classify_complexity(4, manager, {}),
                          phase=4)
                 ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
+                # Solo (P4, manager): record the manager's decomposition
+                # (out-of-pod work) so the dashboard can watch any role's solo
+                # work, not just the leader's (Story 21).
+                if solo is not None:
+                    solo.record(
+                        "p4", "Phase 4: manager decomposition", 0, "decompose",
+                        {"summary": f"decomposed the team objective into "
+                                    f"{len(ic_tasks)} IC task(s)",
+                         "ic_tasks": ic_tasks},
+                        role=manager,
+                    )
                 ic_reports: List[Dict[str, Any]] = []
                 ic_outputs: List[Dict[str, Any]] = []  # full IC outputs (trigger A)
                 ic_ids: List[str] = []
@@ -683,6 +740,16 @@ def dispatch(
                     )
                     ic_outputs.append(ic_out)
                     ic_ids.append(ic.id)
+                    # Solo (P4, IC): record the IC's work (out-of-pod work) so
+                    # the dashboard can watch any role's solo work, not just
+                    # the leader's (Story 21).
+                    if solo is not None:
+                        solo.record(
+                            "p4", "Phase 4: IC work", 0, "work",
+                            {"summary": ic_out.get("summary", ""),
+                             "work_path": ic_out.get("work_path", "")},
+                            role=ic,
+                        )
                     pointer = ic_out.get("work_path", _work_path(ic, task))
                     ic_reports.append(
                         {"from": ic.id, "summary": ic_out.get("summary", ""),
@@ -722,6 +789,16 @@ def dispatch(
                     timeout=ic_timeout_seconds,
                     phase=4,
                 )
+                # Solo (P4, IC): record the IC's work (out-of-pod work) so the
+                # dashboard can watch any role's solo work, not just the
+                # leader's (Story 21).
+                if solo is not None:
+                    solo.record(
+                        "p4", "Phase 4: IC work", 0, "work",
+                        {"summary": ic_out.get("summary", ""),
+                         "work_path": ic_out.get("work_path", "")},
+                        role=ic,
+                    )
                 # Self-edit: the IC may propose code edits (repaired, gated by
                 # the permission layer, one corrective retry on refusal).
                 _apply_ic_self_edits(ic, ic_out, history, backend, phase=4)

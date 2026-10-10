@@ -312,14 +312,17 @@ def write_decision_artifact(pod: Pod, artifacts_dir: str = "pods/artifacts") -> 
 
 # --- Solo (single-role) leader pods (P1/P2/P3/P5/P6) ------------------------
 
-def form_solo_pod(leader: Role, phase: str, topic: str) -> Pod:
-    """Form a **solo** pod: the leader working a single phase, observed as a
-    pod. Skips the 2–6 / 1-tier-spread membership bounds (a lone leader is not
-    a working group) — the pod has the leader as both starter and sole member.
-    The id is stable per (leader, phase) so the transcript file grows per
-    round (one file per phase, rewritten each round)."""
-    pod_id = f"solo_{leader.id}_{phase}"
-    return Pod(id=pod_id, starter=leader, members=[leader],
+def form_solo_pod(role: Role, activity: str, topic: str) -> Pod:
+    """Form a **solo** pod: a role working a single activity (its out-of-pod
+    work), observed as a pod. Skips the 2–6 / 1-tier-spread membership bounds
+    (a lone role is not a working group) — the pod has the role as both starter
+    and sole member. The id is stable per (role, activity) so the transcript
+    file grows per round (one file per (role, activity), rewritten each round).
+
+    **Generalized (Story 21):** any role (the leader, a department head, a
+    manager, an IC) can form a solo pod — not just the leader."""
+    pod_id = f"solo_{role.id}_{activity}"
+    return Pod(id=pod_id, starter=role, members=[role],
                topic=topic, solo=True)
 
 
@@ -339,43 +342,58 @@ def record_solo_step(pod: Pod, round_no: int, kind: str,
 
 
 class SoloTracker:
-    """Holds the leader's solo pods (one per phase: P1/P2/P3/P5/P6) and
-    rewrites their transcripts after each step, so the observability dashboard
-    can watch the leader's solo work (not just the multi-role pods).
+    """Holds a role's solo pods (one per activity) and rewrites their
+    transcripts after each step, so the observability dashboard can watch a
+    role's solo work (not just the multi-role pods).
 
-    Each phase gets one pod (one transcript file, growing per round). The
-    tracker is optional: when no `transcripts_dir` is supplied, steps are
-    recorded in memory only (no file I/O) — so a session without observability
-    still works.
+    **Generalized (Story 21):** the tracker is **role-agnostic** — any role
+    (the leader, a department head, a manager, an IC) can have solo-pod records
+    for its out-of-pod work. The `leader` argument is the **default** role
+    (the leader, for backward compatibility); a different role can be named per
+    step (the `role` argument to `pod_for`/`record`/`close`).
+
+    Each (role, activity) gets one pod (one transcript file, growing per
+    round). The tracker is optional: when no `transcripts_dir` is supplied,
+    steps are recorded in memory only (no file I/O) — so a session without
+    observability still works.
     """
 
     def __init__(self, leader: Role,
                  transcripts_dir: Optional[str] = "pods/transcripts"):
-        self.leader = leader
+        self.leader = leader  # the default role (the leader, for backward compat)
         self.transcripts_dir = transcripts_dir
-        self.pods: Dict[str, Pod] = {}
+        self.pods: Dict[str, Pod] = {}  # keyed by (role.id, activity)
 
-    def pod_for(self, phase: str, topic: str) -> Pod:
-        """Get (or create) the solo pod for a phase (one file per phase)."""
-        if phase not in self.pods:
-            self.pods[phase] = form_solo_pod(self.leader, phase, topic)
-        return self.pods[phase]
+    def _key(self, role: Role, activity: str) -> str:
+        return f"{role.id}|{activity}"
 
-    def record(self, phase: str, topic: str, round_no: int, kind: str,
-               output: Dict[str, Any]) -> None:
-        """Record one leader working step for a phase and (re)write the
+    def pod_for(self, activity: str, topic: str,
+                role: Optional[Role] = None) -> Pod:
+        """Get (or create) the solo pod for a (role, activity) (one file each)."""
+        role = role or self.leader
+        key = self._key(role, activity)
+        if key not in self.pods:
+            self.pods[key] = form_solo_pod(role, activity, topic)
+        return self.pods[key]
+
+    def record(self, activity: str, topic: str, round_no: int, kind: str,
+               output: Dict[str, Any], role: Optional[Role] = None) -> None:
+        """Record one working step for a (role, activity) and (re)write the
         transcript so the dashboard sees it live."""
-        pod = self.pod_for(phase, topic)
+        pod = self.pod_for(activity, topic, role)
         record_solo_step(pod, round_no, kind, output)
         if self.transcripts_dir:
             write_transcripts(pod, self.transcripts_dir)
 
-    def close(self, phase: str, reason: str = "") -> None:
-        """Emit a terminal `close` step for a solo pod's phase when it
+    def close(self, activity: str, reason: str = "",
+              role: Optional[Role] = None) -> None:
+        """Emit a terminal `close` step for a (role, activity) solo pod when it
         completes, so the dashboard marks the pod **closed** (it moves from the
         active pane to the historical list). `reason` is a short summary line
         (e.g. "intake converged, 2 rounds", "mission approved v1")."""
-        pod = self.pods.get(phase)
+        role = role or self.leader
+        key = self._key(role, activity)
+        pod = self.pods.get(key)
         if pod is None:
             return
         pod.closed_reason = reason

@@ -508,6 +508,7 @@ class Session:
                 transcripts_dir=self.config.get("pod_transcripts_dir", "pods/transcripts"),
                 ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
                 config=self.config,
+                solo=self.solo,
             )
             self.phases.append(4)
             # Solo (P4): record the dispatch + the thinking-budget remainder so

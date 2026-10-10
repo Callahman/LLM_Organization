@@ -161,19 +161,23 @@ def test_can_communicate_enforced_in_form_pod():
         assert "communicate" in str(e)
 
 
-def test_can_read_code_advisory_note_present():
-    """Story 10 (A11): can_read_code is documented as advisory (the gap is
-    visible, not silently dead)."""
+def test_can_read_code_enforced_note_present():
+    """Story 14: can_read_code is documented as **enforced** (the gap is filled
+    — the read gate wires the invariant into the live path), no longer
+    advisory."""
     import inspect
     doc = inspect.getdoc(tiers.can_read_code) or ""
-    assert "Advisory" in doc
-    assert "not yet enforced" in doc
+    assert "Enforced" in doc
+    assert "Advisory" not in doc
+    assert "not yet enforced" not in doc
 
 
-def test_cross_team_read_advisory_note_present():
-    """Story 10 (A11): cross_team_read is documented as advisory (the gap is
-    visible, not silently dead)."""
+def test_cross_team_read_enforced_note_present():
+    """Story 14: cross_team_read is documented as **enforced** (the gap is
+    filled — the read gate logs cross-team reads, visible not silent), no
+    longer advisory."""
     import inspect
     doc = inspect.getdoc(tiers.cross_team_read) or ""
-    assert "Advisory" in doc
-    assert "not yet enforced" in doc
+    assert "Enforced" in doc
+    assert "Advisory" not in doc
+    assert "not yet enforced" not in doc

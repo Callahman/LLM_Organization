@@ -101,10 +101,11 @@ def can_read_code(role, path: str) -> bool:
     work only as it is brought to them (reports, summaries, decision
     artifacts). Managers and ICs can read code within their own department.
 
-    **Advisory (Story 10, A11):** this invariant is **not yet enforced** in the
-    live path — there is no code-read gate in the pipeline (the code path in
-    `runtime/permissions.py` is write-only via `apply_code_edits`/`write_file`).
-    The gap is documented here so it is visible, not silently dead.
+    **Enforced (Story 14):** this invariant is wired into the live path via the
+    read gate — `runtime/permissions.py::read_file` refuses a code read for a
+    head/leader (and any out-of-scope read) with a visible `PermissionError`,
+    and the dispatch's self-edit flow pre-reads the code an IC is about to
+    change through that gate.
     """
     if is_leader(role) or is_head(role):
         return False
@@ -116,10 +117,10 @@ def cross_team_read(role, path: str) -> bool:
     department* (the duplication-check purpose, §2.4). This is the read that
     must be logged in the audit trail.
 
-    **Advisory (Story 10, A11):** this invariant is **not yet enforced** in the
-    live path — the duplication-check reads are not gated by it (no cross-team
-    read path exists to wire it into). The gap is documented here so it is
-    visible, not silently dead.
+    **Enforced (Story 14):** this invariant is wired into the live path via the
+    read gate — `runtime/permissions.py::read_file` **logs** a cross-team read
+    (visible, not silent) when a role reads a sibling team dir in the same
+    department, so the audit shows the duplication-check read.
     """
     if is_leader(role) or is_head(role):
         return False

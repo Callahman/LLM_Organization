@@ -185,3 +185,70 @@ def test_pod_wall_clock_budget(monkeypatch):
     pods.run_pod(backend, pod, max_rounds=3, pod_wall_clock_seconds=50.0)
     # The pod is closed early with the budget-exceeded reason.
     assert pod.closed_reason == "pod wall-clock budget exceeded"
+
+
+# --- Solo pods track any role's out-of-pod work (Story 21) ------------------
+
+def test_form_solo_pod_any_role():
+    # A non-leader role (a manager) can form a solo pod (Story 21) — the pod
+    # has the role as both starter and sole member, and the id is stable per
+    # (role, activity).
+    mgr = _role("mgr1", "manager", "analytics", "pipelines")
+    pod = pods.form_solo_pod(mgr, "p4", "Phase 4: manager decomposition")
+    assert pod.id == f"solo_{mgr.id}_p4"
+    assert pod.solo
+    assert pod.starter is mgr
+    assert pod.members == [mgr]
+
+
+def test_solo_tracker_records_non_leader_role(tmp_path):
+    # A non-leader role (an IC) can have solo-pod records for its out-of-pod
+    # work — the transcript is written (like the leader's), and the IC's solo
+    # pod is distinct from the leader's (different role).
+    import json
+    leader = _role("leader", "leader")
+    ic = _role("ic1", "ic", "analytics", "pipelines")
+    tracker = pods.SoloTracker(leader, transcripts_dir=str(tmp_path))
+    tracker.record("p4", "Phase 4: IC work", 0, "work",
+                   {"summary": "did the work"}, role=ic)
+    pod = tracker.pod_for("p4", "Phase 4: IC work", role=ic)
+    assert pod.id == f"solo_{ic.id}_p4"
+    # The transcript file is written (like the leader's).
+    path = os.path.join(str(tmp_path), f"{pod.id}.jsonl")
+    assert os.path.exists(path)
+    with open(path, "r", encoding="utf-8") as f:
+        entries = [json.loads(ln) for ln in f if ln.strip()]
+    assert any(e.get("role") == ic.id for e in entries)
+    # The IC's solo pod is distinct from the leader's (different role).
+    leader_pod = tracker.pod_for("p1", "Phase 1: intake")
+    assert leader_pod.id == f"solo_{leader.id}_p1"
+    assert leader_pod.starter is leader
+
+
+def test_solo_tracker_leader_behavior_preserved(tmp_path):
+    # The leader's solo-pod behavior is preserved (no regression): the default
+    # role is the leader (no `role` supplied), and the pod id is
+    # solo_<leader>_<activity>.
+    leader = _role("leader", "leader")
+    tracker = pods.SoloTracker(leader, transcripts_dir=str(tmp_path))
+    tracker.record("p1", "Phase 1: intake", 0, "intake",
+                   {"summary": "intake converged"})
+    pod = tracker.pod_for("p1", "Phase 1: intake")
+    assert pod.id == f"solo_{leader.id}_p1"
+    assert pod.starter is leader
+    path = os.path.join(str(tmp_path), f"{pod.id}.jsonl")
+    assert os.path.exists(path)
+
+
+def test_solo_tracker_close_non_leader_role(tmp_path):
+    # A non-leader role's solo pod can be closed (the dashboard marks it
+    # closed, like the leader's).
+    leader = _role("leader", "leader")
+    mgr = _role("mgr1", "manager", "analytics", "pipelines")
+    tracker = pods.SoloTracker(leader, transcripts_dir=str(tmp_path))
+    tracker.record("p4", "Phase 4: manager decomposition", 0, "decompose",
+                   {"summary": "decomposed"}, role=mgr)
+    tracker.close("p4", "decomposition complete", role=mgr)
+    pod = tracker.pod_for("p4", "Phase 4: manager decomposition", role=mgr)
+    assert pod.closed_reason == "decomposition complete"
+    assert any(e.get("kind") == "close" for e in pod.transcript)
