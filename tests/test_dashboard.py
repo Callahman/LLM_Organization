@@ -85,6 +85,23 @@ def test_solo_pod_closes_on_close_entry():
     assert w.pods["solo_leader_p1"]["status"] == "closed"
 
 
+def test_dashboard_views_non_leader_solo_pod():
+    # Story 21: the dashboard can view any role's solo pods (not only the
+    # leader's) — the Watcher ingests a non-leader solo pod transcript (no
+    # role filter) so the active pane / historical list can show it.
+    w = Watcher(root="/nonexistent")
+    w.ingest_pod_transcript("solo_mgr1_p4", [
+        {"kind": "decompose", "role": "mgr1", "summary": "decomposed"}])
+    assert "solo_mgr1_p4" in w.pods
+    assert w.pods["solo_mgr1_p4"]["status"] == "active"
+    # A closed non-leader solo pod is also viewable (the historical list).
+    w.ingest_pod_transcript("solo_mgr1_p4", [
+        {"kind": "decompose", "role": "mgr1", "summary": "decomposed"},
+        {"kind": "close", "role": "mgr1",
+         "decision": "decomposition complete"}])
+    assert w.pods["solo_mgr1_p4"]["status"] == "closed"
+
+
 def test_seed_transcripts_ingests_closed_history(tmp_path):
     # A1: seed_transcripts ingests every **existing** transcript as closed
     # history (from a prior run) so the historical list is populated at

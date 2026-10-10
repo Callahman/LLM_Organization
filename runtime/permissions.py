@@ -147,6 +147,68 @@ def can_edit(role, path: str) -> bool:
     return edit_reason(role, path)[0]
 
 
+def read_reason(role, path: str) -> tuple:
+    """Return ``(allowed, reason)`` for a role's READ of *path*.
+
+    This is the read gate (the mirror of `edit_reason` for writes). It
+    enforces the org's read invariants (audit §2.4) — the ones that were
+    previously advisory (documented but not enforced):
+
+    - CODE_READ  : department heads and the leader cannot read any code
+                   (work products) — only what is brought up as a bounded
+                   summary + pointer.
+    - READ_SCOPE : a role may only read its own team's department directory
+                   (another department is refused).
+    - CROSS_TEAM : a role reading a sibling team directory in the same
+                   department is the duplication-check read — it is ALLOWED
+                   but flagged (the dashboard shows it).
+
+    `reason` is a short, human-readable explanation of the decision — which
+    invariant was satisfied (when allowed) or violated (when refused) — so a
+    refusal is self-explanatory in the audit (visible, never silent).
+    """
+    from org import tiers
+    # 0. SANDBOX: a read that escapes the workspace is refused (the "keep them
+    #    in LLM_Org" rule) — the same boundary the write gate enforces.
+    try:
+        resolve(path)
+    except PermissionError as e:
+        return False, f"sandbox: {e}"
+    rel = _rel(path).replace(os.sep, "/")
+    if not rel:
+        return False, "read: the workspace root is not a readable path"
+    # 1. MISSION: MISSION.md is read-only for every role (the mission lock —
+    #    the same lock the write gate enforces).
+    if rel == "MISSION.md":
+        return False, "mission: MISSION.md is read-only for every role " \
+                      "(the mission lock)"
+    # 2. META: the meta-rule files are read-only for every role (the rules
+    #    themselves — the same lock the write gate enforces).
+    if rel.replace("/", os.sep) in PROTECTED:
+        return False, f"meta_rule: {rel} is a protected invariant " \
+                      f"(read-only)"
+    # 3. CODE_READ: department heads and the leader cannot read code.
+    if (tiers.is_head(role) or tiers.is_leader(role)) and tiers.is_code_path(rel):
+        return False, ("code_read: department heads and the leader cannot "
+                       "read code (work products) — only what is brought "
+                       "up as a bounded summary + pointer")
+    # 4. READ_SCOPE: a role may only read its own team's department directory.
+    if not tiers.can_read(role, rel):
+        return False, (f"read_scope: {role.id} may only read its own team's "
+                       f"department directory")
+    # 5. CROSS_TEAM: a sibling-team read is allowed but flagged (the
+    #    duplication-check read).
+    if tiers.cross_team_read(role, rel):
+        return True, ("cross_team: allowed (the duplication-check read) — "
+                      "flagged for the dashboard")
+    return True, f"read: {role.id} may read {rel}"
+
+
+def can_read_path(role, path: str) -> bool:
+    """True if *role* may read *path* (see `read_reason` for the why)."""
+    return read_reason(role, path)[0]
+
+
 def write_file(role, path: str, content: str) -> str:
     """Write *content* to *path* if *role* may edit it.
 
@@ -165,6 +227,46 @@ def write_file(role, path: str, content: str) -> str:
     with open(real, "w", encoding="utf-8") as f:
         f.write(content)
     return real
+
+
+def read_file(
+    role,
+    path,
+    log: Optional[Callable[[str], None]] = None,
+) -> str:
+    """Read a file on behalf of ``role``, gated by the read invariants (the
+    sandbox, the mission lock, the meta-rule lock, the department scope, and
+    the code-read invariants — heads/leaders cannot read code).
+
+    This is the **read gate** that wires the invariants into the pipeline
+    (the write counterpart is ``write_file``). A refused read raises
+    ``PermissionError`` (visible, never silent); the rest proceed.
+
+    A **cross-team read** (a sibling team directory in the same department —
+    the duplication-check read) is **logged** (visible, not silent): when
+    ``log`` is supplied it is called with a human-readable line, so the audit
+    shows the role read across teams.
+
+    Returns the file's content (an empty string when the file does not yet
+    exist — a read of a new file is not an error).
+    """
+    from org import tiers
+    allowed, reason = read_reason(role, path)
+    if not allowed:
+        raise PermissionError(
+            f"role {role.id!r} may not read {path!r}: {reason}"
+        )
+    # A cross-team read (a sibling team dir in the same department) is the
+    # duplication-check read that must be logged (visible, not silent).
+    rel = _rel(path).replace(os.sep, "/")
+    if tiers.cross_team_read(role, rel):
+        if log:
+            log(f"cross-team read: {role.id!r} -> {path!r}")
+    real = resolve(path)
+    if not os.path.isfile(real):
+        return ""
+    with open(real, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 def apply_code_edits(

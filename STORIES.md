@@ -1,7 +1,7 @@
 # STORIES — Audit follow-up work
 
-> **STATUS: PENDING USER APPROVAL — do NOT begin executing any of these
-> stories until the user approves this markdown.**
+> **STATUS: APPROVED — Waves 1–3 code complete (Wave 3 awaiting test
+> confirmation); Wave 4 (S22) pending.**
 
 This document organizes the audit-follow-up requests (all related to
 `AUDIT.md` findings) into actionable stories. Each story lists its **type**,
@@ -408,20 +408,42 @@ passed as `None` (handled by `_escalate`).
   `org/tiers.py`; what is missing is a **code-read / read gate** in the
   pipeline to wire the invariants in.
 - **Acceptance criteria:**
-  - [ ] A read gate is added to the pipeline (e.g. in `runtime/dispatch.py` /
+  - [x] A read gate is added to the pipeline (e.g. in `runtime/dispatch.py` /
         `runtime/pods.py`) that consults `org.tiers.can_read`,
         `org.tiers.can_read_code`, and `org.tiers.cross_team_read` before a
         role reads a department dir or any code path.
-  - [ ] Department heads and the Leader are blocked from reading code paths
+  - [x] Department heads and the Leader are blocked from reading code paths
         (visible refusal, consistent with the permission layer's style).
-  - [ ] A role is blocked from reading another team's department directory
+  - [x] A role is blocked from reading another team's department directory
         (per `can_read` / `cross_team_read`).
-  - [ ] Tests added covering each enforced invariant (block + allow cases).
-  - [ ] The "advisory" notes in `org/tiers.py` docstrings are updated to
+  - [x] Tests added covering each enforced invariant (block + allow cases).
+  - [x] The "advisory" notes in `org/tiers.py` docstrings are updated to
         "enforced" (or removed).
 - **Affected files:** `org/tiers.py` (docstrings), `runtime/dispatch.py`,
   `runtime/pods.py`, `runtime/permissions.py` (gate integration), `tests/`.
 - **Dependencies:** None. (Conceptually aligns with the permission layer.)
+
+**Confirmation (Wave 3):** the read gate is implemented in
+`runtime/permissions.py` — `read_reason()` / `can_read_path()` /
+`read_file()` (the mirror of `edit_reason`/`write_file` for reads). It
+enforces, in order: the sandbox, the mission lock, the meta-rule lock,
+**CODE_READ** (department heads and the leader cannot read any code — a
+visible `PermissionError` with a `code_read:` reason), **READ_SCOPE** (a role
+may only read its own team's department directory — `tiers.can_read`), and
+**CROSS_TEAM** (a sibling-team read in the same department is allowed but
+**logged** via `read_file`'s `log` callable — the duplication-check read,
+visible not silent). It is wired into the live path in `runtime/dispatch.py`:
+`_ic_pre_read()` (called from `_run_self_edits` before `apply_code_edits`) —
+the IC reads the code it is about to change through the gate; a refused read
+is logged to `self_edits.jsonl` (visible, never silent). The `org/tiers.py`
+docstrings now say "Enforced (Story 14)" (the "Advisory" notes are gone).
+Tests: `test_read_gate_blocks_sandbox_escape`,
+`test_read_gate_blocks_mission_and_meta`,
+`test_read_gate_blocks_other_department`,
+`test_read_gate_blocks_code_for_head_and_leader` (block cases) +
+`test_read_gate_allows_in_scope_read`, `test_read_gate_logs_cross_team_read`
+(allow cases), plus the two `test_*_enforced_note_present` docstring tests in
+`test_tiers.py`.
 
 ### S21 — Solo pods track any role's work done outside a pod
 
@@ -433,18 +455,37 @@ passed as `None` (handled by `_escalate`).
   of a pod** (not just the Leader's) — i.e., whenever a role does work that is
   not part of a multi-role pod, it is recorded as a solo pod.
 - **Acceptance criteria:**
-  - [ ] `SoloTracker` (or an equivalent) is generalized so **any role** can
+  - [x] `SoloTracker` (or an equivalent) is generalized so **any role** can
         have solo-pod records for its out-of-pod work.
-  - [ ] When a role performs work outside a pod (e.g. a head/manager/IC
+  - [x] When a role performs work outside a pod (e.g. a head/manager/IC
         decomposition step, a self-edit, an upward report), it is recorded as
         a solo pod (transcript + jsonl) like the Leader's are.
-  - [ ] The dashboard can view any role's solo pods (not only the Leader's).
-  - [ ] Existing Leader solo-pod behavior is preserved (no regression).
-  - [ ] Tests added for a non-Leader role producing a solo pod.
+  - [x] The dashboard can view any role's solo pods (not only the Leader's).
+  - [x] Existing Leader solo-pod behavior is preserved (no regression).
+  - [x] Tests added for a non-Leader role producing a solo pod.
 - **Affected files:** `runtime/pods.py` (`SoloTracker`), `runtime/session.py`,
   `runtime/dispatch.py` (record out-of-pod work), `observability/dashboard.py`
   (view any role's solo pods), `tests/`.
 - **Dependencies:** None. (Aligns with the observability flow.)
+
+**Confirmation (Wave 3):** `form_solo_pod()` / `SoloTracker` are
+**role-agnostic** — `pod_for()`/`record()`/`close()` take a `role` argument
+(defaulting to the leader for backward compatibility), and pods are keyed by
+`(role.id, activity)`. `runtime/dispatch.py` records the out-of-pod work of
+**any role** as a solo pod (transcript + jsonl, one file per `(role,
+activity)`, growing per round): the head's decomposition (`solo_<head>_p4`),
+the manager's decomposition (`solo_<mgr>_p4`), and the IC's work
+(`solo_<ic>_p4`) in both dispatch branches (with-managers and
+head-directs-ICs). The session passes `solo=self.solo` into the dispatch
+(`runtime/session.py`); the leader's P1/P2/P3/P5/P6 solo pods are unchanged
+(the default role is the leader). The dashboard views any role's solo pods
+with no role filter (it ingests every `pods/transcripts/*.jsonl` file —
+`solo_mgr1_p4` etc. appear in the active pane / historical list like the
+leader's). Tests: `test_form_solo_pod_any_role`,
+`test_solo_tracker_records_non_leader_role`,
+`test_solo_tracker_leader_behavior_preserved`,
+`test_solo_tracker_close_non_leader_role` (`test_pods.py`) and
+`test_dashboard_views_non_leader_solo_pod` (`test_dashboard.py`).
 
 ---
 
@@ -633,6 +674,29 @@ tests pass with the Wave 2 changes (S15–S18). Also please confirm:
 - `reset_org.py --yes` still works (the `wipe_state()` refactor didn't break
   it).
 
+### Wave 3 — COMPLETE (awaiting test confirmation)
+
+| Story | Status | What changed |
+|---|---|---|
+| S14 | ✅ done | Read gate in `runtime/permissions.py` (`read_reason`/`can_read_path`/`read_file`) enforcing the sandbox, mission lock, meta-rule lock, **CODE_READ** (heads/leader cannot read code), **READ_SCOPE** (own team's dept dir only), and **CROSS_TEAM** (allowed but logged); wired into the live path via `runtime/dispatch.py::_ic_pre_read` (the IC pre-reads the code it is about to change through the gate before `apply_code_edits`). `org/tiers.py` docstrings updated "Advisory" → "Enforced (Story 14)". |
+| S21 | ✅ done | `form_solo_pod`/`SoloTracker` generalized to any role (`role` arg, keyed by `(role.id, activity)`); the dispatch records head/manager/IC out-of-pod work (decomposition + IC work, both branches) as solo pods; the session passes `solo=` into the dispatch; the dashboard views any role's solo pods (no role filter); leader behavior preserved (default role). |
+
+**Test run (user):** Please run `python -m pytest tests/ -q` to confirm all
+**188** tests pass (the 177 that passed after the Wave 1 fix — Wave 2 added
+no new tests — plus 11 new Wave 3 tests: 6 read-gate tests in
+`test_permissions.py`, 4 solo-pod tests in `test_pods.py`, 1 dashboard test
+in `test_dashboard.py`; the 2 `test_tiers.py` advisory-note tests were
+updated in place). Also please confirm:
+- A head/leader code read is refused with a visible `PermissionError`
+  (`code_read:` reason) (S14).
+- A cross-team read (a sibling team dir in the same department) is allowed and
+  **logged** (`cross-team read: ...` line) (S14).
+- A dispatch run produces solo-pod transcript files for non-leader roles
+  (e.g. `pods/transcripts/solo_mgr1_p4.jsonl`, `solo_ic1_p4.jsonl`) alongside
+  the leader's (S21).
+- The leader's solo pods (`solo_leader_p1` … `solo_leader_p6`) are unchanged
+  (S21, no regression).
+
 ---
 
 ## Approval
@@ -643,6 +707,7 @@ tests pass with the Wave 2 changes (S15–S18). Also please confirm:
 - [ ] User confirms the S13 / S15 / S20 defaults (S13: README-only — done;
       S20: wire-in vs. remove — **pending**; S15: revisit semantics — Wave 2).
 - [ ] Test confirmation for Wave 1 (see Progress above).
+- [ ] Test confirmation for Wave 3 (see Progress above).
 
 ---
 

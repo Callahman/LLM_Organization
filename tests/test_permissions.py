@@ -81,6 +81,81 @@ def test_org_invariants_and_contract_read_only():
     assert not P.can_edit(leader, os.path.join("roles", "base.py"))
 
 
+# --- READ GATE (Story 14) ----------------------------------------------------
+
+def test_read_gate_blocks_sandbox_escape():
+    # A read that escapes the workspace is refused (the sandbox invariant) —
+    # a visible PermissionError, never a silent read.
+    with pytest.raises(PermissionError):
+        P.read_file(make_role("ic", "engineering", "development"),
+                    os.path.join("..", "..", "outside.txt"))
+
+
+def test_read_gate_blocks_mission_and_meta():
+    # The mission lock and the meta-rule lock refuse reads for every role,
+    # including the leader (the rules themselves are read-only).
+    for role in (make_role("leader"),
+                 make_role("ic", "engineering", "development")):
+        with pytest.raises(PermissionError):
+            P.read_file(role, "MISSION.md")
+        with pytest.raises(PermissionError):
+            P.read_file(role, os.path.join("runtime", "permissions.py"))
+
+
+def test_read_gate_blocks_other_department():
+    # A role may not read another department's files (the department scope).
+    with pytest.raises(PermissionError):
+        P.read_file(make_role("ic", "engineering", "development"),
+                    os.path.join("departments", "hr", "hirings", "note.md"))
+
+
+def test_read_gate_blocks_code_for_head_and_leader():
+    # Department heads and the leader cannot read any code (the code-read
+    # invariant) — a visible PermissionError, never a silent read.
+    code = os.path.join("departments", "engineering", "development", "a.py")
+    with pytest.raises(PermissionError):
+        P.read_file(make_role("department_head", "engineering"), code)
+    with pytest.raises(PermissionError):
+        P.read_file(make_role("leader"), code)
+
+
+def test_read_gate_allows_in_scope_read(monkeypatch):
+    # An in-scope read (a manager/IC reading code in its own department) is
+    # allowed and returns the file's content.
+    tmp = os.path.join(P.ROOT, "read_test_tmp")
+    os.makedirs(tmp, exist_ok=True)
+    monkeypatch.setattr(P, "ROOT", tmp)
+    try:
+        code = os.path.join("departments", "engineering", "development", "a.py")
+        P.write_file(make_role("ic", "engineering", "development"),
+                     code, "print('hi')\n")
+        assert P.read_file(
+            make_role("manager", "engineering", "development"), code
+        ) == "print('hi')\n"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_read_gate_logs_cross_team_read(monkeypatch):
+    # A cross-team read (a sibling team dir in the same department — the
+    # duplication-check read) is **logged** (visible, not silent): the log
+    # callable is called with a cross-team line, and the read still returns
+    # the content.
+    tmp = os.path.join(P.ROOT, "read_test_tmp")
+    os.makedirs(tmp, exist_ok=True)
+    monkeypatch.setattr(P, "ROOT", tmp)
+    try:
+        sib = os.path.join("departments", "engineering", "etl", "x.py")
+        P.write_file(make_role("ic", "engineering", "etl"), sib, "print('x')\n")
+        lines = []
+        content = P.read_file(make_role("ic", "engineering", "development"),
+                              sib, log=lines.append)
+        assert content == "print('x')\n"
+        assert any("cross-team" in ln for ln in lines)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 # --- Department policy -----------------------------------------------------
 
 def test_dept_policy_only_own_head():
