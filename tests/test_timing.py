@@ -238,3 +238,67 @@ def test_leader_output_schema_is_valid_json_schema_shape():
     eff = LEADER_OUTPUT_SCHEMA["properties"]["efficiency"]
     assert eff["properties"]["target"]["type"] == "string"
     assert eff["properties"]["reasoning"]["type"] == "string"
+
+
+# --- Dispatch efficiency processing -------------------------------------------
+
+def _efficiency_org(tmp_path):
+    org = OrgState(history_dir=str(tmp_path))
+    leader = _leader()
+    head = _head("head_analytics", "analytics")
+    mgr = _mgr("mgr1", "analytics", "team1", reports_to="head_analytics")
+    ic1 = _ic("ic1", "analytics", "team1", reports_to="mgr1")
+    for r in (leader, head, mgr, ic1):
+        org.add_role(r)
+    return org, leader
+
+
+def test_process_efficiency_reassign_moves_team_and_logs(tmp_path):
+    from runtime.dispatch import _process_efficiency
+    org, leader = _efficiency_org(tmp_path)
+    _process_efficiency(
+        org, leader,
+        {"action": "reassign", "target": "ic1", "new_team": "team2",
+         "reasoning": "slow"},
+        None, None,
+    )
+    # The role's team (work-dir slug) is changed.
+    assert org.get("ic1").team == "team2"
+    # The move is logged visibly (never silent).
+    reassigned = [e for e in org.events if e["kind"] == "role_reassigned"]
+    assert len(reassigned) == 1
+    assert reassigned[0]["detail"]["old_team"] == "team1"
+    assert reassigned[0]["detail"]["new_team"] == "team2"
+
+
+def test_process_efficiency_report_logs_only(tmp_path):
+    from runtime.dispatch import _process_efficiency
+    org, leader = _efficiency_org(tmp_path)
+    _process_efficiency(
+        org, leader,
+        {"action": "report", "target": "ic1", "reasoning": "slow"},
+        None, None,
+    )
+    # A report is logged but takes no action (the role is unchanged).
+    reported = [e for e in org.events if e["kind"] == "efficiency_reported"]
+    assert len(reported) == 1
+    assert org.get("ic1").status == "active"
+    assert org.get("ic1").team == "team1"
+
+
+def test_process_efficiency_fire_cascades(tmp_path):
+    from runtime.dispatch import _process_efficiency
+    org, leader = _efficiency_org(tmp_path)
+    approver_fn = lambda approver_type, action, target: {
+        "decision": "approve", "rationale": "ok"}
+    _process_efficiency(
+        org, leader,
+        {"action": "fire", "target": "mgr1", "reasoning": "slow"},
+        approver_fn, None,
+    )
+    # Firing the manager cascades to its report (the IC).
+    assert org.get("mgr1").status == "inactive"
+    assert org.get("ic1").status == "inactive"
+    fired = [e for e in org.events if e["kind"] == "fired"]
+    assert len(fired) == 1
+    assert fired[0]["detail"]["cascade_size"] == 2
