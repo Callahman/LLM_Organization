@@ -73,6 +73,57 @@ def test_dispatch_propagates_up(tmp_path):
     assert "unit(s) reported up" in team["summary"]
 
 
+def test_head_generates_policy_before_managers(tmp_path, monkeypatch):
+    # Change 2: before a head decomposes into managers, it is invoked to
+    # author its department POLICY (full markdown, written to disk) and a
+    # POLICY_SUMMARY (for ICs). Managers get the full policy in their context;
+    # ICs get the policy_summary (not the full policy).
+    monkeypatch.chdir(tmp_path)  # isolate the policy file write
+    org, leader, head, mgr, ic = _org()
+    backend = StubBackend()
+    backend.set_script("leader", [
+        {"decomposition": {"department_objectives": [
+            {"head_id": "head_analytics", "objective": "build the pipeline"}]}},
+    ])
+    # The head's script: [policy, decomposition] — the first invoke is the
+    # policy generation, the second is the decomposition.
+    backend.set_script("head_analytics", [
+        {"policy": "ALWAYS use schema v2.", "policy_summary": "use schema v2",
+         "summary": "policy set", "confidence": 0.9},
+        {"decomposition": {"team_objectives": [
+            {"manager_id": "mgr1", "objective": "build the ETL"}]}},
+    ])
+    backend.set_script("mgr1", [
+        {"decomposition": {"ic_tasks": [
+            {"ic_id": "ic1", "task": "write the extractor"}]}},
+    ])
+    backend.set_script("ic1", [
+        {"summary": "extractor done",
+         "work_path": "departments/analytics/pipelines/extractor.md"},
+    ])
+
+    mission = {"purpose": "a data pipeline", "success_criteria": ["works"],
+               "scope": ["ETL"]}
+    dispatch(backend, org, leader, mission)
+
+    # The head was invoked for the policy (context mentions "POLICY").
+    head_calls = [ctx for (rid, ctx) in backend.calls
+                  if rid == "head_analytics"]
+    assert any("author your department's POLICY" in ctx
+               for ctx in head_calls)
+    # The manager's context carries the FULL policy.
+    mgr_calls = [ctx for (rid, ctx) in backend.calls if rid == "mgr1"]
+    assert any("ALWAYS use schema v2." in ctx for ctx in mgr_calls)
+    # The IC's context carries the policy_summary (NOT the full policy).
+    ic_calls = [ctx for (rid, ctx) in backend.calls if rid == "ic1"]
+    assert any("use schema v2" in ctx for ctx in ic_calls)
+    assert not any("ALWAYS use schema v2." in ctx for ctx in ic_calls)
+    # The policy was written to disk (isolated under tmp_path).
+    policy_file = tmp_path / "departments" / "analytics" / "ANALYTICS_POLICY.md"
+    assert policy_file.exists()
+    assert "ALWAYS use schema v2." in policy_file.read_text(encoding="utf-8")
+
+
 def test_dispatch_skips_missing_roles(tmp_path):
     # A department objective that references a head not in the org is skipped
     # (no tier is fabricated).

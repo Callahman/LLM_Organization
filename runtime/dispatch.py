@@ -30,6 +30,7 @@ for a plain `StubBackend`).
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -207,17 +208,18 @@ def _head_ctx(head: Role, objective: str, digest: str) -> str:
     )
 
 
-def _manager_ctx(manager: Role, objective: str) -> str:
+def _manager_ctx(manager: Role, objective: str, policy: str = "") -> str:
     return (
         f"PHASE 4 (manager {manager.id}): decompose the team objective into "
-        f"IC tasks. Objective: {objective} "
+        f"IC tasks. Objective: {objective} | Department policy (follow it, and "
+        f"give your ICs tasks that satisfy it): {policy or '(none)'} "
         "Set `decomposition` to a JSON OBJECT (not a string) whose "
         "`ic_tasks` key is a JSON array of objects, each exactly "
         "{\"ic_id\": <str>, \"task\": <str>}."
     )
 
 
-def _ic_ctx(ic: Role, task: str) -> str:
+def _ic_ctx(ic: Role, task: str, policy_summary: str = "") -> str:
     # The exact team work root (departments/<dept>/<team>/). The IC must write
     # there — a bare top-level dir is refused by the permission layer as
     # out_of_scope, so the prompt names the real root, shows a correct/wrong
@@ -240,6 +242,7 @@ def _ic_ctx(ic: Role, task: str) -> str:
     return (
         f"PHASE 4 (IC {ic.id}): do the work in your team directory. Your team "
         f"work directory is {team_root}/ — write ALL files there. {path_rules} "
+        f"Department policy summary (follow it): {policy_summary or '(none)'} "
         f"Task: {task} Set `summary` to a one-line summary of the work done "
         f"and `work_path` to the path of the work (under {team_root}/). If "
         "your work requires changing code, set `code_edits` to a JSON array "
@@ -247,6 +250,51 @@ def _ic_ctx(ic: Role, task: str) -> str:
         f"edit is gated by the permission layer: write under {team_root}/ "
         "only; the mission and the rules are read-only."
     )
+
+
+def _policy_ctx(head: Role, mission_digest: str, existing_policy: str,
+                directive: str) -> str:
+    """The head's Phase 4 policy-generation context. The head is invoked
+    BEFORE it decomposes into managers to produce (a) the full department
+    POLICY markdown and (b) a POLICY_SUMMARY that distils the key policy points
+    for ICs. Context = Mission + the head's existing policy (Department
+    Instructions) + the boss's directive (the leader's department objective, or
+    the head's mandate for a required dept) + the role's memory (auto-folded by
+    the MemoryBackend)."""
+    return (
+        f"PHASE 4 (head {head.id}): author your department's POLICY so your "
+        f"managers and ICs have a clear instruction on how their work fulfils "
+        f"the org's goal. Mission: {mission_digest} | Your directive: "
+        f"{directive} | Your existing policy (update it, don't start from "
+        f"scratch): {existing_policy or '(none yet)'} Set `policy` to the FULL "
+        f"policy markdown (how work is broken down, standards, how managers and "
+        f"ICs report) and `policy_summary` to a SHORT summary of the key policy "
+        f"points (a few lines) that ICs will be given directly. Set `summary` "
+        f"to a one-line summary and `confidence` to a number 0-1."
+    )
+
+
+def _read_policy(dept: str, departments_dir: str) -> str:
+    """The existing content of a department's policy markdown ("" if missing)."""
+    if not dept:
+        return ""
+    path = os.path.join(departments_dir, dept, f"{dept.upper()}_POLICY.md")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _write_policy(dept: str, policy_text: str, departments_dir: str) -> None:
+    """Write a department's policy markdown (creating the dir if needed)."""
+    if not dept or not policy_text:
+        return
+    dept_dir = os.path.join(departments_dir, dept)
+    os.makedirs(dept_dir, exist_ok=True)
+    with open(os.path.join(dept_dir, f"{dept.upper()}_POLICY.md"), "w",
+              encoding="utf-8") as f:
+        f.write(policy_text)
 
 
 def _work_path(ic: Role, task: Dict[str, Any]) -> str:
@@ -720,6 +768,60 @@ def _decomposition_list(out: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
     return [v for v in val if isinstance(v, dict)]
 
 
+def generate_head_policies(
+    backend: LLMBackend,
+    org: OrgState,
+    dept_objectives: List[Dict[str, Any]],
+    mission_digest: str,
+    departments_dir: str = "departments",
+) -> Dict[str, Dict[str, str]]:
+    """Phase 4 (pre-decomposition): every department head — operational AND
+    required (HR/Safety/Morality) — is invoked to author its department POLICY
+    (full markdown, written to ``departments/<dept>/<DEPT>_POLICY.md``) and a
+    POLICY_SUMMARY (the key points ICs are given directly). This runs BEFORE
+    any head decomposes into managers, so managers/ICs have a clear instruction
+    on how their work fulfils the org's goal.
+
+    The head's context = Mission + its existing policy (Department
+    Instructions) + its directive (the leader's department objective if the
+    leader assigned one, else the head's mandate) + its memory (auto-folded by
+    the MemoryBackend).
+
+    Returns ``{head_id: {"policy": <full text>, "policy_summary": <summary>}}``.
+    """
+    # A head's directive: the leader's department objective if assigned, else
+    # the head's own mandate (a required dept gets no operational objective).
+    objective_by_head = {
+        obj.get("head_id", ""): obj.get("objective", "")
+        for obj in dept_objectives
+        if isinstance(obj, dict)
+    }
+    policies: Dict[str, Dict[str, str]] = {}
+    for head in org.department_heads():
+        directive = (
+            objective_by_head.get(head.id, "")
+            or head.mandate
+            or "your department's governance responsibilities"
+        )
+        existing = _read_policy(head.department, departments_dir)
+        out = backend.invoke(
+            head, _policy_ctx(head, mission_digest, existing, directive),
+            reasoning=classify_complexity(4, head, {}),
+            phase=4,
+        )
+        policy = out.get("policy", "") if isinstance(out, dict) else ""
+        policy_summary = (
+            out.get("policy_summary", "") if isinstance(out, dict) else ""
+        )
+        if policy:
+            _write_policy(head.department, policy, departments_dir)
+        policies[head.id] = {
+            "policy": policy,
+            "policy_summary": policy_summary,
+        }
+    return policies
+
+
 def dispatch(
     backend: LLMBackend,
     org: OrgState,
@@ -814,6 +916,14 @@ def dispatch(
                            "Phase 4 decomposition)"},
             )
 
+    # Pre-decomposition: every department head (operational AND required)
+    # authors its department POLICY + POLICY_SUMMARY BEFORE any head decomposes
+    # into managers, so managers/ICs have a clear instruction on how their work
+    # fulfils the org's goal.
+    head_policies = generate_head_policies(
+        backend, org, dept_objectives, digest,
+    )
+
     results: List[Dict[str, Any]] = []
     for obj in dept_objectives:
         head = org.get(obj.get("head_id", ""))
@@ -861,7 +971,8 @@ def dispatch(
                     direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
                 )
             if manager is not None:
-                mgr_out = backend.invoke(manager, _manager_ctx(manager, t_obj.get("objective", "")),
+                mgr_out = backend.invoke(manager, _manager_ctx(manager, t_obj.get("objective", ""),
+                          policy=head_policies.get(head.id, {}).get("policy", "")),
                          reasoning=classify_complexity(4, manager, {}),
                          phase=4)
                 ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
@@ -890,7 +1001,10 @@ def dispatch(
                     if ic is None:
                         continue
                     ic_out, ic_err = _invoke_ic(
-                        backend, ic, _ic_ctx(ic, task.get("task", "")),
+                        backend, ic, _ic_ctx(ic, task.get("task", ""),
+                                              policy_summary=head_policies.get(
+                                                  head.id, {}).get(
+                                                  "policy_summary", "")),
                         reasoning=classify_complexity(4, ic, {}),
                         timeout=ic_timeout_seconds,
                         phase=4,
@@ -953,7 +1067,10 @@ def dispatch(
                 if ic is None:
                     continue
                 ic_out, ic_err = _invoke_ic(
-                    backend, ic, _ic_ctx(ic, t_obj.get("objective", "")),
+                    backend, ic, _ic_ctx(ic, t_obj.get("objective", ""),
+                                         policy_summary=head_policies.get(
+                                             head.id, {}).get(
+                                             "policy_summary", "")),
                     reasoning=classify_complexity(4, ic, {}),
                     timeout=ic_timeout_seconds,
                     phase=4,

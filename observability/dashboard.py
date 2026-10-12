@@ -158,6 +158,8 @@ class Watcher:
                 "stream_id": stream_id,
                 "role": e.get("role", ""),
                 "model": e.get("model", ""),
+                "label": e.get("label", ""),
+                "reasoning": e.get("reasoning", ""),
                 "kinds": {"thinking": "", "content": "", "tool_call": ""},
                 "updated": time.time(),
             })
@@ -285,12 +287,23 @@ class Watcher:
             # in array order, so the previous call sits on top and the current
             # (growing) call at the bottom — the most recent output is always
             # at the bottom, like a terminal.
+            # The current segment (self.stream_segments[0]) is still streaming —
+            # keep it capped so the per-second SSE payload stays small while a
+            # call is actively growing. The previous segment(s) are complete —
+            # emit them in full (the user should see the whole finished call,
+            # not a 4000-char cut).
             stream = [
                 {
                     "stream_id": s["stream_id"],
                     "role": s["role"],
                     "model": s["model"],
-                    "kinds": {k: v[-4000:] for k, v in s["kinds"].items()},
+                    "label": s.get("label", ""),
+                    "reasoning": s.get("reasoning", ""),
+                    "kinds": (
+                        {k: v for k, v in s["kinds"].items()}
+                        if s is not self.stream_segments[0]
+                        else {k: v[-4000:] for k, v in s["kinds"].items()}
+                    ),
                     "updated": s["updated"],
                 }
                 for s in reversed(self.stream_segments)

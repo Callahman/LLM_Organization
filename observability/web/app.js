@@ -484,7 +484,13 @@ function renderModelStream() {
   for (const seg of segments) {
     const head = document.createElement('div');
     head.className = 'stream-head';
-    head.textContent = seg.role + ' · ' + seg.model;
+    // The segment is headed by the role's full label (id · sub_architype ·
+    // (personality) · department) + the reasoning level actually used
+    // (HIGH/MEDIUM/LOW) — NOT the model name (all roles share the same
+    // backbone, so it carries no useful info).
+    const label = seg.label || seg.role;
+    const reasoning = seg.reasoning ? ' · ' + seg.reasoning : '';
+    head.textContent = label + reasoning;
     pane.appendChild(head);
     for (const kind of ['thinking', 'content', 'tool_call']) {
       const text = (seg.kinds && seg.kinds[kind]) || '';
