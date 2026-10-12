@@ -132,15 +132,20 @@ class HistoryStore:
         return self._append("tool_calls.jsonl", dict(stat))
 
     def log_stream(self, stream_id: str, role_id: str, model: str,
-                   kind: str, text: str) -> str:
+                   kind: str, text: str, label: str = "",
+                   reasoning: str = "") -> str:
         """Record one chunk of a model call's streamed output
         (``history/stream.jsonl``) — ``{ts, stream_id, role, model, kind,
-        text}``; ``kind`` is ``thinking`` / ``content`` / ``tool_call``. The
-        source for the dashboard's live "model stream" window (short-term)."""
+        text, label, reasoning}``; ``kind`` is ``thinking`` / ``content`` /
+        ``tool_call``. ``label`` is the role's full label (id · sub_architype
+        · (personality) · department); ``reasoning`` is the level actually
+        used (HIGH/MEDIUM/LOW). The source for the dashboard's live "model
+        stream" window (short-term)."""
         return self._append(
             "stream.jsonl",
             {"ts": time.time(), "stream_id": stream_id, "role": role_id,
-             "model": model, "kind": kind, "text": text},
+             "model": model, "kind": kind, "text": text, "label": label,
+             "reasoning": reasoning},
         )
 
     def log_cycle(self, phase: int, cycle: int, started: float,

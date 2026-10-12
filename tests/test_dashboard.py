@@ -176,6 +176,25 @@ def test_ingest_stream_groups_by_stream_id_and_kind():
     assert [s["stream_id"] for s in snap["stream"]] == ["s2", "s3"]
 
 
+def test_snapshot_caps_current_but_not_previous():
+    # Change 1: the current (still-streaming) segment is capped at 4000 chars
+    # (keeps the per-second SSE payload small while a call is growing), while
+    # the previous (complete) segment is emitted in full (the user sees the
+    # whole finished call, not a 4000-char cut).
+    w = Watcher(root="/nonexistent")
+    w.ingest_stream({"stream_id": "s1", "role": "leader", "model": "qwen",
+                     "kind": "content", "text": "x" * 9000})  # previous
+    w.ingest_stream({"stream_id": "s2", "role": "ic", "model": "qwen",
+                     "kind": "content", "text": "y" * 9000})  # current
+    snap = w.snapshot()
+    # The snapshot is [previous, current] = [s1, s2].
+    assert [s["stream_id"] for s in snap["stream"]] == ["s1", "s2"]
+    # s1 (previous) is emitted in full (9000 chars — no cap).
+    assert len(snap["stream"][0]["kinds"]["content"]) == 9000
+    # s2 (current) is capped at 4000 chars.
+    assert len(snap["stream"][1]["kinds"]["content"]) == 4000
+
+
 # --- file polling (temp dir) ---------------------------------------------------
 
 def test_poll_reads_new_lines_incrementally(tmp_path):

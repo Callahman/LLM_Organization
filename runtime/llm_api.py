@@ -31,6 +31,22 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from roles.base import validate_envelope
 from runtime.llm import LLMBackend, Reasoning, StubBackend
 
+
+def _role_label(role) -> str:
+    """The role's full label for the live feed / recordings: id (always),
+    sub_architype (if set), (personality) (if set), department (if set) —
+    empty parts are skipped, joined with ' · '. The model name is
+    deliberately NOT part of the label (every role shares the same backbone,
+    so it carries no useful info)."""
+    parts = [role.id]
+    if getattr(role, "sub_architype", ""):
+        parts.append(role.sub_architype)
+    if getattr(role, "personality", ""):
+        parts.append(f"({role.personality})")
+    if getattr(role, "department", ""):
+        parts.append(role.department)
+    return " · ".join(parts)
+
 # The single tool the model must call to submit its structured output.
 TOOL_NAME = "submit_output"
 TOOL_DESCRIPTION = (
@@ -176,8 +192,12 @@ class OpenAIBackend(LLMBackend):
         # never break a call (exceptions are swallowed).
         self.on_call: Optional[Callable[[Dict[str, Any]], None]] = None
         # Forward each streamed chunk (the dashboard's live "model stream"
-        # window): (stream_id, role_id, model, kind, text).
-        self.on_stream: Optional[Callable[[str, str, str, str, str], None]] = None
+        # window): (stream_id, role_id, model, kind, text, label, reasoning).
+        # `label` is the role's full label (id · sub_architype · (personality)
+        # · department); `reasoning` is the level actually used (HIGH/MEDIUM/
+        # LOW). The model name is recorded but not rendered (all roles share
+        # the same backbone).
+        self.on_stream: Optional[Callable[[str, str, str, str, str, str, str], None]] = None
         # The phase of the in-flight invoke (set by invoke, read by _report):
         # the backend is driven sequentially, so this is safe. Carried to the
         # tool_calls row so the dashboard can segment calls by phase (A0).
@@ -581,15 +601,23 @@ class OpenAIBackend(LLMBackend):
             return "transport"
         return "other"
 
-    def _emit_stream(self, stream_id: str, role_id: str, kind: str,
-                     text: str) -> None:
+    def _emit_stream(self, stream_id: str, role, kind: str, text: str,
+                     reasoning=None) -> None:
         """Forward one streamed chunk to the on_stream callback (the dashboard's
-        live "model stream" window). Exceptions are swallowed: observability
-        must never break the pipeline (same guarantee as on_call)."""
+        live "model stream" window). The chunk carries the role's full label
+        (id · sub_architype · (personality) · department) and the reasoning
+        level actually used (HIGH/MEDIUM/LOW) — NOT the model name (every role
+        shares the same backbone, so it carries no useful info). Exceptions are
+        swallowed: observability must never break the pipeline (same guarantee
+        as on_call)."""
         if self.on_stream is None:
             return
         try:
-            self.on_stream(stream_id, role_id, self.model, kind, text)
+            self.on_stream(
+                stream_id, role.id, self.model, kind, text,
+                _role_label(role),
+                reasoning.value.upper() if reasoning is not None else "LOW",
+            )
         except Exception:
             pass  # observability must never break the pipeline
 
@@ -704,11 +732,11 @@ class OpenAIBackend(LLMBackend):
                         rc = delta.get("reasoning_content") or ""
                         if rc:
                             reasoning_buf += rc
-                            self._emit_stream(stream_id, role_id, "thinking", rc)
+                            self._emit_stream(stream_id, role, "thinking", rc, reasoning)
                         cc = delta.get("content") or ""
                         if cc:
                             content_buf += cc
-                            self._emit_stream(stream_id, role_id, "content", cc)
+                            self._emit_stream(stream_id, role, "content", cc, reasoning)
                         for tc in delta.get("tool_calls") or []:
                             # The tool call's `index` (the OpenAI streaming
                             # format): a second submit_output call in the same
@@ -725,8 +753,8 @@ class OpenAIBackend(LLMBackend):
                             if ta:
                                 tool_args_by_index[idx] = (
                                     tool_args_by_index.get(idx, "") + ta)
-                                self._emit_stream(stream_id, role_id,
-                                                  "tool_call", ta)
+                                self._emit_stream(stream_id, role,
+                                                  "tool_call", ta, reasoning)
                 # Reconstruct the non-streaming message shape and reuse _parse
                 # (tool-call extraction, content fallback, text-shape
                 # recovery). One entry per streamed tool-call index (in index

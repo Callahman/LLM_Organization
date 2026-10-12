@@ -197,19 +197,37 @@ def test_on_stream_fires_per_chunk_for_each_kind(monkeypatch):
     _install_fake_httpx(monkeypatch, reply)
     backend = OpenAIBackend(model="qwen", base_url="http://x/v1")
     calls = []
-    backend.on_stream = lambda sid, rid, model, kind, text: calls.append(
-        (sid, rid, model, kind, text))
+    backend.on_stream = lambda sid, rid, model, kind, text, label, reasoning: \
+        calls.append((sid, rid, model, kind, text, label, reasoning))
     backend.invoke(_role(), "ctx")
     kinds = [c[3] for c in calls]
     assert "thinking" in kinds
     assert "content" in kinds
     assert "tool_call" in kinds
-    # each call has (stream_id, role_id, model, kind, text)
-    for sid, rid, model, kind, text in calls:
+    # each call has (stream_id, role_id, model, kind, text, label, reasoning)
+    for sid, rid, model, kind, text, label, reasoning in calls:
         assert sid  # non-empty stream_id
         assert rid == "leader"  # the role's id
         assert model == "qwen"  # the model
         assert text  # non-empty text
+        assert label  # the role's full label (id at minimum)
+        assert reasoning in ("HIGH", "MEDIUM", "LOW")  # the level used
+
+
+def test_role_label_composes_id_subarchitype_personality_department():
+    # Change 3: the role's label = id (always) · sub_architype (if set) ·
+    # (personality) (if set) · department (if set) — empty parts skipped. The
+    # model name is NOT part of the label (all roles share the same backbone).
+    from runtime.llm_api import _role_label
+    head = types.SimpleNamespace(
+        id="head_analytics", sub_architype="head_of_analytics",
+        personality="Pragmatist", department="analytics")
+    assert _role_label(head) == ("head_analytics · head_of_analytics · "
+                                 "(Pragmatist) · analytics")
+    # Empty parts are skipped (a bare IC with no sub_architype/personality).
+    ic = types.SimpleNamespace(id="ic1", sub_architype="",
+                               personality="", department="analytics")
+    assert _role_label(ic) == "ic1 · analytics"
 
 
 # --- bounded timeout retries ---------------------------------------------------
