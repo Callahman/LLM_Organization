@@ -9,6 +9,7 @@ summaries + artifact pointers); no tier is skipped.
 from roles.base import Role
 from roles.leader import make_leader
 from runtime.llm import StubBackend
+from runtime.llm_api import OpenAIOutputError
 from runtime.org import OrgState
 from runtime.dispatch import dispatch, mission_digest
 
@@ -212,3 +213,129 @@ def test_dispatch_self_edit_gated(monkeypatch):
         assert not os.path.exists(meta_path)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --- error containment (an IC hiccup must not kill the run) ----------------------
+
+class _FlakyBackend:
+    """A backend that fails the first `fail_times` invokes of the roles in
+    `fail_roles` (raising OpenAIOutputError) and then delegates to `inner`.
+    Records every (role_id, context) it sees (to assert the corrective
+    retry's nudge was sent)."""
+
+    def __init__(self, inner, fail_roles=(), fail_times=1):
+        self.inner = inner
+        self.fail_roles = set(fail_roles)
+        self.fail_times = fail_times
+        self.fails = {}
+        self.contexts = []
+
+    def invoke(self, role, context, reasoning=None, timeout=None, phase=None):
+        self.contexts.append((role.id, context))
+        if role.id in self.fail_roles:
+            n = self.fails.get(role.id, 0)
+            if n < self.fail_times:
+                self.fails[role.id] = n + 1
+                raise OpenAIOutputError("malformed reply (simulated)")
+        return self.inner.invoke(
+            role, context, reasoning=reasoning, timeout=timeout, phase=phase)
+
+
+def _decomposition_scripts(backend):
+    """The leader -> head -> manager decomposition scripts (a single IC task)."""
+    backend.set_script("leader", [
+        {"decomposition": {"department_objectives": [
+            {"head_id": "head_analytics", "objective": "build the pipeline"},
+        ]}},
+    ])
+    backend.set_script("head_analytics", [
+        {"decomposition": {"team_objectives": [
+            {"manager_id": "mgr1", "objective": "build the ETL"},
+        ]}},
+    ])
+    backend.set_script("mgr1", [
+        {"decomposition": {"ic_tasks": [
+            {"ic_id": "ic1", "task": "write the extractor"},
+        ]}},
+    ])
+
+
+def test_dispatch_contains_persistent_ic_failure():
+    """Error containment: an IC whose invoke fails (even after the corrective
+    retry) is contained — the dispatch does NOT raise; it records the failure
+    and continues (one IC hiccup must not kill the run)."""
+    org, leader, head, mgr, ic = _org()
+    inner = StubBackend()
+    _decomposition_scripts(inner)
+    # ic1 ALWAYS fails (the corrective retry fails too).
+    backend = _FlakyBackend(inner, fail_roles={"ic1"}, fail_times=99)
+    mission = {"purpose": "a data pipeline", "success_criteria": ["works"],
+               "scope": ["ETL"]}
+    # Must NOT raise — the run completes with the IC's failure contained.
+    reports = dispatch(backend, org, leader, mission)
+    assert len(reports) == 1
+    dept = reports[0]["report"]
+    assert dept["from"] == "head_analytics"
+    # The manager's team report is present — the dispatch continued past the
+    # failing IC (it did not abort the whole department).
+    assert dept["children"][0]["from"] == "mgr1"
+    # The corrective retry was attempted (the nudge context was sent).
+    assert any(rid == "ic1" and "[RETRY]" in c
+               for (rid, c) in backend.contexts)
+
+
+def test_dispatch_ic_corrective_retry_recovers():
+    """Error containment: an IC whose FIRST invoke fails but whose corrective
+    retry succeeds is recovered — the dispatch completes and the IC's work is
+    recorded (the nudge recovered it)."""
+    org, leader, head, mgr, ic = _org()
+    inner = StubBackend()
+    _decomposition_scripts(inner)
+    inner.set_script("ic1", [
+        {"summary": "extractor done",
+         "work_path": "departments/analytics/pipelines/extractor.md"},
+    ])
+    # ic1 fails ONCE (the corrective retry succeeds).
+    backend = _FlakyBackend(inner, fail_roles={"ic1"}, fail_times=1)
+    mission = {"purpose": "a data pipeline", "success_criteria": ["works"],
+               "scope": ["ETL"]}
+    reports = dispatch(backend, org, leader, mission)
+    assert len(reports) == 1
+    dept = reports[0]["report"]
+    assert dept["from"] == "head_analytics"
+    # The manager's team report reflects 1 unit reported up (the IC's work).
+    assert "unit(s) reported up" in dept["children"][0]["summary"]
+    # The first attempt failed, then the corrective retry (nudge) succeeded.
+    assert any(rid == "ic1" and "[RETRY]" in c
+               for (rid, c) in backend.contexts)
+
+
+# --- _invoke_ic (the containment helper) ----------------------------------------
+
+def test_invoke_ic_returns_error_on_persistent_failure():
+    """_invoke_ic returns (None, error) when BOTH the initial invoke and the
+    corrective retry fail — the error is a visible description (the caller
+    records it in the upward report and continues)."""
+    from runtime.dispatch import _invoke_ic
+    org, leader, head, mgr, ic = _org()
+    inner = StubBackend()
+    backend = _FlakyBackend(inner, fail_roles={"ic1"}, fail_times=99)
+    out, err = _invoke_ic(backend, ic, "ctx", reasoning=None,
+                          timeout=None, phase=4)
+    assert out is None
+    assert err is not None
+    assert "OpenAIOutputError" in err
+
+
+def test_invoke_ic_recovers_on_corrective_retry():
+    """_invoke_ic returns (output, None) when the corrective retry succeeds —
+    the first failure is transparent to the caller."""
+    from runtime.dispatch import _invoke_ic
+    org, leader, head, mgr, ic = _org()
+    inner = StubBackend()
+    inner.set_script("ic1", [{"summary": "done", "confidence": 0.9}])
+    backend = _FlakyBackend(inner, fail_roles={"ic1"}, fail_times=1)
+    out, err = _invoke_ic(backend, ic, "ctx", reasoning=None,
+                          timeout=None, phase=4)
+    assert err is None
+    assert out == {"summary": "done", "confidence": 0.9}

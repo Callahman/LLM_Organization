@@ -493,6 +493,118 @@ def test_no_tool_call_and_no_content_raises_visible(monkeypatch):
         backend.invoke(_role(), "ctx")
 
 
+# --- the Phase-4 failure: a placeholder tool call + the real one -----------------
+# A known Qwen3 quirk (via KoboldCpp jinja tools) is to call the forced tool
+# TWICE in one reply — a placeholder/dummy call followed by the real one. The
+# two shapes it arrives in: (a) TWO tool calls with separate streaming `index`
+# values, or (b) ONE tool call whose arguments string is TWO concatenated JSON
+# documents (the "Extra data" case). The parser must return the LAST parseable
+# envelope (the model's final answer) in both.
+
+
+def _two_tool_reply(args_first: dict, args_second: dict) -> dict:
+    """A reply with TWO submit_output tool calls (streaming `index` 0 and 1) —
+    the placeholder-then-real pattern."""
+    return {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "name": TOOL_NAME,
+                                "arguments": json.dumps(args_first),
+                            },
+                        },
+                        {
+                            "index": 1,
+                            "function": {
+                                "name": TOOL_NAME,
+                                "arguments": json.dumps(args_second),
+                            },
+                        },
+                    ],
+                }
+            }
+        ]
+    }
+
+
+def test_multiple_tool_calls_last_wins(monkeypatch):
+    """TWO submit_output tool calls in one reply (separate streaming `index`
+    values): the accumulation must keep them DISTINCT (an index-blind
+    concatenation merged them into one "Extra data" string that crashed the
+    run) and the parser must return the LAST parseable envelope (the model's
+    final answer), not the placeholder."""
+    _install_fake_httpx(
+        monkeypatch,
+        _two_tool_reply(
+            {"summary": "placeholder", "confidence": 0},
+            {"summary": "Explore directory", "confidence": 0.5},
+        ),
+    )
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    out = backend.invoke(_role(), "ctx")
+    assert out == {"summary": "Explore directory", "confidence": 0.5}
+
+
+def test_concatenated_json_documents_last_wins(monkeypatch):
+    """The EXACT crash shape from the Phase-4 failure: ONE submit_output tool
+    call whose arguments string is TWO concatenated JSON documents (a
+    placeholder + the real one merged — the "Extra data" case). The parser
+    must recover and return the LAST object (the model's final answer)."""
+    args = ('{"summary":"placeholder","confidence":0}'
+            '{"summary":"Explore directory","confidence":0.5}')
+    reply = {"choices": [{"message": {
+        "content": None,
+        "tool_calls": [
+            {"function": {"name": TOOL_NAME, "arguments": args}},
+        ],
+    }}]}
+    _install_fake_httpx(monkeypatch, reply)
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    out = backend.invoke(_role(), "ctx")
+    assert out == {"summary": "Explore directory", "confidence": 0.5}
+
+
+def test_concatenated_documents_truncated_second_is_truncation():
+    """A complete first document + a TRUNCATED second document: the
+    sequential parse dies mid-value on the trailing document — the error must
+    be flagged truncated=True (the bounded retry loop treats it as
+    transient)."""
+    raw = ('{"summary":"placeholder","confidence":0}'
+           '{"summary":"Explor')  # cut off mid-string
+    value, err = OpenAIBackend._parse_tool_args(raw, "")
+    assert value is None
+    assert err is not None
+    assert err.truncated is True
+
+
+def test_recover_tool_call_prefers_last_object():
+    """A model quirk can write TWO bare JSON objects in the content (a
+    placeholder + the real one) — the text-shape recovery must prefer the
+    LAST one (the model's final answer)."""
+    content = ('placeholder {"summary": "placeholder", "confidence": 0} '
+               'real {"summary": "done", "confidence": 0.7}')
+    out = OpenAIBackend._recover_tool_call(content)
+    assert out == {"summary": "done", "confidence": 0.7}
+
+
+def test_system_prompt_warns_against_placeholder_calls(monkeypatch):
+    """The system prompt (and the tool description) must forbid placeholder /
+    dummy tool calls — the model quirk that triggered the Phase-4 failure."""
+    seen = _install_fake_httpx(
+        monkeypatch, _tool_reply({"summary": "s", "confidence": 0.9}))
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    backend.invoke(_role(), "ctx")
+    system = seen["payload"]["messages"][0]["content"]
+    assert "placeholder" in system
+    tool_desc = seen["payload"]["tools"][0]["function"]["description"]
+    assert "placeholder" in tool_desc
+
+
 # --- make_backend env selection -------------------------------------------------
 
 def test_make_backend_selects_api(monkeypatch):

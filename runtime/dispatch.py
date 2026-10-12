@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from roles.base import Role, spin_personality, spin_sub_architype
 from roles.worker import worker_output_schema
@@ -267,6 +267,46 @@ def _upward_report(role: Role, children: List[Dict[str, Any]]) -> Dict[str, Any]
             for c in children
         ],
     }
+
+
+def _invoke_ic(backend: LLMBackend, ic: Role, ctx: str, reasoning,
+               timeout: Optional[float], phase: int) -> Tuple[
+                   Optional[Dict[str, Any]], Optional[str]]:
+    """Invoke an IC with **one corrective retry** on a failure (error
+    containment). Returns ``(output, error)``: on success ``error`` is None;
+    if the corrective retry also fails, ``output`` is None and ``error`` is a
+    visible description (the caller records the IC's failure in its upward
+    report and continues — one IC hiccup must not kill the run).
+
+    The corrective retry re-asks the SAME task with a nudge appended (the
+    model's malformed / missing reply is called out; it must produce one
+    complete submit_output call) — the same one-retry-on-refusal pattern the
+    self-edit path already uses.
+    """
+    nudge = (
+        "\n\n[RETRY] Your previous reply for this task was not a valid "
+        "structured call (its JSON arguments were malformed or missing). "
+        "Call the submit_output tool exactly once; its arguments must be ONE "
+        "complete JSON object matching your role's output schema. Do not "
+        "emit placeholder or dummy calls."
+    )
+    try:
+        return backend.invoke(
+            ic, ctx, reasoning=reasoning, timeout=timeout, phase=phase,
+        ), None
+    except Exception as e:
+        # Containment boundary: a model quirk (a malformed tool call), a
+        # timeout, a transport blip — recorded visibly below, never a
+        # run-killer.
+        try:
+            return backend.invoke(
+                ic, ctx + nudge, reasoning=reasoning, timeout=timeout,
+                phase=phase,
+            ), None
+        except Exception as e2:
+            return None, (f"{type(e).__name__}: {e} "
+                          f"(corrective retry failed: {type(e2).__name__}: "
+                          f"{e2})")
 
 
 def _self_edit_log(history: Optional[HistoryStore], role_id: str):
@@ -849,12 +889,24 @@ def dispatch(
                         )
                     if ic is None:
                         continue
-                    ic_out = backend.invoke(
-                        ic, _ic_ctx(ic, task.get("task", "")),
+                    ic_out, ic_err = _invoke_ic(
+                        backend, ic, _ic_ctx(ic, task.get("task", "")),
                         reasoning=classify_complexity(4, ic, {}),
                         timeout=ic_timeout_seconds,
                         phase=4,
                     )
+                    if ic_err is not None:
+                        # Error containment: the corrective retry also
+                        # failed. Record the IC's failure visibly in the
+                        # upward report and continue with the other ICs (one
+                        # hiccup must not kill the run). It joins no pod (it
+                        # produced no output).
+                        ic_reports.append(
+                            {"from": ic.id,
+                             "summary": f"FAILED: {ic_err}",
+                             "pointer": ""}
+                        )
+                        continue
                     ic_outputs.append(ic_out)
                     ic_ids.append(ic.id)
                     # Solo (P4, IC): record the IC's work (out-of-pod work) so
@@ -900,12 +952,25 @@ def dispatch(
                     )
                 if ic is None:
                     continue
-                ic_out = backend.invoke(
-                    ic, _ic_ctx(ic, t_obj.get("objective", "")),
+                ic_out, ic_err = _invoke_ic(
+                    backend, ic, _ic_ctx(ic, t_obj.get("objective", "")),
                     reasoning=classify_complexity(4, ic, {}),
                     timeout=ic_timeout_seconds,
                     phase=4,
                 )
+                if ic_err is not None:
+                    # Error containment: the corrective retry also failed.
+                    # Record the IC's failure visibly in the upward report
+                    # and continue (one hiccup must not kill the run). It
+                    # joins no pod (it produced no output).
+                    team_reports.append(
+                        _upward_report(
+                            ic,
+                            [{"from": ic.id, "summary": f"FAILED: {ic_err}",
+                              "pointer": ""}],
+                        )
+                    )
+                    continue
                 # Solo (P4, IC): record the IC's work (out-of-pod work) so the
                 # dashboard can watch any role's solo work, not just the
                 # leader's (Story 21).

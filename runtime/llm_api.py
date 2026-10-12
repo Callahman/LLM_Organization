@@ -36,7 +36,8 @@ TOOL_NAME = "submit_output"
 TOOL_DESCRIPTION = (
     "Submit your structured output for this task. Call this tool exactly "
     "once; its arguments are your complete output and must match your "
-    "role's output schema."
+    "role's output schema. Do not emit placeholder, dummy, or partial "
+    "calls: your first call must be your complete final answer."
 )
 
 # The known nested keys that must be JSON objects (dicts) — the Phase-2/3/4
@@ -243,7 +244,10 @@ class OpenAIBackend(LLMBackend):
                   "Submit your structured output by calling the "
                   f"{TOOL_NAME} tool exactly once; its arguments "
                   "are your complete output and must match your "
-                  "role's output schema." + directive)
+                  "role's output schema. Do NOT emit placeholder, "
+                  "dummy, or partial tool calls: your FIRST "
+                  f"{TOOL_NAME} call must be your complete final "
+                  "answer (a single JSON object)." + directive)
         return {
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -337,46 +341,107 @@ class OpenAIBackend(LLMBackend):
                 f"generation budget)")
 
     @staticmethod
+    def _parse_json_documents(raw: str) -> List[Any]:
+        """Parse a string that may hold MULTIPLE concatenated top-level JSON
+        documents (a model quirk: two submit_output calls whose argument
+        strings get merged — by the server, or by an index-blind accumulation
+        — into one "Extra data" string). Returns the list of parsed values.
+        Raises the JSONDecodeError of the first document that fails to parse
+        (a mid-value failure on a trailing document is a truncation signal —
+        the caller classifies it)."""
+        dec = json.JSONDecoder()
+        values: List[Any] = []
+        i = 0
+        n = len(raw)
+        while i < n:
+            while i < n and raw[i] in " \t\r\n":
+                i += 1
+            if i >= n:
+                break
+            value, i = dec.raw_decode(raw, i)
+            values.append(value)
+        return values
+
+    @classmethod
+    def _parse_tool_args(cls, raw: str, finish_reason: str) -> Tuple[
+            Optional[Any], Optional[OpenAIOutputError]]:
+        """Parse a submit_output tool call's arguments string. Accepts a
+        single JSON document OR multiple concatenated documents (the
+        "Extra data" case — a model quirk: a placeholder call + the real one
+        merged into one string); for multiple, the LAST top-level value wins
+        (the model's final answer comes last). Returns ``(value, None)`` on
+        success or ``(None, error)`` on failure — the error keeps the
+        truncation flag so the bounded retry loop in ``invoke`` can act on
+        it."""
+        try:
+            return json.loads(raw), None
+        except json.JSONDecodeError:
+            pass  # "Extra data" (or a single broken document) — try below
+        try:
+            values = cls._parse_json_documents(raw)
+        except json.JSONDecodeError as e:
+            truncated = cls._is_truncation(raw, finish_reason, e)
+            note = (cls._truncation_note(raw, finish_reason)
+                    if truncated else "")
+            err = OpenAIOutputError(
+                f"{TOOL_NAME} arguments are not valid JSON"
+                f"{note}: {raw[:300]!r} ({e})",
+                truncated=truncated,
+            )
+            err.__cause__ = e
+            return None, err
+        if not values:
+            return None, OpenAIOutputError(
+                f"{TOOL_NAME} arguments are empty: {raw[:300]!r}")
+        return values[-1], None
+
+    @staticmethod
     def _parse(data: Dict[str, Any], finish_reason: str = "") -> Tuple[Dict[str, Any], str]:
         """Extract the shared output envelope from a chat completion reply.
 
         Returns ``(envelope, outcome)`` where outcome is ``"tool_call"`` or
         ``"content_fallback"``. Preferred: the ``submit_output`` tool call's
-        JSON arguments. Fallback: plain JSON ``content`` (a server that
-        ignored the tool), or a call the model wrote as **text** inside
-        ``content`` (a fenced JSON block or an embedded JSON object, via
-        ``_recover_tool_call``). Anything else raises ``OpenAIOutputError``
-        (visible, never silent) — flagged ``truncated=True`` when the failure
-        is a truncation (the stream ended mid-JSON: ``finish_reason`` is
+        JSON arguments. A model (a known Qwen3 quirk, via KoboldCpp jinja
+        tools) can call the forced tool TWICE in one reply — a placeholder /
+        dummy call followed by the real one — so the **last** parseable
+        ``submit_output`` envelope wins (the model's final answer comes
+        last); if none parses, the first parse failure is raised (visible,
+        never silent) — flagged ``truncated=True`` when the failure is a
+        truncation (the stream ended mid-JSON: ``finish_reason`` is
         ``"length"`` or the parse is truncation-shaped on a plausible,
         unbalanced JSON prefix), which the bounded retry loop in ``invoke``
-        treats as transient.
+        treats as transient. Fallback: plain JSON ``content`` (a server that
+        ignored the tool), or a call the model wrote as **text** inside
+        ``content`` (a fenced JSON block or an embedded JSON object, via
+        ``_recover_tool_call``).
         """
         message = data["choices"][0]["message"]
+        last_envelope: Optional[Dict[str, Any]] = None
+        first_err: Optional[OpenAIOutputError] = None
         for tc in message.get("tool_calls") or []:
             fn = (tc or {}).get("function") or {}
             if fn.get("name", TOOL_NAME) != TOOL_NAME:
                 continue
             raw = fn.get("arguments", "")
             if isinstance(raw, dict):
-                return raw, "tool_call"
+                last_envelope = raw
+                continue
             if not (isinstance(raw, str) and raw.strip()):
                 continue
-            try:
-                out = json.loads(raw)
-            except json.JSONDecodeError as e:
-                truncated = OpenAIBackend._is_truncation(raw, finish_reason, e)
-                note = (OpenAIBackend._truncation_note(raw, finish_reason)
-                        if truncated else "")
-                raise OpenAIOutputError(
-                    f"{TOOL_NAME} arguments are not valid JSON"
-                    f"{note}: {raw[:300]!r} ({e})"
-                , truncated=truncated) from e
-            if isinstance(out, dict):
-                return out, "tool_call"
-            raise OpenAIOutputError(
-                f"{TOOL_NAME} arguments are not a JSON object: {raw[:300]!r}"
-            )
+            out, err = OpenAIBackend._parse_tool_args(raw, finish_reason)
+            if err is not None:
+                if first_err is None:
+                    first_err = err
+                continue  # a LATER tool call may still parse
+            if not isinstance(out, dict):
+                if first_err is None:
+                    first_err = OpenAIOutputError(
+                        f"{TOOL_NAME} arguments are not a JSON object: "
+                        f"{raw[:300]!r}")
+                continue
+            last_envelope = out
+        if last_envelope is not None:
+            return last_envelope, "tool_call"
         content = message.get("content") or ""
         content_err: Optional[json.JSONDecodeError] = None
         if content.strip():
@@ -389,6 +454,11 @@ class OpenAIBackend(LLMBackend):
             recovered = OpenAIBackend._recover_tool_call(content)
             if recovered is not None:
                 return recovered, "content_fallback"
+        if first_err is not None:
+            # A tool call WAS present but none of them parsed — raise the
+            # first parse failure (it carries the truncation flag for the
+            # retry loop), not the "no tool call" error.
+            raise first_err
         truncated = OpenAIBackend._is_truncation(content, finish_reason,
                                                  content_err)
         note = (OpenAIBackend._truncation_note(content, finish_reason)
@@ -415,39 +485,46 @@ class OpenAIBackend(LLMBackend):
         Returns the parsed envelope dict, or ``None`` if no shape recovers.
         """
         candidates: list = []
-        # Fenced blocks: ```json ... ``` (or any ``` ... ``` fence).
+        # Fenced blocks: ```json ... ``` (or any ``` ... ``` fence). A model
+        # quirk can fence TWO blocks (a placeholder + the real one) — try
+        # them LAST-FIRST (the model's final answer comes last).
+        fenced: list = []
         for m in re.finditer(r"```[a-zA-Z0-9_-]*[ \t]*\n(.*?)```",
                              content, re.DOTALL):
             block = m.group(1).strip()
             if block:
-                candidates.append(block)
-        # First brace-delimited span in the raw text (covers a bare JSON
-        # object surrounded by prose; the scanner is string-aware so braces
-        # inside string values do not confuse it).
-        start = content.find("{")
-        if start != -1:
-            depth = 0
-            in_str = False
-            esc = False
-            for i in range(start, len(content)):
-                ch = content[i]
-                if in_str:
-                    if esc:
-                        esc = False
-                    elif ch == "\\":
-                        esc = True
-                    elif ch == '"':
-                        in_str = False
-                else:
-                    if ch == '"':
-                        in_str = True
-                    elif ch == "{":
-                        depth += 1
-                    elif ch == "}":
-                        depth -= 1
-                        if depth == 0:
-                            candidates.append(content[start:i + 1])
-                            break
+                fenced.append(block)
+        candidates.extend(reversed(fenced))
+        # All top-level brace-delimited spans in the raw text (covers a bare
+        # JSON object surrounded by prose; the scanner is string-aware so
+        # braces inside string values do not confuse it). A model quirk can
+        # write TWO objects (a placeholder + the real one) — try them
+        # LAST-FIRST (the model's final answer comes last).
+        spans: list = []
+        depth = 0
+        in_str = False
+        esc = False
+        start = -1
+        for i, ch in enumerate(content):
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and start != -1:
+                    spans.append(content[start:i + 1])
+                    start = -1
+        candidates.extend(reversed(spans))
         for cand in candidates:
             try:
                 out = json.loads(cand)
@@ -577,8 +654,15 @@ class OpenAIBackend(LLMBackend):
             t0 = time.time()
             reasoning_buf = ""
             content_buf = ""
-            tool_args_buf = ""
-            tool_name = TOOL_NAME
+            # Per tool-call index: a model quirk (a known Qwen3 pattern, via
+            # KoboldCpp jinja tools) is to call the forced tool TWICE in one
+            # reply — a placeholder/dummy call followed by the real one. The
+            # OpenAI streaming format identifies each tool call by `index`;
+            # accumulate per-index so the calls stay DISTINCT (an index-blind
+            # concatenation merged them into one "Extra data" string that
+            # crashed the run).
+            tool_args_by_index: Dict[int, str] = {}
+            tool_name_by_index: Dict[int, str] = {}
             finish_reason = ""
             try:
                 with httpx.stream(
@@ -626,20 +710,37 @@ class OpenAIBackend(LLMBackend):
                             content_buf += cc
                             self._emit_stream(stream_id, role_id, "content", cc)
                         for tc in delta.get("tool_calls") or []:
+                            # The tool call's `index` (the OpenAI streaming
+                            # format): a second submit_output call in the same
+                            # reply streams as index 1, not a continuation of
+                            # index 0.
+                            try:
+                                idx = int(tc.get("index", 0))
+                            except (TypeError, ValueError):
+                                idx = 0
                             fn = (tc or {}).get("function") or {}
                             if fn.get("name"):
-                                tool_name = fn["name"]
+                                tool_name_by_index[idx] = fn["name"]
                             ta = fn.get("arguments") or ""
                             if ta:
-                                tool_args_buf += ta
+                                tool_args_by_index[idx] = (
+                                    tool_args_by_index.get(idx, "") + ta)
                                 self._emit_stream(stream_id, role_id,
                                                   "tool_call", ta)
                 # Reconstruct the non-streaming message shape and reuse _parse
-                # (tool-call extraction, content fallback, text-shape recovery).
+                # (tool-call extraction, content fallback, text-shape
+                # recovery). One entry per streamed tool-call index (in index
+                # order) — multiple submit_output calls stay separate for
+                # _parse to select from (the last parseable one wins).
                 message = {"role": "assistant", "content": content_buf}
-                if tool_args_buf.strip():
-                    message["tool_calls"] = [{"function": {"name": tool_name,
-                                                           "arguments": tool_args_buf}}]
+                tool_calls = [
+                    {"function": {"name": tool_name_by_index.get(idx,
+                                                                  TOOL_NAME),
+                                  "arguments": tool_args_by_index[idx]}}
+                    for idx in sorted(tool_args_by_index)
+                ]
+                if tool_calls:
+                    message["tool_calls"] = tool_calls
                 out, outcome = self._parse(
                     {"choices": [{"message": message}]}, finish_reason)
                 # Story 4 (A8/A9/R10): envelope-validate the output and
@@ -661,8 +762,20 @@ class OpenAIBackend(LLMBackend):
                 # Observability: log (not reject) a wrong-typed nested key
                 # (e.g. a free-form string instead of a JSON object) so future
                 # free-forms are visible in tool_calls.jsonl. D4: it goes in the
-                # `warning` field (not `error`) — it's non-fatal.
-                self._report(role, outcome, t0, warning=self._nested_type_warnings(out))
+                # `warning` field (not `error`) — it's non-fatal. A model quirk
+                # that called the forced tool TWICE (a placeholder + the real
+                # one) is also logged as a `warning` (the call succeeded — the
+                # parser used the last parseable call).
+                n_submit = sum(
+                    1 for tc in message.get("tool_calls") or []
+                    if ((tc or {}).get("function") or {}).get(
+                        "name", TOOL_NAME) == TOOL_NAME)
+                multi_note = (f"multiple {TOOL_NAME} calls: {n_submit} — "
+                              f"used the last" if n_submit > 1 else "")
+                warn = " ".join(
+                    w for w in (multi_note, self._nested_type_warnings(out))
+                    if w)
+                self._report(role, outcome, t0, warning=warn)
                 return out
             except httpx.TimeoutException as e:
                 # A timeout (an idle/connect/read timeout): transient. Retry the
