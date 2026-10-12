@@ -66,6 +66,10 @@ class Watcher:
             "stream": os.path.join(h, "stream.jsonl"),
             "halt_events": os.path.join(h, "halt_events.jsonl"),
             "efficiency": os.path.join(h, "efficiency.jsonl"),
+            # S22: the per-iteration efficiency metrics (the Phase 3-6 loop
+            # metrics: T_total, T_p, T_dept, T_role, H_peak, C, N_created,
+            # M_satisfaction, E, EFFICIENCY_FLOOR).
+            "efficiency_metrics": os.path.join(h, "efficiency_metrics.jsonl"),
         }
         self.transcripts_dir = os.path.join(root, "pods", "transcripts")
         self._offsets: Dict[str, int] = {}
@@ -83,6 +87,10 @@ class Watcher:
         # invoke, so the dashboard renders the LATEST line as the current
         # panel (not an accumulation).
         self.efficiency: Optional[Dict[str, Any]] = None
+        # S22: the per-iteration efficiency metrics (the Phase 3-6 loop
+        # metrics). The log appends one snapshot per iteration, so the
+        # dashboard keeps the LATEST line as the current S22 panel.
+        self.efficiency_metrics: Optional[Dict[str, Any]] = None
         # Live "model stream" window: a 2-slot ring (current + previous
         # segment). Each segment = one model call (one stream_id), with its
         # streamed content accumulated per kind (thinking/content/tool_call).
@@ -125,6 +133,14 @@ class Watcher:
         the full current state — the dashboard keeps the LATEST line as the
         current efficiency panel (per-role / per-department invoke time)."""
         self.efficiency = e
+
+    def ingest_s22_efficiency(self, e: Dict[str, Any]) -> None:
+        """Ingest one S22 per-iteration efficiency snapshot (from
+        history/efficiency_metrics.jsonl). The log appends one snapshot per
+        loop iteration, so the dashboard keeps the LATEST line as the current
+        S22 panel (the Phase 3-6 loop metrics: T_total, T_p, T_dept, T_role,
+        H_peak, C, N_created, M_satisfaction, E, EFFICIENCY_FLOOR)."""
+        self.efficiency_metrics = e
 
     def ingest_pod_transcript(
         self, pod_id: str, entries: List[Dict[str, Any]]
@@ -267,6 +283,8 @@ class Watcher:
                         self.ingest_halt(e)
                     elif key == "efficiency":
                         self.ingest_efficiency(e)
+                    elif key == "efficiency_metrics":
+                        self.ingest_s22_efficiency(e)
                     else:
                         self.ingest_cycle(e)
             self._poll_transcripts()
@@ -326,6 +344,9 @@ class Watcher:
                 # Story 22: the efficiency panel (per-role / per-department
                 # invoke time) — the latest cumulative snapshot.
                 "efficiency": self.efficiency,
+                # S22: the per-iteration efficiency metrics (the Phase 3-6
+                # loop metrics) — the latest per-iteration snapshot.
+                "efficiency_metrics": self.efficiency_metrics,
                 "pods": pods,
                 "stream": stream,
             }

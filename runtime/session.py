@@ -34,6 +34,11 @@ from runtime import dispatch
 from runtime.pods import SoloTracker
 from runtime.history import HistoryStore
 from runtime.timing import TimingTracker, TimingBackend
+from runtime.efficiency import (
+    EfficiencyMeter,
+    compute_m_satisfaction,
+    EFFICIENCY_FLOOR,
+)
 from runtime.complexity import (
     RoutingBackend, ThinkingBudget, classify_complexity,
 )
@@ -131,6 +136,18 @@ class Session:
         # attributes, e.g. save_state / load_state / seed_cross_team).
         self.timing = TimingTracker(history_dir=history_dir)
         self.backend = TimingBackend(self.backend, self.timing)
+        # Story 22 (S22): the efficiency meter — instruments the Phase 3-6 loop
+        # per iteration (T_total, T_p3..T_p6, T_dept, T_role, H_peak, C,
+        # N_created), computes the efficiency score E (M_satisfaction /
+        # (0.5*(T_total/T_ref) + 0.5*(C/C_ref)), running-average refs over the
+        # last 3 iterations) and appends the per-iteration snapshot to
+        # history/efficiency_metrics.jsonl (auditable + the dashboard's
+        # Efficiency panel). The floor (EFFICIENCY_FLOOR, default ~0.4) is the
+        # `efficiency_floor` .env / config knob.
+        self.efficiency = EfficiencyMeter(
+            history_dir=history_dir,
+            floor=self.config.get("efficiency_floor", EFFICIENCY_FLOOR),
+        )
         self.pods: List[Any] = []
         # Solo (single-role) leader pods: one per phase (P1/P2/P3/P5/P6), so the
         # observability dashboard can watch the leader's solo work (not just the
@@ -178,6 +195,11 @@ class Session:
             "working one. Produce a verdict: complete (genuinely polished, "
             "stop) / continue (can improve, keep iterating) / escalate."
         )
+        # S22: include the efficiency breakdown + E + the mandate to keep E
+        # high (the most recent finished iteration's metrics).
+        eff_panel = self.efficiency.panel_text()
+        if eff_panel:
+            ctx += " " + eff_panel
         # Carry the pods' decisions up to the leader's synthesis (the second
         # carry-over path: the cross-team decisions the pods closed on).
         decisions = [
@@ -247,13 +269,21 @@ class Session:
             )
             return evaluation, "escalated"
         self.history.write_evaluation_report(evaluation)
-        out = self.backend.invoke(
-            self.leader,
+        # S22: include the efficiency breakdown + E + the mandate to keep E
+        # high (the most recent finished iteration's metrics).
+        p6_ctx = (
             "PHASE 6: decide whether to keep iterating. Bias toward 'continue' "
             "(keep improving the deliverable) unless it is genuinely polished. "
             "The goal is a high-quality deliverable, not just a working one. "
             "Choose 'complete' (stop) or 'continue' (another iteration, still "
-            f"abiding by the original goal). Evaluation: {evaluation}",
+            f"abiding by the original goal). Evaluation: {evaluation}"
+        )
+        eff_panel = self.efficiency.panel_text()
+        if eff_panel:
+            p6_ctx += " " + eff_panel
+        out = self.backend.invoke(
+            self.leader,
+            p6_ctx,
             reasoning=classify_complexity(6, self.leader, {}),
             phase=6,
         )
@@ -267,6 +297,74 @@ class Session:
         if decision == "continue" and self.cycles < max_iterations:
             return evaluation, "continue"
         return evaluation, "complete"
+
+    # --- S22: efficiency finishing + the floor trigger --------------------
+
+    def _finish_efficiency(
+        self,
+        iter_start_ids,
+        mission_draft,
+        dispatch_results,
+        verdict,
+    ):
+        """S22: finish the loop iteration — compute ``N_created`` (the roles
+        that became active this iteration) + ``M_satisfaction`` (0-1, terminal
+        + recurring), then finish the efficiency meter (compute ``E`` with the
+        running-average refs, append the per-iteration snapshot to the log).
+        When ``E < EFFICIENCY_FLOOR``, trigger a visible efficiency action."""
+        # S22: N_created = the roles that became active this iteration.
+        iter_end_ids = {r.id for r in self.org.active_roles()}
+        n_created = len(iter_end_ids - iter_start_ids)
+        self.efficiency.record_created(n_created)
+        # S22: M_satisfaction (0-1, terminal + recurring).
+        m_sat = compute_m_satisfaction(mission_draft, dispatch_results, verdict)
+        # S22: finish the iteration (compute E, append to the log).
+        snap = self.efficiency.finish_iteration(m_sat)
+        # S22: when E < EFFICIENCY_FLOOR, the Leader must take a visible
+        # efficiency action.
+        if snap.get("below_floor"):
+            self._efficiency_floor_action(snap)
+        return snap
+
+    def _efficiency_floor_action(self, snap):
+        """S22: when ``E < EFFICIENCY_FLOOR``, the Leader must take a visible
+        efficiency action. Invoke the Leader with the efficiency breakdown +
+        the mandate, and process its ``efficiency`` action (fire / reassign /
+        report / automate) via ``dispatch._process_efficiency`` (the automation
+        action runs the IC-writes-script -> fired -> script-executed flow)."""
+        ctx = (
+            "PHASE 6 (efficiency floor): the efficiency score E is BELOW the "
+            f"floor ({snap['E']:.3f} < {snap['EFFICIENCY_FLOOR']}). You MUST "
+            "take a visible efficiency action to reduce headcount / compute "
+            "time. "
+            + self.efficiency.panel_text()
+            + " Set `efficiency` to a JSON OBJECT with an `action` (\"fire\" "
+            "to fire an inefficient role through HR — the firing cascades to "
+            "its report subtree; \"reassign\" to move it to a different team, "
+            "named in `new_team`; \"report\" to report the inefficiency to the "
+            "user; \"automate\" to automate a recurring task, named in `task`) "
+            "and a `target` (the role id or department slug) and a `reasoning`."
+        )
+        out = self.backend.invoke(
+            self.leader, ctx,
+            reasoning=classify_complexity(6, self.leader, {}),
+            phase=6,
+        )
+        eff = out.get("efficiency")
+        if isinstance(eff, dict):
+            dispatch._process_efficiency(
+                self.org, self.leader, eff, self._approver_fn, self.history)
+            # S22: the automation action (IC writes a script -> fired ->
+            # script executed).
+            if eff.get("action") == "automate":
+                dispatch.run_automation(
+                    self.org, self.leader, eff, self.backend,
+                    self._approver_fn, self.history)
+        else:
+            # No efficiency action set — log it visibly (never silent).
+            self.org.log_event(
+                "efficiency_floor_no_action", self.leader.id, None,
+                {"E": snap["E"], "floor": snap["EFFICIENCY_FLOOR"]})
 
     # --- Escalation --------------------------------------------------------
 
@@ -343,7 +441,13 @@ class Session:
         try:
             return fn(*args, **kwargs)
         finally:
-            self.history.log_cycle(phase, cycle, started, time.time())
+            ended = time.time()
+            self.history.log_cycle(phase, cycle, started, ended)
+            # S22: record the phase time + the headcount in effect (the org's
+            # active roles) to the efficiency meter (T_p + H_peak + C).
+            self.efficiency.record_phase(phase, started, ended)
+            self.efficiency.record_headcount(
+                len(self.org.active_roles()), ended - started)
 
     def run(
         self,
@@ -374,6 +478,10 @@ class Session:
         loaded) and resumes from Phase 4 (the dispatch continues); the intake
         + mission are not re-derived (``_escalate`` handles them being
         ``None``)."""
+        # S22: the HR approver (for the efficiency-floor firing / automation
+        # actions the Leader takes). Stored so the Phase 6 efficiency action
+        # can call it.
+        self._approver_fn = approver_fn
         memory_dir = self.config.get("memory_dir", "state/role_memory")
         org_chart_path = self.config.get("org_chart_path", "state/org_chart.json")
         mission_path = self.config.get("mission_path", "MISSION.md")
@@ -413,6 +521,10 @@ class Session:
 
         self.phases = []
         self.cycles = 0
+        # S22: the Phase 3 (bootstrap) wall-clock time, captured so it can be
+        # included in the first loop iteration (the Phase 3-6 loop scope). 0.0
+        # when Phase 3 is skipped (a resume from Phase 4).
+        p3_started = p3_ended = 0.0
 
         # S15: a resume-from-checkpoint skips Phases 1-3 (the org + mission
         # are loaded in the revisit branch above) and resumes from Phase 4 —
@@ -474,12 +586,14 @@ class Session:
             mission_draft = mission.edits[-1]["draft"]
 
             # --- Phase 3: org bootstrap (once) ---
+            p3_started = time.time()
             self._phase(3, 0, bootstrap,
                 self.org, self.backend, self.leader, mission, approver_fn,
                 additive=revisit,
                 bootstrap_timeout_seconds=self.config.get(
                     "bootstrap_timeout_seconds",
                     self.config.get("ic_timeout_seconds")))
+            p3_ended = time.time()
             self.org.write_events()
             # Story 1 (B1): checkpoint after Phase 3 — a crash in Phase 4
             # loses at most the current iteration's hires, not the
@@ -501,6 +615,18 @@ class Session:
         status = "complete"
         for _ in range(max_iterations):
             self.cycles += 1
+            # S22: begin the loop iteration (reset the per-iteration
+            # accumulators) and capture the active role ids (for N_created).
+            self.efficiency.start_iteration()
+            iter_start_ids = {r.id for r in self.org.active_roles()}
+            if self.cycles == 1 and p3_ended > 0:
+                # Phase 3 ran once before the loop — include its time +
+                # headcount in the first iteration (S22: the Phase 3-6 loop
+                # scope). The _phase() record of Phase 3 was wiped by
+                # start_iteration, so re-record it.
+                self.efficiency.record_phase(3, p3_started, p3_ended)
+                self.efficiency.record_headcount(
+                    len(self.org.active_roles()), p3_ended - p3_started)
 
             # Phase 4: dispatch (hires the managers/ICs it decomposes onto). Pods
             # A/B/C form as an add-on; the formed pods accumulate in
@@ -569,6 +695,13 @@ class Session:
             # Story 1 (B1): checkpoint after each Phase 4 iteration — a crash
             # in the NEXT iteration loses at most that iteration's hires.
             self._checkpoint(4, self.cycles)
+
+            # S22: finish the iteration — compute M_satisfaction + E, append
+            # the per-iteration snapshot to the log, and handle the
+            # EFFICIENCY_FLOOR trigger (a visible efficiency action when
+            # E < floor).
+            self._finish_efficiency(
+                iter_start_ids, mission_draft, dispatch_results, verdict)
 
             if status != "continue":
                 break

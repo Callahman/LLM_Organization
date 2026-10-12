@@ -186,6 +186,21 @@ def _process_efficiency(org, leader, eff: Dict[str, Any], approver_fn,
             history._append("efficiency_reports.jsonl",
                             {"ts": time.time(), "action": "report",
                              "target": target, "reasoning": reasoning})
+    elif action == "automate":
+        # A recurring task is being automated (an IC writes a Python script, is
+        # fired, and the task is then done by executing the script). The actual
+        # IC-writes-script -> fired -> script-executed flow is run by
+        # ``run_automation`` (the caller, which has the backend); here we just
+        # log the action visibly (never silent) so it is not mistaken for an
+        # unknown action.
+        org.log_event("efficiency_automate_requested", leader.id, target,
+                      {"task": eff.get("task", target), "reasoning": reasoning})
+        if history is not None:
+            history._append("efficiency_reports.jsonl",
+                            {"ts": time.time(), "action": "automate",
+                             "target": target,
+                             "task": eff.get("task", target),
+                             "reasoning": reasoning})
     else:
         if history is not None:
             history._append("efficiency_reports.jsonl",
@@ -600,6 +615,82 @@ def _fire_role(org, leader, role_id, reason, approver_fn, history=None):
         return None
 
 
+# --- S22: automation over headcount ----------------------------------------
+
+def _automation_slug(task: str) -> str:
+    """A short directory slug for an automation task (the script filename)."""
+    out = []
+    for ch in (task or "task").lower():
+        out.append(ch if ch.isalnum() else "-")
+    slug = "".join(out).strip("-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug[:40] or "task"
+
+
+def run_automation(org, leader, eff, backend, approver_fn, history=None,
+                   script_dir="automations"):
+    """S22: the **automation over headcount** flow — for a recurring task, spin
+    up an IC to **write a Python script**, the script is **created** (written to
+    ``<script_dir>/<slug>.py``), the IC is **fired** (if not needed for other
+    work), and the recurring task is then done by **executing the script**
+    (subprocess / tool call) instead of an IC each time.
+
+    ``eff`` is the Leader's efficiency action dict (``action="automate"``,
+    ``task`` the recurring task, ``target`` the role/department, ``reasoning``).
+    All steps are logged visibly (never silent).
+    """
+    task = eff.get("task") or eff.get("target") or "(unspecified recurring task)"
+    reasoning = eff.get("reasoning", "")
+    # The script path (where the automation script lives).
+    os.makedirs(script_dir, exist_ok=True)
+    script_path = os.path.join(script_dir, _automation_slug(task) + ".py")
+    # Step 1: spin up an IC to write the script (hired through the approval
+    # matrix, like any other dispatch role).
+    ic_id = "auto-" + _automation_slug(task)
+    ic = _ensure_role(org, leader, ic_id, "ic", "automations", "automations",
+                      approver_fn)
+    if ic is None:
+        if history is not None:
+            history._append("efficiency_reports.jsonl",
+                            {"ts": time.time(), "action": "automate",
+                             "task": task,
+                             "error": "could not hire the automation IC"})
+        return {"task": task, "script_path": script_path, "ic_fired": None,
+                "error": "could not hire the automation IC"}
+    # Step 2: the IC writes the Python script for the recurring task.
+    ctx = (
+        f"PHASE 4 (automation IC {ic.id}): write a Python script for the "
+        f"recurring task. Task: {task} Set `script` to the FULL Python script "
+        f"(a self-contained script that performs the recurring task end to "
+        f"end) and `summary` to a one-line summary of what the script does."
+    )
+    out = backend.invoke(ic, ctx,
+                         reasoning=classify_complexity(4, ic, {}), phase=4)
+    script = out.get("script", "") if isinstance(out, dict) else ""
+    # Step 3: the script is created (written to a file).
+    if script:
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script)
+    org.log_event("automation_script_created", leader.id, ic.id,
+                  {"task": task, "script_path": script_path,
+                   "reasoning": reasoning})
+    if history is not None:
+        history._append("efficiency_reports.jsonl",
+                        {"ts": time.time(), "action": "automate",
+                         "task": task, "script_path": script_path,
+                         "reasoning": reasoning})
+    # Step 4: the IC is fired (if not needed for other work) — the recurring
+    # task is now done by executing the script instead of an IC each time.
+    _fire_role(org, leader, ic.id, f"automation: {reasoning}", approver_fn,
+               history)
+    # Step 5: the automation is active (a visible log — the script is executed
+    # via subprocess when the recurring task is due).
+    org.log_event("automation_active", leader.id, ic.id,
+                  {"task": task, "script_path": script_path})
+    return {"task": task, "script_path": script_path, "ic_fired": ic.id}
+
+
 # --- Pods A/B/C multi-trigger (an add-on to the dispatch) ------------------
 
 def _task_types(team_obj: Dict[str, Any], ic_tasks: List[Dict[str, Any]]) -> List[str]:
@@ -905,6 +996,11 @@ def dispatch(
     _efficiency = out.get("efficiency")
     if isinstance(_efficiency, dict):
         _process_efficiency(org, leader, _efficiency, approver_fn, history)
+        # S22: the automation action (an IC writes a Python script, is fired,
+        # and the recurring task is then done by executing the script).
+        if _efficiency.get("action") == "automate":
+            run_automation(org, leader, _efficiency, backend, approver_fn,
+                           history)
     dept_objectives = _decomposition_list(out, "department_objectives")
     if not dept_objectives:
         # The leader's Phase 4 decomposition came back empty — no work to

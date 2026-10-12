@@ -504,7 +504,10 @@ function renderModelStream() {
         const details = document.createElement('details');
         details.className = 'stream-toolcall';
         const summary = document.createElement('summary');
-        summary.textContent = seg.model + ' [tool_call]';
+        // The model name is no longer rendered in the window (all roles share
+        // the same backbone, so it carries no useful info) — the segment head
+        // already identifies the role + reasoning level.
+        summary.textContent = '[tool_call]';
         details.appendChild(summary);
         const pre = document.createElement('pre');
         pre.className = 'stream-line stream-tool_call';
@@ -514,7 +517,7 @@ function renderModelStream() {
       } else {
         const div = document.createElement('div');
         div.className = 'stream-line stream-' + kind;
-        div.textContent = seg.model + ' [' + kind + ']: ' + text;
+        div.textContent = '[' + kind + ']: ' + text;
         pane.appendChild(div);
       }
     }
@@ -594,6 +597,44 @@ function renderEfficiencyPanel() {
     '</div>';
 }
 
+// S22: render the per-iteration efficiency metrics (the Phase 3-6 loop
+// metrics). The snapshot's `efficiency_metrics` is the latest per-iteration
+// snapshot (the last line of history/efficiency_metrics.jsonl) with T_total,
+// T_p, T_dept, T_role, H_peak, C, N_created, M_satisfaction, E,
+// EFFICIENCY_FLOOR.
+function renderS22EfficiencyPanel() {
+  const el = $('s22-efficiency-panel');
+  if (!el || !state) return;
+  const m = state.efficiency_metrics;
+  if (!m) {
+    el.textContent = 'no S22 loop metrics yet';
+    el.classList.remove('busy');
+    return;
+  }
+  el.classList.add('busy');
+  const fmt = (v) => (v < 60 ? Math.round(v * 10) / 10 + 's'
+                              : Math.floor(v / 60) + 'm ' + Math.round(v % 60) + 's');
+  const parts = [];
+  parts.push('<div class="eff-total">cycle ' + (m.cycle ?? '?') +
+    ' · T_total ' + fmt(m.T_total || 0) +
+    ' · H_peak ' + (m.H_peak || 0) +
+    ' · C ' + fmt(m.C || 0) +
+    ' · N_created ' + (m.N_created || 0) + '</div>');
+  if (m.T_p && Object.keys(m.T_p).length) {
+    const tps = Object.keys(m.T_p).map((p) => 'p' + p + ' ' + fmt(m.T_p[p]))
+      .join(' · ');
+    parts.push('<div class="eff-row"><span class="eff-key">per-phase</span>' +
+      '<span class="eff-val">' + tps + '</span></div>');
+  }
+  parts.push('<div class="eff-row"><span class="eff-key">M_satisfaction</span>' +
+    '<span class="eff-val">' + (m.M_satisfaction || 0).toFixed(2) + '</span></div>');
+  parts.push('<div class="eff-row"><span class="eff-key">E</span>' +
+    '<span class="eff-val">' + (m.E || 0).toFixed(3) +
+    ' (floor ' + (m.EFFICIENCY_FLOOR || 0.4) +
+    (m.below_floor ? ' — BELOW FLOOR' : '') + ')</span></div>');
+  el.innerHTML = parts.join('');
+}
+
 // A6: staleness gauge — seconds since the last stream chunk (the model has
 // been silent for a while). Warns past a threshold (60s: the model is
 // probably stuck or the stream is broken).
@@ -666,6 +707,8 @@ function render() {
   renderHaltList();
   // Story 22: the efficiency panel (per-role / per-department invoke time).
   renderEfficiencyPanel();
+  // S22: the per-iteration efficiency metrics (the Phase 3-6 loop metrics).
+  renderS22EfficiencyPanel();
   renderModelStream();
 }
 
