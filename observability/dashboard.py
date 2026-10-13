@@ -32,7 +32,17 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import threading
+
+# When run directly (``python observability/dashboard.py``), Python puts this
+# file's directory on ``sys.path`` — not the project root — so ``import
+# observability`` would fail. Add the root (the parent of ``observability/``)
+# so the package imports below resolve; it's already on the path when this
+# module is imported as ``observability.dashboard``.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from observability.watcher import (
     HIRE_KINDS,
