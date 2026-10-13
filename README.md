@@ -152,16 +152,69 @@ org/                  tier math + the rule checks
 roles/                role contracts (base, leader)
 departments/          one directory per department (policy + team dirs)
 runtime/              the session runtime (llm, intake, mission, org,
-                      dispatch, pods, context, history, session)
+                      dispatch, pods, context, history, session + the
+                      session_* phase submodules — see "Module organization")
 pods/                 transcripts + decision artifacts
 state/role_memory/    per-role memory (persistent across runs)
 state/org_chart.json  the saved org chart (loaded on a --revisit run)
 history/              audit trail (intake, mission edits, org events, ...)
 archives/             rolled-over sessions (size-capped)
 reports/              offloading plans + evaluation reports
-observability/        read-only dashboard (operator-owned, agent-write-locked)
+observability/        read-only dashboard (operator-owned, agent-write-locked;
+                      dashboard/ + watcher/ + server/ — see "Module organization")
 tests/                unit tests (offline, deterministic)
 ```
+
+## Module organization (where to find what)
+
+Several large modules are split into a **parent facade + focused submodules**.
+The parent keeps the core class + a slim orchestrator and re-exports the
+submodule functions, so `from runtime.session import Session` and
+`from observability.dashboard import Watcher` still work unchanged. Start at
+the parent, then jump to the submodule for a specific concern.
+
+**The decomposed families** (parent → submodules):
+
+| Family            | Parent (facade) | Submodules (by concern)                              |
+|-------------------|-----------------|------------------------------------------------------|
+| real LLM backend  | `llm_api`       | `llm_api_parse` (parsing), `llm_api_stream` (streaming) |
+| Phase 3 org       | `org`           | `org_bootstrap`, `org_resourcing`, `org_approvals`, `org_leader` |
+| Phase 4 dispatch  | `dispatch`      | `dispatch_main`, `dispatch_role_work`, `dispatch_pod_triggers`, `dispatch_self_edits`, `dispatch_efficiency`, `dispatch_automation` |
+| the pipeline      | `session`       | `session_phases123`, `session_loop`, `session_phases`, `session_efficiency`, `session_escalation`, `session_finalize` |
+| pods              | `pods`          | `pod_artifacts`, `solo_pods`                          |
+| the dashboard     | `dashboard`     | `watcher`, `server`                                   |
+
+**Where to find what** (per family):
+
+- **`llm_api`** — how a reply is parsed / truncation detected → `llm_api_parse`;
+  how streaming + the bounded retry loop work → `llm_api_stream`; the core
+  invoke loop + `make_backend` → `llm_api`.
+- **`org`** — the Leader's department-head proposal → `org_bootstrap`; hire /
+  fire → `org_resourcing`; the approval matrix → `org_approvals`; Leader
+  replacement → `org_leader`; the core registry → `org`.
+- **`dispatch`** — the top-down runner → `dispatch_main`; role lifecycle + IC
+  work → `dispatch_role_work`; the Pods A/B/C trigger → `dispatch_pod_triggers`;
+  IC self-edits → `dispatch_self_edits`; the Leader's S22 efficiency actions →
+  `dispatch_efficiency`; automation over headcount → `dispatch_automation`; the
+  core context assembly → `dispatch`.
+- **`session`** — run setup (memory load, checkpoint detect) →
+  `session_phases123.setup_run`; Phases 1-3 → `session_phases123.run_phases_1_3`;
+  the bounded continue/complete loop (Phases 4-6) → `session_loop.run_phases_4_6`;
+  the Phase 5 synthesis / Phase 6 evaluation → `session_phases.synthesis` /
+  `.evaluate`; the S22 efficiency metrics + floor trigger →
+  `session_efficiency.finish_efficiency` / `.efficiency_floor_action`; escalating
+  a failed run → `session_escalation.escalate`; finalizing a run →
+  `session_finalize.finalize_run`; the `Session` class + `build_backend` + the
+  BAU rule → `session`.
+- **`pods`** — the pod mechanics → `pods`; transcripts + decision artifacts →
+  `pod_artifacts`; solo leader pods → `solo_pods`.
+- **`dashboard`** — start the dashboard → `dashboard.main`; the log-tailing /
+  in-memory state → `watcher.Watcher`; the HTTP handler / SSE stream / server
+  factory → `server._Handler` / `.make_server` / `._watch_loop`.
+
+The remaining runtime modules (`llm`, `intake`, `mission`, `context`,
+`history`, `permissions`, `config`, `coerce`, `guard`, `complexity`,
+`efficiency`, `timing`) are each single-concern and are not split.
 
 ## Offline by design
 

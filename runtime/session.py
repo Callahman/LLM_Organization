@@ -14,34 +14,49 @@ envelope-validated in the backend chain — `OpenAIBackend` in
 - the **Phase 6 self-improving loop**: a bounded **continue/complete**
   decision — continue re-enters Phase 1 with the evaluation as input, still
   abiding by the original goal.
+
+**Decomposition (Phase 5):** this file keeps the `Session` core
+(`__init__`, the BAU rule methods, `_active_role_ids`, `_checkpoint`,
+`_phase`) + the slim `run` orchestrator + `SessionResult` + the
+`build_backend` factory. The phase methods moved to focused modules:
+Phase 5 synthesis + Phase 6 evaluation -> `runtime/session_phases.py`; the
+S22 efficiency methods -> `runtime/session_efficiency.py`; escalation ->
+`runtime/session_escalation.py`; the run setup + Phases 1-3 ->
+`runtime/session_phases123.py`; the Phases 4-6 loop ->
+`runtime/session_loop.py`; the run finalization ->
+`runtime/session_finalize.py`. `Session` keeps thin delegations to the phase
+methods (so `session._synthesis(...)` etc. keep working). This file
+re-exports the full public API (backward-compatible facade).
 """
 
 from __future__ import annotations
 
 import json
 import os
-import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from roles.base import Role
 from runtime.llm import LLMBackend, MemoryBackend, TimeoutBackend
-from runtime.intake import run_intake, IntakeResult
-from runtime.mission import run_mission, MissionResult, load_mission
-from runtime.org import OrgState, bootstrap
+from runtime.intake import IntakeResult
+from runtime.mission import MissionResult
+from runtime.org import OrgState
 from runtime import dispatch
 from runtime.pods import SoloTracker
 from runtime.history import HistoryStore
 from runtime.timing import TimingTracker, TimingBackend
-from runtime.efficiency import (
-    EfficiencyMeter,
-    compute_m_satisfaction,
-    EFFICIENCY_FLOOR,
+from runtime.efficiency import EfficiencyMeter, EFFICIENCY_FLOOR
+from runtime.complexity import RoutingBackend, ThinkingBudget
+from runtime.session_phases import synthesis, evaluate
+from runtime.session_efficiency import (
+    finish_efficiency,
+    efficiency_floor_action,
 )
-from runtime.complexity import (
-    RoutingBackend, ThinkingBudget, classify_complexity,
-)
+from runtime.session_escalation import escalate
+from runtime.session_phases123 import setup_run, run_phases_1_3
+from runtime.session_loop import run_phases_4_6
+from runtime.session_finalize import finalize_run
 
 
 @dataclass
@@ -184,50 +199,12 @@ class Session:
             return False
         return True
 
-    # --- Phase 5 synthesis -------------------------------------------------
+    # --- Phase 5 synthesis (delegation) ------------------------------------
 
     def _synthesis(self) -> str:
-        ctx = (
-            "PHASE 5: check progress against the mission's success criteria AND "
-            "assess whether the deliverable can be IMPROVED (more polished, "
-            "more fun, more features, better quality). Do NOT stop at the first "
-            "working version — the goal is a polished deliverable, not just a "
-            "working one. Produce a verdict: complete (genuinely polished, "
-            "stop) / continue (can improve, keep iterating) / escalate."
-        )
-        # S22: include the efficiency breakdown + E + the mandate to keep E
-        # high (the most recent finished iteration's metrics).
-        eff_panel = self.efficiency.panel_text()
-        if eff_panel:
-            ctx += " " + eff_panel
-        # Carry the pods' decisions up to the leader's synthesis (the second
-        # carry-over path: the cross-team decisions the pods closed on).
-        decisions = [
-            f"[{p.id}] {p.decision}"
-            for p in self.pods
-            if getattr(p, "decision", "")
-        ]
-        if decisions:
-            ctx += " POD DECISIONS: " + "; ".join(decisions)
-        out = self.backend.invoke(self.leader, ctx,
-                                  reasoning=classify_complexity(5, self.leader, {}),
-                                  phase=5)
-        # Solo (P5): record the leader's synthesis step so the dashboard can
-        # watch it (one transcript file, growing per round). Story 2 (A6): the
-        # thinking-budget remainder is included so the dashboard can show it.
-        self.solo.record("p5", "Phase 5: synthesis", self.cycles,
-                         "synthesis",
-                         {**out, "thinking_budget_remaining":
-                              self.thinking_budget.remaining,
-                           # Story 3 (A4): the BAU halt state is observable —
-                           # the dashboard can show an active halt.
-                           "bau_active": self.bau_active(),
-                           "bau_halt": self.bau_halt})
-        # A1: close the solo pod when the synthesis phase completes.
-        self.solo.close("p5", f"synthesis verdict={out.get('verdict', 'complete')}")
-        return out.get("verdict", "complete")
+        return synthesis(self)
 
-    # --- Phase 6 evaluation + continue/complete ----------------------------
+    # --- Phase 6 evaluation (delegation) -----------------------------------
 
     def _evaluate(
         self,
@@ -237,68 +214,10 @@ class Session:
         verdict: str,
         max_iterations: int,
     ):
-        dispatch_units = len(dispatch_results)
-        evaluation = {
-            "ts": f"cycle{self.cycles}",
-            "outcome": verdict,
-            "process": {
-                "pods": len(self.pods),
-                "dispatch_units": dispatch_units,
-                "resourcing_events": len(self.org.events),
-            },
-            "improvement_actions": [
-                "department heads update their policy markdowns",
-                "role-catalog improvements proposed through HR",
-                "leader updates the mission's working section (user permission)",
-            ],
-        }
-        # A no-op cycle (zero work dispatched) must not masquerade as a clean
-        # "complete" — surface it as an escalation so it is visible, never
-        # silent.
-        if dispatch_units == 0:
-            evaluation["no_work"] = True
-            evaluation["escalation_reason"] = (
-                "Phase 4 dispatched zero work (no department objectives could "
-                "be resolved to heads in the org) — the cycle did nothing."
-            )
-            self.history.write_evaluation_report(evaluation)
-            self.history._append(
-                "escalations.jsonl",
-                {"phase": 6, "reason": evaluation["escalation_reason"],
-                 "cycle": self.cycles},
-            )
-            return evaluation, "escalated"
-        self.history.write_evaluation_report(evaluation)
-        # S22: include the efficiency breakdown + E + the mandate to keep E
-        # high (the most recent finished iteration's metrics).
-        p6_ctx = (
-            "PHASE 6: decide whether to keep iterating. Bias toward 'continue' "
-            "(keep improving the deliverable) unless it is genuinely polished. "
-            "The goal is a high-quality deliverable, not just a working one. "
-            "Choose 'complete' (stop) or 'continue' (another iteration, still "
-            f"abiding by the original goal). Evaluation: {evaluation}"
-        )
-        eff_panel = self.efficiency.panel_text()
-        if eff_panel:
-            p6_ctx += " " + eff_panel
-        out = self.backend.invoke(
-            self.leader,
-            p6_ctx,
-            reasoning=classify_complexity(6, self.leader, {}),
-            phase=6,
-        )
-        decision = out.get("verdict", "complete")
-        # Solo (P6): record the leader's continue/complete decision so the
-        # dashboard can watch it (one transcript file, growing per round).
-        self.solo.record("p6", "Phase 6: evaluation", self.cycles,
-                         "decision", out)
-        # A1: close the solo pod when the evaluation phase completes.
-        self.solo.close("p6", f"eval decision={decision}")
-        if decision == "continue" and self.cycles < max_iterations:
-            return evaluation, "continue"
-        return evaluation, "complete"
+        return evaluate(
+            self, intake, mission, dispatch_results, verdict, max_iterations)
 
-    # --- S22: efficiency finishing + the floor trigger --------------------
+    # --- S22: efficiency finishing + the floor trigger (delegation) --------
 
     def _finish_efficiency(
         self,
@@ -307,66 +226,13 @@ class Session:
         dispatch_results,
         verdict,
     ):
-        """S22: finish the loop iteration — compute ``N_created`` (the roles
-        that became active this iteration) + ``M_satisfaction`` (0-1, terminal
-        + recurring), then finish the efficiency meter (compute ``E`` with the
-        running-average refs, append the per-iteration snapshot to the log).
-        When ``E < EFFICIENCY_FLOOR``, trigger a visible efficiency action."""
-        # S22: N_created = the roles that became active this iteration.
-        iter_end_ids = {r.id for r in self.org.active_roles()}
-        n_created = len(iter_end_ids - iter_start_ids)
-        self.efficiency.record_created(n_created)
-        # S22: M_satisfaction (0-1, terminal + recurring).
-        m_sat = compute_m_satisfaction(mission_draft, dispatch_results, verdict)
-        # S22: finish the iteration (compute E, append to the log).
-        snap = self.efficiency.finish_iteration(m_sat)
-        # S22: when E < EFFICIENCY_FLOOR, the Leader must take a visible
-        # efficiency action.
-        if snap.get("below_floor"):
-            self._efficiency_floor_action(snap)
-        return snap
+        return finish_efficiency(
+            self, iter_start_ids, mission_draft, dispatch_results, verdict)
 
     def _efficiency_floor_action(self, snap):
-        """S22: when ``E < EFFICIENCY_FLOOR``, the Leader must take a visible
-        efficiency action. Invoke the Leader with the efficiency breakdown +
-        the mandate, and process its ``efficiency`` action (fire / reassign /
-        report / automate) via ``dispatch._process_efficiency`` (the automation
-        action runs the IC-writes-script -> fired -> script-executed flow)."""
-        ctx = (
-            "PHASE 6 (efficiency floor): the efficiency score E is BELOW the "
-            f"floor ({snap['E']:.3f} < {snap['EFFICIENCY_FLOOR']}). You MUST "
-            "take a visible efficiency action to reduce headcount / compute "
-            "time. "
-            + self.efficiency.panel_text()
-            + " Set `efficiency` to a JSON OBJECT with an `action` (\"fire\" "
-            "to fire an inefficient role through HR — the firing cascades to "
-            "its report subtree; \"reassign\" to move it to a different team, "
-            "named in `new_team`; \"report\" to report the inefficiency to the "
-            "user; \"automate\" to automate a recurring task, named in `task`) "
-            "and a `target` (the role id or department slug) and a `reasoning`."
-        )
-        out = self.backend.invoke(
-            self.leader, ctx,
-            reasoning=classify_complexity(6, self.leader, {}),
-            phase=6,
-        )
-        eff = out.get("efficiency")
-        if isinstance(eff, dict):
-            dispatch._process_efficiency(
-                self.org, self.leader, eff, self._approver_fn, self.history)
-            # S22: the automation action (IC writes a script -> fired ->
-            # script executed).
-            if eff.get("action") == "automate":
-                dispatch.run_automation(
-                    self.org, self.leader, eff, self.backend,
-                    self._approver_fn, self.history)
-        else:
-            # No efficiency action set — log it visibly (never silent).
-            self.org.log_event(
-                "efficiency_floor_no_action", self.leader.id, None,
-                {"E": snap["E"], "floor": snap["EFFICIENCY_FLOOR"]})
+        return efficiency_floor_action(self, snap)
 
-    # --- Escalation --------------------------------------------------------
+    # --- Escalation (delegation) -------------------------------------------
 
     def _escalate(
         self,
@@ -374,24 +240,7 @@ class Session:
         intake: Optional[IntakeResult],
         mission: Optional[MissionResult],
     ) -> SessionResult:
-        diagnosis = {
-            "phase": self.phases[-1] if self.phases else None,
-            "reason": reason,
-            "intake_confidence": intake.confidence if intake else None,
-            "mission_approved": mission.approved if mission else None,
-        }
-        self.history._append("escalations.jsonl", diagnosis)
-        # Rolling window + archive cap (Epic 7) — the session is ending.
-        self.history.maintain()
-        return SessionResult(
-            status="escalated",
-            phases=list(self.phases),
-            intake=intake,
-            mission=mission,
-            verdict="escalate",
-            cycles=self.cycles,
-            escalation=diagnosis,
-        )
+        return escalate(self, reason, intake, mission)
 
     # --- Checkpointing (crash recovery, Story 1) ---------------------------
 
@@ -482,251 +331,49 @@ class Session:
         # actions the Leader takes). Stored so the Phase 6 efficiency action
         # can call it.
         self._approver_fn = approver_fn
-        memory_dir = self.config.get("memory_dir", "state/role_memory")
-        org_chart_path = self.config.get("org_chart_path", "state/org_chart.json")
-        mission_path = self.config.get("mission_path", "MISSION.md")
-        checkpoint_path = self.config.get("checkpoint_path", "state/checkpoint.json")
 
-        # Story 1 (B4, minimal): a checkpoint left by a crashed run is
-        # discoverable — if one exists and this is not a revisit, surface it
-        # (full resume-from-checkpoint is a follow-up). A corrupted checkpoint
-        # is still surfaced (the phase/cycle read as "?").
-        if not revisit and os.path.exists(checkpoint_path):
-            cp_phase, cp_cycle = "?", "?"
-            try:
-                with open(checkpoint_path, encoding="utf-8") as f:
-                    cp = json.load(f)
-                cp_phase, cp_cycle = cp.get("phase", "?"), cp.get("cycle", "?")
-            except (OSError, ValueError):
-                pass
-            print(
-                f"[session] checkpoint found (phase {cp_phase}, cycle {cp_cycle}) "
-                f"— re-run to resume",
-                file=sys.stderr,
-            )
-
-        # Load each role's persisted memory (so roles remember prior runs).
-        self.backend.load_state(memory_dir)
-
-        # A revisit: load the saved org chart + the current mission.
-        start_version = None
-        current_mission = ""
-        if revisit:
-            loaded_org = OrgState.load(org_chart_path,
-                                       history_dir=self.org.history_dir)
-            for rid, role in loaded_org.roles.items():
-                self.org.roles.setdefault(rid, role)
-            self.org.role_definitions.update(loaded_org.role_definitions)
-            start_version, current_mission = load_mission(mission_path)
+        # Setup: config paths, checkpoint detection, memory load, revisit load.
+        (memory_dir, org_chart_path, mission_path, checkpoint_path,
+         start_version, current_mission) = setup_run(self, revisit)
 
         self.phases = []
         self.cycles = 0
-        # S22: the Phase 3 (bootstrap) wall-clock time, captured so it can be
-        # included in the first loop iteration (the Phase 3-6 loop scope). 0.0
-        # when Phase 3 is skipped (a resume from Phase 4).
-        p3_started = p3_ended = 0.0
 
-        # S15: a resume-from-checkpoint skips Phases 1-3 (the org + mission
-        # are loaded in the revisit branch above) and resumes from Phase 4 —
-        # the dispatch continues without re-deriving the intake / mission.
-        if resume_from_phase >= 4 and revisit:
-            print(
-                f"[session] resuming from Phase 4 (skipping Phases 1-3; the "
-                f"org + mission are loaded, the dispatch continues)",
-                file=sys.stderr,
-            )
-            intake = None
-            mission = None
-            mission_draft = current_mission
-        else:
-            # --- Phase 1: intake (once) ---
-            intake = self._phase(1, 0, run_intake,
-                self.backend, self.leader, initial_prompt, user_answer_fn,
-                confidence_threshold=self.config.get("confidence_threshold", 0.8),
-                question_budget=self.config.get("question_budget", 5),
-                history_dir=self.org.history_dir,
-                current_mission=current_mission,
-                mission_path=mission_path,
-            )
-            self.phases.append(1)
-            # Solo (P1): record the leader's intake so the dashboard can
-            # watch it.
-            self.solo.record("p1", "Phase 1: intake", 0, "intake",
-                             {"summary": f"intake converged={intake.converged} "
-                                         f"rounds={intake.rounds}",
-                              "confidence": intake.confidence,
-                              "converged": intake.converged,
-                              "rounds": intake.rounds,
-                              "assumptions": intake.assumptions})
+        # Phases 1-3 (once) — or skipped on a resume-from-checkpoint.
+        (intake, mission, mission_draft, p3_started, p3_ended, esc) = \
+            run_phases_1_3(
+                self, initial_prompt, user_answer_fn, user_permission_fn,
+                approver_fn, revisit, resume_from_phase, start_version,
+                current_mission, mission_path)
+        if esc is not None:
+            return esc
 
-            # --- Phase 2: mission (once) ---
-            mission = self._phase(2, 0, run_mission,
-                self.backend, self.leader, intake, user_permission_fn,
-                history_dir=self.org.history_dir,
-                reask_budget=self.config.get("mission_reask_budget", 3),
-                start_version=start_version,
-                current_mission=current_mission,
-            )
-            self.phases.append(2)
-            # Solo (P2): record the leader's mission draft + approval.
-            self.solo.record("p2", "Phase 2: mission", 0, "mission",
-                             {"summary": f"mission approved={mission.approved} "
-                                         f"version={mission.version} "
-                                         f"attempts={mission.attempts}",
-                              "approved": mission.approved,
-                              "version": mission.version,
-                              "attempts": mission.attempts,
-                              "edits": len(mission.edits)})
-            # A1: close the solo pod when the mission phase completes.
-            self.solo.close("p2", f"mission approved={mission.approved}, "
-                                  f"v{mission.version}")
-            if not mission.approved:
-                return self._escalate("mission not approved by the user",
-                                      intake, mission)
-            mission_draft = mission.edits[-1]["draft"]
+        # Phases 4-6 (the bounded self-improving loop).
+        (dispatch_results, verdict, evaluation, status, esc) = run_phases_4_6(
+            self, intake, mission, mission_draft, approver_fn, phase4_halt_fn,
+            max_iterations, p3_started, p3_ended)
+        if esc is not None:
+            return esc
 
-            # --- Phase 3: org bootstrap (once) ---
-            p3_started = time.time()
-            self._phase(3, 0, bootstrap,
-                self.org, self.backend, self.leader, mission, approver_fn,
-                additive=revisit,
-                bootstrap_timeout_seconds=self.config.get(
-                    "bootstrap_timeout_seconds",
-                    self.config.get("ic_timeout_seconds")))
-            p3_ended = time.time()
-            self.org.write_events()
-            # Story 1 (B1): checkpoint after Phase 3 — a crash in Phase 4
-            # loses at most the current iteration's hires, not the
-            # bootstrapped org.
-            self._checkpoint(3, 0)
-            self.phases.append(3)
-            # Solo (P3): record the leader's org-bootstrap.
-            self.solo.record("p3", "Phase 3: org bootstrap", 0, "bootstrap",
-                             {"summary": "org bootstrapped",
-                              "departments": len(self.org.department_heads()),
-                              "roles": len(self.org.roles)})
-            # A1: close the solo pod when the bootstrap phase completes.
-            self.solo.close("p3", "org bootstrapped")
+        # Finalize: rolling-window maintenance + memory / org-chart persist.
+        return finalize_run(
+            self, memory_dir, org_chart_path, status, intake, mission,
+            dispatch_results, verdict, evaluation)
 
-        # --- Phases 4 & 5: iterate (bounded + goal-based stop) ---
-        dispatch_results: List[Dict[str, Any]] = []
-        verdict = ""
-        evaluation: Dict[str, Any] = {}
-        status = "complete"
-        for _ in range(max_iterations):
-            self.cycles += 1
-            # S22: begin the loop iteration (reset the per-iteration
-            # accumulators) and capture the active role ids (for N_created).
-            self.efficiency.start_iteration()
-            iter_start_ids = {r.id for r in self.org.active_roles()}
-            if self.cycles == 1 and p3_ended > 0:
-                # Phase 3 ran once before the loop — include its time +
-                # headcount in the first iteration (S22: the Phase 3-6 loop
-                # scope). The _phase() record of Phase 3 was wiped by
-                # start_iteration, so re-record it.
-                self.efficiency.record_phase(3, p3_started, p3_ended)
-                self.efficiency.record_headcount(
-                    len(self.org.active_roles()), p3_ended - p3_started)
 
-            # Phase 4: dispatch (hires the managers/ICs it decomposes onto). Pods
-            # A/B/C form as an add-on; the formed pods accumulate in
-            # `self.pods` so their decisions carry up to the leader's
-            # Phase 5 synthesis.
-            dispatch_results = self._phase(4, self.cycles, dispatch.dispatch,
-                self.backend, self.org, self.leader, mission_draft,
-                approver_fn=approver_fn,
-                pods_out=self.pods,
-                history=self.history,
-                routing_rules=self.config.get("pod_routing_rules", []),
-                artifacts_dir=self.config.get("pod_artifacts_dir", "pods/artifacts"),
-                transcripts_dir=self.config.get("pod_transcripts_dir", "pods/transcripts"),
-                ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
-                config=self.config,
-                solo=self.solo,
-                timing=self.timing,
-            )
-            self.phases.append(4)
-            # Solo (P4): record the dispatch + the thinking-budget remainder so
-            # the dashboard can show the budget (Story 2, A6).
-            self.solo.record("p4", "Phase 4: dispatch", self.cycles, "dispatch",
-                             {"dispatches": len(dispatch_results),
-                              "thinking_budget_remaining":
-                                  self.thinking_budget.remaining})
-
-            # A Safety/Morality halt during Phase 4 (the only BAU halt).
-            if phase4_halt_fn is not None:
-                halt = phase4_halt_fn()
-                if halt:
-                    self.halt_bau(halt["department"], halt["scope"], halt["reason"])
-                    self.queue_user_input({"kind": "safety_morality_halt", **halt})
-
-            # Story 3 (A10/B12): a GLOBAL Safety/Morality halt stops work
-            # before Phase 5 — the halt is CONSUMED, not just recorded
-            # (`bau_active()` is False only for a global halt).
-            if not self.bau_active():
-                return self._escalate("safety/morality halt (global)",
-                                      intake, mission)
-            if self.bau_halt:
-                # A SCOPED halt — do not stop; continue non-blocked work
-                # (visible note; full per-department blocking is a follow-up).
-                print(
-                    f"[session] scoped safety/morality halt in "
-                    f"{self.bau_halt.get('department')} — continuing "
-                    f"non-blocked work",
-                    file=sys.stderr,
-                )
-
-            # Phase 5: synthesis.
-            verdict = self._phase(5, self.cycles, self._synthesis)
-            self.phases.append(5)
-
-            # Story 3 (B12): the same check before Phase 6 — a global halt
-            # does not run the continue/complete decision.
-            if not self.bau_active():
-                return self._escalate("safety/morality halt (global)",
-                                      intake, mission)
-
-            # Phase 6: evaluation (decides continue / stop).
-            evaluation, status = self._phase(6, self.cycles, self._evaluate,
-                intake, mission, dispatch_results, verdict, max_iterations
-            )
-            self.phases.append(6)
-
-            # Story 1 (B1): checkpoint after each Phase 4 iteration — a crash
-            # in the NEXT iteration loses at most that iteration's hires.
-            self._checkpoint(4, self.cycles)
-
-            # S22: finish the iteration — compute M_satisfaction + E, append
-            # the per-iteration snapshot to the log, and handle the
-            # EFFICIENCY_FLOOR trigger (a visible efficiency action when
-            # E < floor).
-            self._finish_efficiency(
-                iter_start_ids, mission_draft, dispatch_results, verdict)
-
-            if status != "continue":
-                break
-
-        # Rolling window + archive cap (Epic 7): old sessions move to the
-        # archives; the audit path stays resolvable.
-        self.history.maintain()
-
-        # Persist each role's memory (so it carries into the next run) and the
-        # org chart (so a --revisit run loads it).
-        # Story 11 (B8): prune stale (fired) roles' memories before saving —
-        # only the active role ids (the current org's role ids + the leader)
-        # are persisted.
-        self.backend.save_state(memory_dir,
-                                active_role_ids=self._active_role_ids())
-        self.org.save(org_chart_path)
-
-        return SessionResult(
-            status=status,
-            phases=list(self.phases),
-            intake=intake,
-            mission=mission,
-            dispatch_results=dispatch_results,
-            pods=list(self.pods),
-            verdict=verdict,
-            evaluation=evaluation,
-            cycles=self.cycles,
-        )
+__all__ = [
+    # core (kept here)
+    "SessionResult",
+    "build_backend",
+    "Session",
+    # facade re-exports (moved to focused modules)
+    "synthesis",
+    "evaluate",
+    "finish_efficiency",
+    "efficiency_floor_action",
+    "escalate",
+    "setup_run",
+    "run_phases_1_3",
+    "run_phases_4_6",
+    "finalize_run",
+]

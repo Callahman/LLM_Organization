@@ -1,4 +1,4 @@
-"""Phase 4 — Top-down dispatch.
+"""Phase 4 — Top-down dispatch (core context assembly).
 
 The leader decomposes the mission into **department objectives** → department
 heads decompose into **team objectives** → managers decompose into **IC
@@ -12,58 +12,37 @@ leaders/heads (a bounded summary of the mission, not the full markdown).
 
 **Pods A/B/C multi-trigger** (an add-on to the dispatch, never a
 replacement): after each team's IC work, a pod forms when any trigger fires —
+A (disagreement across the IC work outputs), B (a `cross_team`-marked
+objective), C (a routing-rule task type). The pod's decision is then carried
+**all three ways**: written to `pods/artifacts/` (+ the `HistoryStore`
+decision journal), carried up to the leader's Phase 5 synthesis, and seeded
+into the members' memory as a cross-team `pod:<id>` entry (via
+`MemoryBackend.seed_cross_team` — a no-op for a plain `StubBackend`).
 
-- **A (disagreement)**: the IC work outputs carry conflicting
-  recommendations (`detect_disagreement` reads the `recommendation` field —
-  so the dispatch keeps the **full IC outputs**, not just the upward
-  reports);
-- **B (cross-team)**: the team objective is marked `cross_team` (optionally
-  naming the other teams' roles in `cross_team_with`);
-- **C (routing rule)**: a task type matches the routing-rule config.
-
-The pod's decision is then carried **all three ways**: written to
-`pods/artifacts/` (+ the `HistoryStore` decision journal), carried up to the
-leader's Phase 5 synthesis, and seeded into the members' memory as a
-cross-team `pod:<id>` entry (via `MemoryBackend.seed_cross_team` — a no-op
-for a plain `StubBackend`).
+**Decomposition (Phase 3):** this file keeps the core context assembly —
+`mission_digest`, the leader/head/manager/IC/policy context builders, the
+policy read/write helpers, the defensive `_decomposition_list`, and
+`generate_head_policies`. The `dispatch` runner moved to
+`runtime/dispatch_main.py`; the role lifecycle + IC work invokes (including
+the upward-report builders `_work_path` / `_upward_report`) to
+`runtime/dispatch_role_work.py`; the self-edits to
+`runtime/dispatch_self_edits.py`; the efficiency actions to
+`runtime/dispatch_efficiency.py`; the automation flow to
+`runtime/dispatch_automation.py`; and the pods A/B/C triggers to
+`runtime/dispatch_pod_triggers.py`. This file re-exports the full public API
+(backward-compatible facade).
 """
 
 from __future__ import annotations
 
 import os
-import sys
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
-from roles.base import Role, spin_personality, spin_sub_architype
-from roles.worker import worker_output_schema
-from org import tiers
-from runtime.org import (
-    OrgState,
-    hire,
-    fire,
-    run_leader_replacement_vote,
-    ResourcingError,
-    ResourcingVetoed,
-    MAX_ORG_ROLES,
-)
+from roles.base import Role
+from runtime.org import OrgState
 from runtime.llm import LLMBackend
-from runtime.complexity import classify_complexity, detect_disagreement
-from runtime.history import HistoryStore
-from runtime.timing import TimingTracker
-from runtime.permissions import apply_code_edits, read_file
-from runtime.coerce import as_dict_list
-from runtime.pods import (
-    Pod,
-    PodMembershipError,
-    form_pod,
-    run_pod,
-    write_decision_artifact,
-    write_transcripts,
-    senior_member,
-    chained_pod,
-    SoloTracker,
-)
+from runtime.complexity import classify_complexity
+from runtime.dispatch_role_work import _work_path, _upward_report  # noqa: E402,F401
 
 
 def mission_digest(mission: Dict[str, Any]) -> str:
@@ -97,116 +76,6 @@ def _leader_ctx(digest: str, head_ids: List[str],
     if efficiency_panel:
         base += " " + efficiency_panel
     return base
-
-
-def _efficiency_panel_text(snap: Dict[str, Any]) -> str:
-    """Render the efficiency panel (per-role + per-department invoke time,
-    cumulative) as text for the Leader's Phase 4 context (Story 22)."""
-    per_role = snap.get("per_role", {})
-    per_dept = snap.get("per_department", {})
-    lines = [
-        "EFFICIENCY PANEL (per-role / per-department invoke time, cumulative):"
-    ]
-    if per_role:
-        lines.append("  per-role:")
-        for rid, t in sorted(per_role.items(), key=lambda kv: -kv[1]):
-            lines.append(f"    {rid}: {t:.1f}s")
-    if per_dept:
-        lines.append("  per-department:")
-        for dept, t in sorted(per_dept.items(), key=lambda kv: -kv[1]):
-            lines.append(f"    {dept}: {t:.1f}s")
-    if not per_role and not per_dept:
-        lines.append("  (no invoke time recorded yet)")
-    lines.append(
-        "If a role or department is inefficient, set `efficiency` with an "
-        "`action` (\"fire\" to fire it through HR resourcing — the firing "
-        "cascades to its report subtree; \"reassign\" to move it to a "
-        "different team, named in `new_team`; \"report\" to report the "
-        "inefficiency to the user without acting) and `target` (the role id or "
-        "department slug)."
-    )
-    return "\n".join(lines)
-
-
-def _reassign_role(org, leader, target_id, new_team, reasoning, history) -> None:
-    """Reassign a role to a different team (Story 22). The role's `team` (its
-    work-directory slug) is changed; the move is logged visibly (never
-    silent)."""
-    role = org.get(target_id)
-    if role is None:
-        if history is not None:
-            history._append("efficiency_reports.jsonl",
-                            {"ts": time.time(), "action": "reassign",
-                             "target": target_id, "reasoning": reasoning,
-                             "error": "unknown role"})
-        return
-    if not new_team:
-        if history is not None:
-            history._append("efficiency_reports.jsonl",
-                            {"ts": time.time(), "action": "reassign",
-                             "target": target_id, "reasoning": reasoning,
-                             "error": "no new_team specified"})
-        return
-    old_team = role.team
-    role.team = new_team
-    org.log_event("role_reassigned", leader.id, target_id,
-                  {"old_team": old_team, "new_team": new_team,
-                   "reasoning": reasoning})
-    if history is not None:
-        history._append("efficiency_reports.jsonl",
-                        {"ts": time.time(), "action": "reassign",
-                         "target": target_id, "old_team": old_team,
-                         "new_team": new_team, "reasoning": reasoning})
-
-
-def _process_efficiency(org, leader, eff: Dict[str, Any], approver_fn,
-                        history) -> None:
-    """Process the Leader's efficiency action (Story 22): fire / reassign /
-    report an inefficient role or department. All actions are logged visibly
-    (never silent)."""
-    action = eff.get("action")
-    target = eff.get("target")
-    reasoning = eff.get("reasoning", "")
-    if not action or not target:
-        return
-    if action == "fire":
-        # Fire the inefficient role through HR resourcing (cascades to its
-        # report subtree).
-        _fire_role(org, leader, target, f"efficiency: {reasoning}",
-                   approver_fn, history)
-    elif action == "reassign":
-        # Reassign the named role to a different team.
-        _reassign_role(org, leader, target, eff.get("new_team"), reasoning,
-                       history)
-    elif action == "report":
-        # Report the inefficiency to the user (no action).
-        org.log_event("efficiency_reported", leader.id, target,
-                      {"reasoning": reasoning})
-        if history is not None:
-            history._append("efficiency_reports.jsonl",
-                            {"ts": time.time(), "action": "report",
-                             "target": target, "reasoning": reasoning})
-    elif action == "automate":
-        # A recurring task is being automated (an IC writes a Python script, is
-        # fired, and the task is then done by executing the script). The actual
-        # IC-writes-script -> fired -> script-executed flow is run by
-        # ``run_automation`` (the caller, which has the backend); here we just
-        # log the action visibly (never silent) so it is not mistaken for an
-        # unknown action.
-        org.log_event("efficiency_automate_requested", leader.id, target,
-                      {"task": eff.get("task", target), "reasoning": reasoning})
-        if history is not None:
-            history._append("efficiency_reports.jsonl",
-                            {"ts": time.time(), "action": "automate",
-                             "target": target,
-                             "task": eff.get("task", target),
-                             "reasoning": reasoning})
-    else:
-        if history is not None:
-            history._append("efficiency_reports.jsonl",
-                            {"ts": time.time(), "action": action,
-                             "target": target, "reasoning": reasoning,
-                             "error": "unknown efficiency action"})
 
 
 def _head_ctx(head: Role, objective: str, digest: str) -> str:
@@ -312,531 +181,6 @@ def _write_policy(dept: str, policy_text: str, departments_dir: str) -> None:
         f.write(policy_text)
 
 
-def _work_path(ic: Role, task: Dict[str, Any]) -> str:
-    """The team-directory path where the IC's work lives (the leader never
-    reads it — it is brought up as a bounded summary + pointer)."""
-    return f"departments/{ic.department}/{ic.team}/{task.get('id', 'work')}.md"
-
-
-def _upward_report(role: Role, children: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """A structured upward report: a bounded summary + artifact pointers (not
-    the full work). This is how work propagates up the line of command."""
-    return {
-        "from": role.id,
-        "summary": f"{len(children)} unit(s) reported up",
-        "pointers": [c.get("pointer") for c in children if c.get("pointer")],
-        "children": [
-            {"from": c.get("from"), "summary": c.get("summary")}
-            for c in children
-        ],
-    }
-
-
-def _invoke_ic(backend: LLMBackend, ic: Role, ctx: str, reasoning,
-               timeout: Optional[float], phase: int) -> Tuple[
-                   Optional[Dict[str, Any]], Optional[str]]:
-    """Invoke an IC with **one corrective retry** on a failure (error
-    containment). Returns ``(output, error)``: on success ``error`` is None;
-    if the corrective retry also fails, ``output`` is None and ``error`` is a
-    visible description (the caller records the IC's failure in its upward
-    report and continues — one IC hiccup must not kill the run).
-
-    The corrective retry re-asks the SAME task with a nudge appended (the
-    model's malformed / missing reply is called out; it must produce one
-    complete submit_output call) — the same one-retry-on-refusal pattern the
-    self-edit path already uses.
-    """
-    nudge = (
-        "\n\n[RETRY] Your previous reply for this task was not a valid "
-        "structured call (its JSON arguments were malformed or missing). "
-        "Call the submit_output tool exactly once; its arguments must be ONE "
-        "complete JSON object matching your role's output schema. Do not "
-        "emit placeholder or dummy calls."
-    )
-    try:
-        return backend.invoke(
-            ic, ctx, reasoning=reasoning, timeout=timeout, phase=phase,
-        ), None
-    except Exception as e:
-        # Containment boundary: a model quirk (a malformed tool call), a
-        # timeout, a transport blip — recorded visibly below, never a
-        # run-killer.
-        try:
-            return backend.invoke(
-                ic, ctx + nudge, reasoning=reasoning, timeout=timeout,
-                phase=phase,
-            ), None
-        except Exception as e2:
-            return None, (f"{type(e).__name__}: {e} "
-                          f"(corrective retry failed: {type(e2).__name__}: "
-                          f"{e2})")
-
-
-def _self_edit_log(history: Optional[HistoryStore], role_id: str):
-    """A log callable for self-edit results (appends to the HistoryStore's
-    ``self_edits.jsonl`` audit, so a refusal is visible, not swallowed).
-    Returns None when no history is available (the results are still returned
-    by ``apply_code_edits``)."""
-    if history is None:
-        return None
-    def log(msg: str) -> None:
-        history._append("self_edits.jsonl", {"role": role_id, "msg": msg})
-    return log
-
-
-def _repair_edit_paths(
-    ic: Role,
-    edits: List[Dict[str, Any]],
-    history: Optional[HistoryStore],
-) -> List[Dict[str, Any]]:
-    """Repair bare top-level paths the model emitted for its own team dir.
-
-    When a path's top-level component is the role's own id or team (the model
-    dropped the ``departments/<dept>/`` prefix), rewrite it into the
-    department scope the permission layer already grants in-dept roles. Only
-    such paths are repaired — any other out-of-scope path (another dept,
-    ``runtime/``, ``MISSION.md``) is left for the gate to refuse, so the
-    repair can never become a channel around the sandbox. Each repair is
-    logged visibly (``history/path_repairs.jsonl``) so the audit shows the
-    harness corrected the model.
-    """
-    own = {name for name in (ic.id, ic.team) if name}
-    repaired: List[Dict[str, Any]] = []
-    for edit in edits:
-        if not isinstance(edit, dict) or not ic.department:
-            repaired.append(edit)
-            continue
-        norm = str(edit.get("path", "")).replace("\\", "/")
-        parts = norm.split("/", 1)
-        top = parts[0]
-        if (
-            top in own
-            and len(parts) > 1            # a subpath (a file), not a bare dir
-            and not norm.startswith("departments/")
-        ):
-            fixed = "departments/%s/%s" % (ic.department, norm)
-            note = dict(edit)
-            note["path"] = fixed
-            note["_repaired_from"] = str(edit.get("path", ""))
-            if history is not None:
-                history._append(
-                    "path_repairs.jsonl",
-                    {"ts": time.time(), "role": ic.id,
-                     "from": str(edit.get("path", "")), "to": fixed},
-                )
-            repaired.append(note)
-        else:
-            repaired.append(edit)
-    return repaired
-
-
-def _ic_pre_read(
-    ic: Role,
-    edits: List[Dict[str, Any]],
-    history: Optional[HistoryStore],
-) -> None:
-    """The IC reads the code it is about to change (gated by the **read gate**
-    — the read invariants: the sandbox, the mission lock, the meta-rule lock,
-    the department scope, the code-read invariants). This is the concrete
-    "a role reads a file" in the dispatch that the read gate wires into.
-
-    A **cross-team read** (a sibling team dir in the same department) is
-    **logged** (visible, not silent); a **refused read** is **logged**
-    (visible, never silent). The write gate remains authoritative — this is
-    the read observability step (the read of a new file is not an error)."""
-    def log(msg: str) -> None:
-        if history is not None:
-            history._append("self_edits.jsonl", {"role": ic.id, "msg": msg})
-    for edit in edits:
-        if not isinstance(edit, dict):
-            continue
-        path = edit.get("path", "")
-        if not path:
-            continue
-        try:
-            read_file(ic, path, log=log)
-        except PermissionError as e:
-            log(f"REFUSED read: {ic.id!r} -> {path!r}: {e}")
-
-
-def _run_self_edits(
-    ic: Role,
-    edits: List[Dict[str, Any]],
-    history: Optional[HistoryStore],
-) -> List[Dict[str, Any]]:
-    """Repair + apply + log one batch of self-edits for an IC (gated by the
-    permission layer). Returns the per-edit results (the gate's decisions)."""
-    edits = _repair_edit_paths(ic, edits, history)
-    # The IC reads the code it is about to change (gated by the read gate —
-    # the read invariants; a cross-team read is logged, a refused read is
-    # logged, both visible, never silent).
-    _ic_pre_read(ic, edits, history)
-    results = apply_code_edits(ic, edits, log=_self_edit_log(history, ic.id))
-    if history is not None:
-        for r in results:
-            history.log_code_edit(
-                ic.id, r["path"], r["ok"],
-                error=r.get("error", ""),
-                department=ic.department,
-            )
-    return results
-
-
-def _retry_refused_edits(
-    ic: Role,
-    refused: List[Dict[str, Any]],
-    history: Optional[HistoryStore],
-    backend: LLMBackend,
-    phase: int = 4,
-) -> None:
-    """One corrective retry for refused self-edits: the model is shown the
-    specific refusal reasons (which name the role's team work dir) and asked
-    to re-propose the edits with corrected paths. Bounded to a single pass —
-    a second refusal stands (visible, never looped). Best-effort: a backend
-    failure just means no retry (the original refusals are already logged)."""
-    reasons = "\n".join(
-        "- %s — %s" % (r.get("path", ""), r.get("error", "")) for r in refused
-    )
-    ctx = (
-        f"PHASE 4 (IC {ic.id}) — self-edit correction. Some of your proposed "
-        f"code edits were REFUSED by the permission layer:\n{reasons}\n"
-        "Re-propose the refused edits with corrected paths (write under your "
-        "team work dir; the mission and the rules are read-only). Set "
-        "`code_edits` to a JSON array of objects, each exactly "
-        "{\"path\": <str>, \"content\": <str>}. If a refused edit cannot be "
-        "placed in an allowed scope, omit it."
-    )
-    try:
-        out = backend.invoke(ic, ctx,
-                             reasoning=classify_complexity(phase, ic, {}),
-                             phase=phase)
-    except Exception:
-        return
-    edits = as_dict_list((out or {}).get("code_edits", []))
-    if not edits:
-        return
-    # One bounded corrective pass — the results are logged; no further retry.
-    _run_self_edits(ic, edits, history)
-
-
-def _apply_ic_self_edits(
-    ic: Role,
-    ic_out: Dict[str, Any],
-    history: Optional[HistoryStore],
-    backend: Optional[LLMBackend] = None,
-    phase: int = 4,
-) -> None:
-    """Collect, repair, and apply an IC's self-edit requests (gated by the
-    permission layer), with one corrective retry on refusal. Refusals,
-    repairs, and the retry are all recorded visibly (never silent)."""
-    edits = as_dict_list((ic_out or {}).get("code_edits", []))
-    if not edits:
-        return
-    results = _run_self_edits(ic, edits, history)
-    refused = [r for r in results if not r.get("ok")]
-    if refused and backend is not None:
-        _retry_refused_edits(ic, refused, history, backend, phase)
-
-
-def _ensure_role(
-    org: OrgState,
-    initiator: Role,
-    role_id: str,
-    architype: str,
-    department: str,
-    team: str,
-    approver_fn,
-    direct_ic_cap: int = 3,
-) -> Optional[Role]:
-    """Get a role by ID, or create + hire it (through the approval matrix) if
-    it doesn't exist yet. This is how the dispatch spins up the managers/ICs it
-    decomposes onto, so the full heads->managers->ICs chain is exercised.
-    Returns None if it can't be hired (no approver supplied, or the hire is
-    vetoed / the 3-IC cap is hit)."""
-    role = org.get(role_id)
-    if role is not None:
-        return role
-    if approver_fn is None:
-        return None
-    # Story 11 (B16): total org-size cap — refuse a hire that would exceed the
-    # cap (visible note, never silent).
-    if len(org.roles) >= MAX_ORG_ROLES:
-        print(
-            f"[dispatch] org-size cap reached ({MAX_ORG_ROLES}) — refusing to "
-            f"hire {role_id} (visible note, never silent).",
-            file=sys.stderr,
-        )
-        return None
-    # Spin a functional specialty + a stable behavioral bias so a spun
-    # manager/IC is never left with an empty identity (the prompt rendered
-    # "(architype=ic, sub-architype=, personality=)" before this).
-    new_role = Role(
-        id=role_id,
-        architype=architype,
-        sub_architype=spin_sub_architype(architype, role_id),
-        personality=spin_personality(role_id),
-        department=department,
-        team=team,
-        reports_to=initiator.id,
-        output_schema=worker_output_schema(architype),
-    )
-    try:
-        return hire(org, initiator, new_role, approver_fn,
-                    direct_ic_cap=direct_ic_cap)
-    except Exception:
-        return None
-
-
-def _fire_role(org, leader, role_id, reason, approver_fn, history=None):
-    """Fire a role (through the HR approver) — the dispatch's parallel to
-    `_ensure_role` (the hire path). The `fire` path marks the role inactive
-    (kept in the org chart, not deleted), offloads its work, and journals the
-    event. A veto / required-role rejection / missing approver is logged
-    visibly, never swallowed."""
-    if approver_fn is None:
-        if history is not None:
-            history._append("dispatch_skips.jsonl",
-                            {"role_id": role_id, "reason": reason,
-                             "why": "fire requested but no approver supplied"})
-        return None
-    try:
-        return fire(org, leader, role_id, approver_fn)
-    except ResourcingVetoed as e:
-        if history is not None:
-            history._append("dispatch_skips.jsonl",
-                            {"role_id": role_id, "reason": reason,
-                             "why": f"fire vetoed: {e}"})
-        return None
-    except ResourcingError as e:
-        if history is not None:
-            history._append("dispatch_skips.jsonl",
-                            {"role_id": role_id, "reason": reason,
-                             "why": f"fire rejected: {e}"})
-        return None
-
-
-# --- S22: automation over headcount ----------------------------------------
-
-def _automation_slug(task: str) -> str:
-    """A short directory slug for an automation task (the script filename)."""
-    out = []
-    for ch in (task or "task").lower():
-        out.append(ch if ch.isalnum() else "-")
-    slug = "".join(out).strip("-")
-    while "--" in slug:
-        slug = slug.replace("--", "-")
-    return slug[:40] or "task"
-
-
-def run_automation(org, leader, eff, backend, approver_fn, history=None,
-                   script_dir="automations"):
-    """S22: the **automation over headcount** flow — for a recurring task, spin
-    up an IC to **write a Python script**, the script is **created** (written to
-    ``<script_dir>/<slug>.py``), the IC is **fired** (if not needed for other
-    work), and the recurring task is then done by **executing the script**
-    (subprocess / tool call) instead of an IC each time.
-
-    ``eff`` is the Leader's efficiency action dict (``action="automate"``,
-    ``task`` the recurring task, ``target`` the role/department, ``reasoning``).
-    All steps are logged visibly (never silent).
-    """
-    task = eff.get("task") or eff.get("target") or "(unspecified recurring task)"
-    reasoning = eff.get("reasoning", "")
-    # The script path (where the automation script lives).
-    os.makedirs(script_dir, exist_ok=True)
-    script_path = os.path.join(script_dir, _automation_slug(task) + ".py")
-    # Step 1: spin up an IC to write the script (hired through the approval
-    # matrix, like any other dispatch role).
-    ic_id = "auto-" + _automation_slug(task)
-    ic = _ensure_role(org, leader, ic_id, "ic", "automations", "automations",
-                      approver_fn)
-    if ic is None:
-        if history is not None:
-            history._append("efficiency_reports.jsonl",
-                            {"ts": time.time(), "action": "automate",
-                             "task": task,
-                             "error": "could not hire the automation IC"})
-        return {"task": task, "script_path": script_path, "ic_fired": None,
-                "error": "could not hire the automation IC"}
-    # Step 2: the IC writes the Python script for the recurring task.
-    ctx = (
-        f"PHASE 4 (automation IC {ic.id}): write a Python script for the "
-        f"recurring task. Task: {task} Set `script` to the FULL Python script "
-        f"(a self-contained script that performs the recurring task end to "
-        f"end) and `summary` to a one-line summary of what the script does."
-    )
-    out = backend.invoke(ic, ctx,
-                         reasoning=classify_complexity(4, ic, {}), phase=4)
-    script = out.get("script", "") if isinstance(out, dict) else ""
-    # Step 3: the script is created (written to a file).
-    if script:
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(script)
-    org.log_event("automation_script_created", leader.id, ic.id,
-                  {"task": task, "script_path": script_path,
-                   "reasoning": reasoning})
-    if history is not None:
-        history._append("efficiency_reports.jsonl",
-                        {"ts": time.time(), "action": "automate",
-                         "task": task, "script_path": script_path,
-                         "reasoning": reasoning})
-    # Step 4: the IC is fired (if not needed for other work) — the recurring
-    # task is now done by executing the script instead of an IC each time.
-    _fire_role(org, leader, ic.id, f"automation: {reasoning}", approver_fn,
-               history)
-    # Step 5: the automation is active (a visible log — the script is executed
-    # via subprocess when the recurring task is due).
-    org.log_event("automation_active", leader.id, ic.id,
-                  {"task": task, "script_path": script_path})
-    return {"task": task, "script_path": script_path, "ic_fired": ic.id}
-
-
-# --- Pods A/B/C multi-trigger (an add-on to the dispatch) ------------------
-
-def _task_types(team_obj: Dict[str, Any], ic_tasks: List[Dict[str, Any]]) -> List[str]:
-    """The task types in scope for a team objective (trigger C): the
-    objective's own `task_type` + each IC task's `task_type`."""
-    types = [team_obj.get("task_type")]
-    types.extend(t.get("task_type") for t in ic_tasks)
-    return [t for t in types if t]
-
-
-def _pod_topic(objective: str, triggers: List[str]) -> str:
-    return (
-        f"Phase 4 pod (triggers: {', '.join(triggers)}) — "
-        f"{objective or 'the team objective'}"
-    )
-
-
-def _check_pod_triggers(
-    backend: LLMBackend,
-    org: OrgState,
-    starter: Role,
-    ic_ids: List[str],
-    team_obj: Dict[str, Any],
-    ic_outputs: List[Dict[str, Any]],
-    ic_tasks: List[Dict[str, Any]],
-    routing_rules: Optional[List[str]],
-    pods_out: Optional[List[Pod]],
-    history: Optional[HistoryStore],
-    artifacts_dir: str,
-    transcripts_dir: str = "pods/transcripts",
-    starter_in_members: bool = True,
-    config: Optional[Dict[str, Any]] = None,
-) -> None:
-    """The pods A/B/C multi-trigger — form a pod when any trigger fires:
-
-    - **A (disagreement)**: `detect_disagreement(ic_outputs)` — conflicting
-      recommendations across the IC work outputs (the dispatch keeps the full
-      IC outputs for this; the upward reports alone would not suffice).
-    - **B (cross-team)**: the team objective is marked `cross_team`
-      (optionally naming the other teams' roles in `cross_team_with`).
-    - **C (routing rule)**: a task type matches the routing-rule config
-      (a list of task types that always go to a pod, e.g. "evaluation"/
-      "incident").
-
-    When one fires, the pod is formed (the **starter** + the ICs involved —
-    manager + ICs is a valid 1-tier spread), run, and its decision is carried
-    **all three ways**: written to `pods/artifacts/` (+ the `history`
-    decision journal), collected for the leader's Phase 5 synthesis
-    (`pods_out`), and seeded into the members' memory as a cross-team
-    `pod:<id>` entry (via `MemoryBackend.seed_cross_team` — a no-op for a
-    plain `StubBackend`).
-
-    A membership failure (e.g. a 2-tier spread — an IC podding with a
-    department head) **skips the pod**; the dispatch continues.
-    """
-    triggers: List[str] = []
-    if detect_disagreement(ic_outputs):
-        triggers.append("A")
-    if team_obj.get("cross_team"):
-        triggers.append("B")
-    rules = routing_rules or []
-    if any(t in rules for t in _task_types(team_obj, ic_tasks)):
-        triggers.append("C")
-    if not triggers:
-        return
-
-    # The starter + the ICs involved. For a cross-team objective, the other
-    # teams' roles named in `cross_team_with` join the pod (validated — a
-    # 2-tier spread is rejected and the pod is skipped).
-    member_ids = [starter.id] if starter_in_members else []
-    member_ids.extend(dict.fromkeys(ic_ids))
-    if team_obj.get("cross_team"):
-        member_ids.extend(
-            rid for rid in team_obj.get("cross_team_with", []) if org.get(rid)
-        )
-    roles = {r.id: r for r in org.roles.values()}
-    try:
-        pod = form_pod(
-            roles, starter.id, member_ids,
-            _pod_topic(team_obj.get("objective", ""), triggers),
-            cross_team=bool(team_obj.get("cross_team")),
-            min_roles=(config or {}).get("pod_min_roles", tiers.POD_MIN_ROLES),
-            max_roles=(config or {}).get("pod_max_roles", tiers.POD_MAX_ROLES),
-        )
-    except PodMembershipError:
-        return
-    run_pod(backend, pod, max_rounds=(config or {}).get("pod_max_rounds", 3),
-            transcripts_dir=transcripts_dir,
-            budget_tokens=(config or {}).get("context_budget_tokens", 4000))
-    # Write the pod's transcript (pods/transcripts/) + its decision artifact
-    # (pods/artifacts/).
-    write_transcripts(pod, transcripts_dir=transcripts_dir)
-    base = write_decision_artifact(pod, artifacts_dir=artifacts_dir)
-    if history is not None:
-        history.log_decision(
-            decision=pod.decision,
-            artifacts=[base + ".json", base + ".md"],
-            outcome=f"triggers: {', '.join(triggers)}",
-        )
-    if pods_out is not None:
-        pods_out.append(pod)
-    # The most senior member shares the outcome up the line.
-    senior = senior_member(pod)
-    backend.invoke(
-        senior,
-        f"POD {pod.id} outcome to share up the line — decision: {pod.decision}. "
-        "Produce an upward report of the pod's decision.",
-        reasoning=classify_complexity(4, senior, {}),
-        phase=4,
-    )
-    # Chained-pod escalation: the starter's boss forms a second pod carrying
-    # the first pod's decision artifact up the line (the §2.8 worked example).
-    # A **chained pod on an empty first decision** is skipped (a visible note,
-    # never silent) — there is nothing to carry up the line.
-    boss_id = starter.reports_to
-    if boss_id and boss_id in roles:
-        if pod.decision.strip():
-            boss = roles[boss_id]
-            try:
-                chained = chained_pod(
-                    pod, roles, boss.id, [boss.id, starter.id],
-                    f"escalation of {pod.topic}",
-                    first_artifact_path=base + ".md",
-                    min_roles=(config or {}).get("pod_min_roles", tiers.POD_MIN_ROLES),
-                    max_roles=(config or {}).get("pod_max_roles", tiers.POD_MAX_ROLES),
-                )
-            except PodMembershipError:
-                chained = None
-            if chained is not None:
-                run_pod(backend, chained,
-                        max_rounds=(config or {}).get("pod_max_rounds", 3),
-                        transcripts_dir=transcripts_dir,
-                        budget_tokens=(config or {}).get("context_budget_tokens", 4000))
-                write_transcripts(chained, transcripts_dir=transcripts_dir)
-                write_decision_artifact(chained, artifacts_dir=artifacts_dir)
-        else:
-            print("[pod] skipped chained pod (empty first decision)",
-                  file=sys.stderr)
-    # Seed the members' memory with the cross-team `pod:<id>` entry (what
-    # `RoleMemory.cross_team()` filters on). A no-op for a plain stub.
-    seed = getattr(backend, "seed_cross_team", None)
-    if callable(seed):
-        for member in pod.members:
-            seed(member.id, pod.id, pod.decision, member.team)
-
-
 def _decomposition_list(out: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
     """Safely read a list from a role's ``decomposition`` object, tolerating the
     shapes the real LLM free-forms: a dict (canonical), a bare list (the model
@@ -913,306 +257,71 @@ def generate_head_policies(
     return policies
 
 
-def dispatch(
-    backend: LLMBackend,
-    org: OrgState,
-    leader: Role,
-    mission: Dict[str, Any],
-    approver_fn=None,
-    pods_out: Optional[List[Pod]] = None,
-    history: Optional[HistoryStore] = None,
-    routing_rules: Optional[List[str]] = None,
-    artifacts_dir: str = "pods/artifacts",
-    transcripts_dir: str = "pods/transcripts",
-    ic_timeout_seconds: Optional[float] = None,
-    new_leader: Optional[Role] = None,
-    config: Optional[Dict[str, Any]] = None,
-    solo: Optional[SoloTracker] = None,
-    timing: Optional[TimingTracker] = None,
-) -> List[Dict[str, Any]]:
-    """Run the Phase 4 top-down dispatch. Returns the leader's view: a list of
-    department reports (each carrying the chain of team/IC reports up).
+# --- Backward-compatible facade --------------------------------------------
+# The dispatch API moved to focused modules (Phase 3); re-export the full
+# public API so `from runtime.dispatch import ...` keeps working unchanged.
 
-    `ic_timeout_seconds` (optional) gives the IC work invokes a larger per-
-    invoke timeout than the session default — the ICs do the actual work, so
-    they are the heaviest invokes and the ones most likely to hit the flat
-    budget. `None` uses the session default.
+from runtime.dispatch_role_work import (  # noqa: E402,F401
+    _ensure_role,
+    _fire_role,
+    _invoke_ic,
+)
+from runtime.dispatch_self_edits import (  # noqa: E402,F401
+    _self_edit_log,
+    _repair_edit_paths,
+    _ic_pre_read,
+    _run_self_edits,
+    _retry_refused_edits,
+    _apply_ic_self_edits,
+)
+from runtime.dispatch_efficiency import (  # noqa: E402,F401
+    _efficiency_panel_text,
+    _reassign_role,
+    _process_efficiency,
+)
+from runtime.dispatch_automation import (  # noqa: E402,F401
+    _automation_slug,
+    run_automation,
+)
+from runtime.dispatch_pod_triggers import (  # noqa: E402,F401
+    _task_types,
+    _pod_topic,
+    _check_pod_triggers,
+)
+from runtime.dispatch_main import dispatch  # noqa: E402,F401
 
-    `approver_fn` (optional) lets the dispatch hire the managers/ICs it
-    decomposes onto when they don't exist yet (the full heads->managers->ICs
-    chain); without it, the dispatch only reaches roles already in the org.
-
-    **Pods A/B/C multi-trigger** (an add-on, not a replacement): after each
-    team's IC work, a pod forms when any trigger fires — A (disagreement
-    across the IC work outputs), B (a `cross_team`-marked objective), C (a
-    routing-rule task type). The formed pods are appended to `pods_out`
-    (when supplied) so the session can carry their decisions up to the
-    leader's Phase 5 synthesis; the decision is also written to
-    `pods/artifacts/` (+ the `history` decision journal when supplied) and
-    seeded into the members' memory as a cross-team `pod:<id>` entry (via
-    `MemoryBackend.seed_cross_team` — a no-op for a plain stub)."""
-    digest = mission_digest(mission)
-    head_ids = [h.id for h in org.department_heads()]
-    # Story 22: the Leader is invoked with the efficiency panel (per-role /
-    # per-department invoke time) so it can act on an inefficient role or
-    # department.
-    efficiency_panel = ""
-    if timing is not None:
-        efficiency_panel = _efficiency_panel_text(timing.snapshot())
-    out = backend.invoke(
-        leader, _leader_ctx(digest, head_ids, efficiency_panel=efficiency_panel),
-        reasoning=classify_complexity(4, leader, {}), phase=4)
-    # Story 5 (A1): a single head's leader-replacement proposal (with
-    # reasoning) triggers the per-head unanimous vote. The new-leader
-    # candidate is supplied by the caller (`new_leader`); without one, the
-    # proposal is logged but no vote runs (visible, not silent).
-    _leader_replacement = out.get("leader_replacement")
-    if (isinstance(_leader_replacement, dict)
-            and _leader_replacement.get("propose")):
-        if new_leader is not None:
-            run_leader_replacement_vote(
-                org, backend, new_leader, leader.id,
-                _leader_replacement.get("reasoning", ""), phase=4)
-        elif history is not None:
-            history._append(
-                "dispatch_skips.jsonl",
-                {"reason": "leader_replacement proposal but no new-leader "
-                           "candidate supplied — no vote run"},
-            )
-    # Story 6 (R7): the leader's resourcing output can request firing roles
-    # (each `fire` entry is [role_id, reason]). The fire goes through the HR
-    # approver (a veto / required-role rejection / missing approver is logged,
-    # never swallowed).
-    _resourcing = out.get("resourcing")
-    if isinstance(_resourcing, dict):
-        for _fire_entry in _resourcing.get("fire", []):
-            if isinstance(_fire_entry, (list, tuple)) and _fire_entry:
-                _fire_role(org, leader, _fire_entry[0],
-                           _fire_entry[1] if len(_fire_entry) >= 2 else "",
-                           approver_fn, history)
-    # Story 22: the Leader's efficiency action (fire / reassign / report an
-    # inefficient role or department, based on the efficiency panel it was
-    # invoked with).
-    _efficiency = out.get("efficiency")
-    if isinstance(_efficiency, dict):
-        _process_efficiency(org, leader, _efficiency, approver_fn, history)
-        # S22: the automation action (an IC writes a Python script, is fired,
-        # and the recurring task is then done by executing the script).
-        if _efficiency.get("action") == "automate":
-            run_automation(org, leader, _efficiency, backend, approver_fn,
-                           history)
-    dept_objectives = _decomposition_list(out, "department_objectives")
-    if not dept_objectives:
-        # The leader's Phase 4 decomposition came back empty — no work to
-        # dispatch. Log it so the no-op is visible, never silent.
-        if history is not None:
-            history._append(
-                "dispatch_skips.jsonl",
-                {"reason": "leader produced no department_objectives (empty "
-                           "Phase 4 decomposition)"},
-            )
-
-    # Pre-decomposition: every department head (operational AND required)
-    # authors its department POLICY + POLICY_SUMMARY BEFORE any head decomposes
-    # into managers, so managers/ICs have a clear instruction on how their work
-    # fulfils the org's goal.
-    head_policies = generate_head_policies(
-        backend, org, dept_objectives, digest,
-    )
-
-    results: List[Dict[str, Any]] = []
-    for obj in dept_objectives:
-        head = org.get(obj.get("head_id", ""))
-        if head is None:
-            # A missing head (the leader decomposed onto a department that was
-            # never created in Phase 3) — log it so the skip is visible, never
-            # silent.
-            if history is not None:
-                history._append(
-                    "dispatch_skips.jsonl",
-                    {"head_id": obj.get("head_id", ""),
-                     "objective": obj.get("objective", ""),
-                     "reason": "head not in the org (never created in Phase 3)"},
-                )
-            continue
-        head_out = backend.invoke(head, _head_ctx(head, obj.get("objective", ""), digest),
-                          reasoning=classify_complexity(4, head, {}),
-                          phase=4)
-        team_objectives = _decomposition_list(head_out, "team_objectives")
-        # Solo (P4, head): record the head's decomposition (out-of-pod work)
-        # so the dashboard can watch any role's solo work, not just the
-        # leader's (Story 21).
-        if solo is not None:
-            solo.record(
-                "p4", "Phase 4: head decomposition", 0, "decompose",
-                {"summary": f"decomposed the department objective into "
-                            f"{len(team_objectives)} team objective(s)",
-                 "team_objectives": team_objectives},
-                role=head,
-            )
-
-        team_reports: List[Dict[str, Any]] = []
-        for t_obj in team_objectives:
-            manager = org.get(t_obj.get("manager_id", ""))
-            if manager is None and t_obj.get("manager_id"):
-                # `team` becomes the team work dir (departments/<dept>/<team>/).
-                # Fall back to the manager_id so it is NEVER empty — an empty
-                # team leaves the ICs with no concrete work root (the exact
-                # bug that got every self-edit refused as out_of_scope).
-                manager = _ensure_role(
-                    org, head, t_obj.get("manager_id"), "manager",
-                    head.department,
-                    t_obj.get("team") or t_obj.get("manager_id", ""),
-                    approver_fn,
-                    direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
-                )
-            if manager is not None:
-                mgr_out = backend.invoke(manager, _manager_ctx(manager, t_obj.get("objective", ""),
-                          policy=head_policies.get(head.id, {}).get("policy", "")),
-                         reasoning=classify_complexity(4, manager, {}),
-                         phase=4)
-                ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
-                # Solo (P4, manager): record the manager's decomposition
-                # (out-of-pod work) so the dashboard can watch any role's solo
-                # work, not just the leader's (Story 21).
-                if solo is not None:
-                    solo.record(
-                        "p4", "Phase 4: manager decomposition", 0, "decompose",
-                        {"summary": f"decomposed the team objective into "
-                                    f"{len(ic_tasks)} IC task(s)",
-                         "ic_tasks": ic_tasks},
-                        role=manager,
-                    )
-                ic_reports: List[Dict[str, Any]] = []
-                ic_outputs: List[Dict[str, Any]] = []  # full IC outputs (trigger A)
-                ic_ids: List[str] = []
-                for task in ic_tasks:
-                    ic = org.get(task.get("ic_id", ""))
-                    if ic is None and task.get("ic_id"):
-                        ic = _ensure_role(
-                            org, manager, task.get("ic_id"), "ic",
-                            manager.department, manager.team, approver_fn,
-                            direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
-                        )
-                    if ic is None:
-                        continue
-                    ic_out, ic_err = _invoke_ic(
-                        backend, ic, _ic_ctx(ic, task.get("task", ""),
-                                              policy_summary=head_policies.get(
-                                                  head.id, {}).get(
-                                                  "policy_summary", "")),
-                        reasoning=classify_complexity(4, ic, {}),
-                        timeout=ic_timeout_seconds,
-                        phase=4,
-                    )
-                    if ic_err is not None:
-                        # Error containment: the corrective retry also
-                        # failed. Record the IC's failure visibly in the
-                        # upward report and continue with the other ICs (one
-                        # hiccup must not kill the run). It joins no pod (it
-                        # produced no output).
-                        ic_reports.append(
-                            {"from": ic.id,
-                             "summary": f"FAILED: {ic_err}",
-                             "pointer": ""}
-                        )
-                        continue
-                    ic_outputs.append(ic_out)
-                    ic_ids.append(ic.id)
-                    # Solo (P4, IC): record the IC's work (out-of-pod work) so
-                    # the dashboard can watch any role's solo work, not just
-                    # the leader's (Story 21).
-                    if solo is not None:
-                        solo.record(
-                            "p4", "Phase 4: IC work", 0, "work",
-                            {"summary": ic_out.get("summary", ""),
-                             "work_path": ic_out.get("work_path", "")},
-                            role=ic,
-                        )
-                    pointer = ic_out.get("work_path", _work_path(ic, task))
-                    ic_reports.append(
-                        {"from": ic.id, "summary": ic_out.get("summary", ""),
-                         "pointer": pointer}
-                    )
-                    # Self-edit: the IC may propose code edits (repaired,
-                    # gated by the permission layer, one corrective retry on
-                    # refusal).
-                    _apply_ic_self_edits(ic, ic_out, history, backend, phase=4)
-                # Pods A/B/C (an add-on): disagreement / cross-team / routing.
-                _check_pod_triggers(
-                    backend, org, manager, ic_ids, t_obj, ic_outputs, ic_tasks,
-                    routing_rules, pods_out, history, artifacts_dir,
-                    transcripts_dir,
-                    starter_in_members=True,
-                    config=config,
-                )
-                team_reports.append(_upward_report(manager, ic_reports))
-            else:
-                # The head directs ICs directly (a department without managers).
-                ic = org.get(t_obj.get("ic_id", ""))
-                if ic is None and t_obj.get("ic_id"):
-                    # Fall back to the ic_id so the team (work dir) is never
-                    # empty (see the manager branch above).
-                    ic = _ensure_role(
-                        org, head, t_obj.get("ic_id"), "ic",
-                        head.department,
-                        t_obj.get("team") or t_obj.get("ic_id", ""),
-                        approver_fn,
-                        direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
-                    )
-                if ic is None:
-                    continue
-                ic_out, ic_err = _invoke_ic(
-                    backend, ic, _ic_ctx(ic, t_obj.get("objective", ""),
-                                         policy_summary=head_policies.get(
-                                             head.id, {}).get(
-                                             "policy_summary", "")),
-                    reasoning=classify_complexity(4, ic, {}),
-                    timeout=ic_timeout_seconds,
-                    phase=4,
-                )
-                if ic_err is not None:
-                    # Error containment: the corrective retry also failed.
-                    # Record the IC's failure visibly in the upward report
-                    # and continue (one hiccup must not kill the run). It
-                    # joins no pod (it produced no output).
-                    team_reports.append(
-                        _upward_report(
-                            ic,
-                            [{"from": ic.id, "summary": f"FAILED: {ic_err}",
-                              "pointer": ""}],
-                        )
-                    )
-                    continue
-                # Solo (P4, IC): record the IC's work (out-of-pod work) so the
-                # dashboard can watch any role's solo work, not just the
-                # leader's (Story 21).
-                if solo is not None:
-                    solo.record(
-                        "p4", "Phase 4: IC work", 0, "work",
-                        {"summary": ic_out.get("summary", ""),
-                         "work_path": ic_out.get("work_path", "")},
-                        role=ic,
-                    )
-                # Self-edit: the IC may propose code edits (repaired, gated by
-                # the permission layer, one corrective retry on refusal).
-                _apply_ic_self_edits(ic, ic_out, history, backend, phase=4)
-                # Pods A/B/C (an add-on): the head is the starter; the ICs are
-                # the members (an IC podding with a department head would be a
-                # 2-tier spread — a membership failure skips the pod).
-                _check_pod_triggers(
-                    backend, org, head, [ic.id], t_obj, [ic_out], [],
-                    routing_rules, pods_out, history, artifacts_dir,
-                    transcripts_dir,
-                    starter_in_members=False,
-                    config=config,
-                )
-                team_reports.append(
-                    _upward_report(
-                        ic,
-                        [{"from": ic.id, "summary": ic_out.get("summary", ""),
-                          "pointer": ic_out.get("work_path", _work_path(ic, t_obj))}],
-                    )
-                )
-        results.append({"head": head.id, "report": _upward_report(head, team_reports)})
-    return results
+__all__ = [
+    # core (kept here)
+    "mission_digest",
+    "_leader_ctx",
+    "_head_ctx",
+    "_manager_ctx",
+    "_ic_ctx",
+    "_policy_ctx",
+    "_read_policy",
+    "_write_policy",
+    "_decomposition_list",
+    "generate_head_policies",
+    # core (kept in dispatch_role_work; re-exported here)
+    "_work_path",
+    "_upward_report",
+    # facade re-exports (moved to focused modules)
+    "dispatch",
+    "_ensure_role",
+    "_fire_role",
+    "_invoke_ic",
+    "_self_edit_log",
+    "_repair_edit_paths",
+    "_ic_pre_read",
+    "_run_self_edits",
+    "_retry_refused_edits",
+    "_apply_ic_self_edits",
+    "_efficiency_panel_text",
+    "_reassign_role",
+    "_process_efficiency",
+    "_automation_slug",
+    "run_automation",
+    "_task_types",
+    "_pod_topic",
+    "_check_pod_triggers",
+]

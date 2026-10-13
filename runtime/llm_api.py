@@ -15,21 +15,43 @@ support (e.g. KoboldCpp's ``--jinja --jinjatools`` flags, as started by
 ``run_org.bat``). ``LLM_STRUCTURED=json`` keeps the legacy
 ``response_format: json_object`` request for servers without tool support.
 
-``httpx`` is imported lazily inside ``invoke`` so the stub path (and the
-offline test suite) needs no network dependency installed.
+``httpx`` is imported lazily inside the invoke loop so the stub path (and
+the offline test suite) needs no network dependency installed.
+
+**Decomposition (Phase 4):** this file keeps the backend class (``__init__``,
+the payload builders, the reporting hooks, the nested-type warnings) + the
+module-level helpers (``_role_label``, ``validate_and_quarantine``,
+``OpenAIOutputError``, ``make_backend``). The reply parsing + truncation
+detection moved to ``runtime/llm_api_parse.py`` (module functions;
+``OpenAIBackend`` keeps staticmethod delegations, so
+``OpenAIBackend._parse_tool_args(...)`` etc. keep working); the streaming +
+bounded retry loop moved to ``runtime/llm_api_stream.py``
+(``run_invoke_loop``; ``OpenAIBackend.invoke`` delegates to it). This file
+re-exports the full public API (backward-compatible facade).
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from roles.base import validate_envelope
 from runtime.llm import LLMBackend, Reasoning, StubBackend
+from runtime.llm_api_parse import (
+    TOOL_NAME,
+    TOOL_DESCRIPTION,
+    plausible_json_prefix,
+    unbalanced_json,
+    is_truncation,
+    truncation_note,
+    parse_json_documents,
+    parse_tool_args,
+    parse_reply,
+    recover_tool_call,
+)
 
 
 def _role_label(role) -> str:
@@ -47,14 +69,6 @@ def _role_label(role) -> str:
         parts.append(role.department)
     return " · ".join(parts)
 
-# The single tool the model must call to submit its structured output.
-TOOL_NAME = "submit_output"
-TOOL_DESCRIPTION = (
-    "Submit your structured output for this task. Call this tool exactly "
-    "once; its arguments are your complete output and must match your "
-    "role's output schema. Do not emit placeholder, dummy, or partial "
-    "calls: your first call must be your complete final answer."
-)
 
 # The known nested keys that must be JSON objects (dicts) — the Phase-2/3/4
 # structured outputs the pipeline reads. A wrong type (e.g. a free-form string)
@@ -106,17 +120,6 @@ def validate_and_quarantine(role, out: Any) -> Tuple[Dict[str, Any], List[str]]:
                           f"{role_id}: {reason}")
             out["tool_call"] = None  # drop it — never propagate the bad call
     return out, events
-
-# json.JSONDecodeError.msg prefixes that mean the input ENDED mid-value (a
-# truncation) rather than a complete-but-broken shape. A cut-off JSON fails
-# with one of these; a balanced (even if malformed) shape fails with a
-# different message or parses.
-_TRUNCATION_ERR_PREFIXES = (
-    "Unterminated string",
-    "Expecting value",
-    "Expecting ',' delimiter",
-    "Expecting property name enclosed in double quotes",
-)
 
 
 class OpenAIOutputError(RuntimeError):
@@ -240,7 +243,7 @@ class OpenAIBackend(LLMBackend):
             return (" Keep your reasoning brief and focused; do not over-think "
                     "routine details."), ""
         # LOW: answer directly, no extended chain-of-thought.
-        return (" Answer directly and concisely. Do NOT produce an extended "
+        return (" Answer directly and concisily. Do NOT produce an extended "
                 "chain-of-thought or reasoning preamble — go straight to the "
                 "structured output."), "\n/no_think"
 
@@ -281,285 +284,48 @@ class OpenAIBackend(LLMBackend):
         }
 
     # --- reply parsing ------------------------------------------------------
+    # The parsing + truncation detection moved to runtime/llm_api_parse.py
+    # (Phase 4); these staticmethods delegate so
+    # ``OpenAIBackend._parse_tool_args(...)`` etc. keep working unchanged.
 
     @staticmethod
     def _plausible_json_prefix(raw: str) -> bool:
-        """True if raw begins like the model's ``submit_output`` JSON (an
-        object whose first member is a string key: ``{"``). A *truncation* is
-        a valid prefix of the model's well-formed output, so it always starts
-        this way; a *malformed* shape the model wrote as garbage (``{not
-        json``) does not. This is the discriminator that keeps the truncation
-        heuristic from retrying genuine garbage."""
-        return raw.lstrip().startswith('{"')
+        return plausible_json_prefix(raw)
 
     @staticmethod
     def _unbalanced_json(raw: str) -> bool:
-        """True if raw has unclosed structure (string-aware): more open than
-        close braces, or an unterminated string at the end. A complete shape
-        (even a malformed one, e.g. ``{"a": 1,}``) is balanced; a cut-off one
-        is not. The scan is string-aware, so a summary full of ``{``/``}``
-        cannot confuse it."""
-        depth = 0
-        in_str = False
-        esc = False
-        for ch in raw:
-            if in_str:
-                if esc:
-                    esc = False
-                elif ch == "\\":
-                    esc = True
-                elif ch == '"':
-                    in_str = False
-            else:
-                if ch == '"':
-                    in_str = True
-                elif ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-        return depth > 0 or in_str
+        return unbalanced_json(raw)
 
-    @classmethod
-    def _is_truncation(cls, raw: str, finish_reason: str,
+    @staticmethod
+    def _is_truncation(raw: str, finish_reason: str,
                        err: Optional[json.JSONDecodeError] = None) -> bool:
-        """True when a parse failure is a *truncation* (the stream ended
-        mid-output) rather than a malformed shape the model chose.
-
-        - ``finish_reason == "length"`` is authoritative: the server cut the
-          generation at the max_tokens budget, so anything that failed to
-          parse is cut off.
-        - Otherwise a heuristic: a truncation-shaped JSONDecodeError (the input
-          ended mid-value) on a plausible JSON prefix (it began like the
-          model's ``submit_output`` JSON) that is unbalanced (unclosed braces /
-          an unterminated string). A complete-but-broken shape (balanced) or a
-          garbage shape (not a plausible prefix) is NOT a truncation and is not
-          retried."""
-        if finish_reason == "length":
-            return True
-        if err is None:
-            return False
-        if not any(err.msg.startswith(p)
-                   for p in _TRUNCATION_ERR_PREFIXES):
-            return False
-        if not cls._plausible_json_prefix(raw):
-            return False  # garbage, not a cut-off of valid JSON
-        return cls._unbalanced_json(raw)
+        return is_truncation(raw, finish_reason, err)
 
     @staticmethod
     def _truncation_note(raw: str, finish_reason: str) -> str:
-        """An empty string, or a `` (TRUNCATED: ...)`` diagnosis appended to
-        the error message: WHY the output is truncated (``finish_reason=length``
-        = the generation budget was exhausted; otherwise a truncation-shaped
-        parse failure on unbalanced JSON) and how much accumulated (the
-        model's chain-of-thought likely consumed most of the budget)."""
-        if finish_reason == "length":
-            why = "finish_reason=length — the generation budget was exhausted"
-        else:
-            why = "truncation-shaped parse failure on unbalanced JSON"
-        return (f" (TRUNCATED: {why}; {len(raw)} chars accumulated — the "
-                f"model's chain-of-thought likely consumed most of the "
-                f"generation budget)")
+        return truncation_note(raw, finish_reason)
 
     @staticmethod
     def _parse_json_documents(raw: str) -> List[Any]:
-        """Parse a string that may hold MULTIPLE concatenated top-level JSON
-        documents (a model quirk: two submit_output calls whose argument
-        strings get merged — by the server, or by an index-blind accumulation
-        — into one "Extra data" string). Returns the list of parsed values.
-        Raises the JSONDecodeError of the first document that fails to parse
-        (a mid-value failure on a trailing document is a truncation signal —
-        the caller classifies it)."""
-        dec = json.JSONDecoder()
-        values: List[Any] = []
-        i = 0
-        n = len(raw)
-        while i < n:
-            while i < n and raw[i] in " \t\r\n":
-                i += 1
-            if i >= n:
-                break
-            value, i = dec.raw_decode(raw, i)
-            values.append(value)
-        return values
+        return parse_json_documents(raw)
 
-    @classmethod
-    def _parse_tool_args(cls, raw: str, finish_reason: str) -> Tuple[
-            Optional[Any], Optional[OpenAIOutputError]]:
-        """Parse a submit_output tool call's arguments string. Accepts a
-        single JSON document OR multiple concatenated documents (the
-        "Extra data" case — a model quirk: a placeholder call + the real one
-        merged into one string); for multiple, the LAST top-level value wins
-        (the model's final answer comes last). Returns ``(value, None)`` on
-        success or ``(None, error)`` on failure — the error keeps the
-        truncation flag so the bounded retry loop in ``invoke`` can act on
-        it."""
-        try:
-            return json.loads(raw), None
-        except json.JSONDecodeError:
-            pass  # "Extra data" (or a single broken document) — try below
-        try:
-            values = cls._parse_json_documents(raw)
-        except json.JSONDecodeError as e:
-            truncated = cls._is_truncation(raw, finish_reason, e)
-            note = (cls._truncation_note(raw, finish_reason)
-                    if truncated else "")
-            err = OpenAIOutputError(
-                f"{TOOL_NAME} arguments are not valid JSON"
-                f"{note}: {raw[:300]!r} ({e})",
-                truncated=truncated,
-            )
-            err.__cause__ = e
-            return None, err
-        if not values:
-            return None, OpenAIOutputError(
-                f"{TOOL_NAME} arguments are empty: {raw[:300]!r}")
-        return values[-1], None
+    @staticmethod
+    def _parse_tool_args(raw: str, finish_reason: str) -> Tuple[
+            Optional[Any], Optional[Any]]:
+        return parse_tool_args(raw, finish_reason)
 
     @staticmethod
     def _parse(data: Dict[str, Any], finish_reason: str = "") -> Tuple[Dict[str, Any], str]:
-        """Extract the shared output envelope from a chat completion reply.
-
-        Returns ``(envelope, outcome)`` where outcome is ``"tool_call"`` or
-        ``"content_fallback"``. Preferred: the ``submit_output`` tool call's
-        JSON arguments. A model (a known Qwen3 quirk, via KoboldCpp jinja
-        tools) can call the forced tool TWICE in one reply — a placeholder /
-        dummy call followed by the real one — so the **last** parseable
-        ``submit_output`` envelope wins (the model's final answer comes
-        last); if none parses, the first parse failure is raised (visible,
-        never silent) — flagged ``truncated=True`` when the failure is a
-        truncation (the stream ended mid-JSON: ``finish_reason`` is
-        ``"length"`` or the parse is truncation-shaped on a plausible,
-        unbalanced JSON prefix), which the bounded retry loop in ``invoke``
-        treats as transient. Fallback: plain JSON ``content`` (a server that
-        ignored the tool), or a call the model wrote as **text** inside
-        ``content`` (a fenced JSON block or an embedded JSON object, via
-        ``_recover_tool_call``).
-        """
-        message = data["choices"][0]["message"]
-        last_envelope: Optional[Dict[str, Any]] = None
-        first_err: Optional[OpenAIOutputError] = None
-        for tc in message.get("tool_calls") or []:
-            fn = (tc or {}).get("function") or {}
-            if fn.get("name", TOOL_NAME) != TOOL_NAME:
-                continue
-            raw = fn.get("arguments", "")
-            if isinstance(raw, dict):
-                last_envelope = raw
-                continue
-            if not (isinstance(raw, str) and raw.strip()):
-                continue
-            out, err = OpenAIBackend._parse_tool_args(raw, finish_reason)
-            if err is not None:
-                if first_err is None:
-                    first_err = err
-                continue  # a LATER tool call may still parse
-            if not isinstance(out, dict):
-                if first_err is None:
-                    first_err = OpenAIOutputError(
-                        f"{TOOL_NAME} arguments are not a JSON object: "
-                        f"{raw[:300]!r}")
-                continue
-            last_envelope = out
-        if last_envelope is not None:
-            return last_envelope, "tool_call"
-        content = message.get("content") or ""
-        content_err: Optional[json.JSONDecodeError] = None
-        if content.strip():
-            try:
-                out = json.loads(content)
-                if isinstance(out, dict):
-                    return out, "content_fallback"
-            except json.JSONDecodeError as e:
-                content_err = e  # a truncation-shaped failure on the content
-            recovered = OpenAIBackend._recover_tool_call(content)
-            if recovered is not None:
-                return recovered, "content_fallback"
-        if first_err is not None:
-            # A tool call WAS present but none of them parsed — raise the
-            # first parse failure (it carries the truncation flag for the
-            # retry loop), not the "no tool call" error.
-            raise first_err
-        truncated = OpenAIBackend._is_truncation(content, finish_reason,
-                                                 content_err)
-        note = (OpenAIBackend._truncation_note(content, finish_reason)
-                if truncated else "")
-        raise OpenAIOutputError(
-            f"reply has no {TOOL_NAME} tool call and no JSON object content"
-            f"{note}: {content[:300]!r}"
-        , truncated=truncated)
+        return parse_reply(data, finish_reason)
 
     @staticmethod
     def _recover_tool_call(content: str) -> Optional[Dict[str, Any]]:
-        """Recover a ``submit_output`` call the model wrote as **text** inside
-        ``content``.
+        return recover_tool_call(content)
 
-        A server without tool-call support (or a model that ignored the forced
-        tool) can emit the call in the reply body as text. Handle the common
-        text shapes:
-
-        - a fenced JSON block containing the call's arguments (the whole
-          block, or the call's ``arguments`` member if present);
-        - a bare JSON object embedded in the text (the first brace-delimited
-          span that parses as an object).
-
-        Returns the parsed envelope dict, or ``None`` if no shape recovers.
-        """
-        candidates: list = []
-        # Fenced blocks: ```json ... ``` (or any ``` ... ``` fence). A model
-        # quirk can fence TWO blocks (a placeholder + the real one) — try
-        # them LAST-FIRST (the model's final answer comes last).
-        fenced: list = []
-        for m in re.finditer(r"```[a-zA-Z0-9_-]*[ \t]*\n(.*?)```",
-                             content, re.DOTALL):
-            block = m.group(1).strip()
-            if block:
-                fenced.append(block)
-        candidates.extend(reversed(fenced))
-        # All top-level brace-delimited spans in the raw text (covers a bare
-        # JSON object surrounded by prose; the scanner is string-aware so
-        # braces inside string values do not confuse it). A model quirk can
-        # write TWO objects (a placeholder + the real one) — try them
-        # LAST-FIRST (the model's final answer comes last).
-        spans: list = []
-        depth = 0
-        in_str = False
-        esc = False
-        start = -1
-        for i, ch in enumerate(content):
-            if in_str:
-                if esc:
-                    esc = False
-                elif ch == "\\":
-                    esc = True
-                elif ch == '"':
-                    in_str = False
-            elif ch == '"':
-                in_str = True
-            elif ch == "{":
-                if depth == 0:
-                    start = i
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0 and start != -1:
-                    spans.append(content[start:i + 1])
-                    start = -1
-        candidates.extend(reversed(spans))
-        for cand in candidates:
-            try:
-                out = json.loads(cand)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(out, dict):
-                continue
-            # A tool-call wrapper: {"name": ..., "arguments": {...}}.
-            if isinstance(out.get("arguments"), dict):
-                return out["arguments"]
-            return out
-        return None
+    # --- reporting ----------------------------------------------------------
 
     def _report(self, role, outcome: str, t0: float, error: str = "",
-             warning: str = "") -> None:
+              warning: str = "") -> None:
         if self.on_call is None:
             return
         try:
@@ -633,230 +399,27 @@ class OpenAIBackend(LLMBackend):
                 problems.append(f"{key}={type(out[key]).__name__}")
         return ("nested-type: " + ", ".join(problems)) if problems else ""
 
+    # --- the invoke ---------------------------------------------------------
+
     def invoke(self, role, context: str,
                reasoning: Reasoning = Reasoning.LOW,
                timeout: Optional[float] = None,
                phase: Optional[int] = None) -> Dict[str, Any]:
-        import httpx  # lazy: only the api path needs it
-        # `reasoning` steers the model's thinking level (HIGH = full thinking,
-        # LOW = answer directly with no extended chain-of-thought): the
-        # complexity router routes routine work to LOW, capping the thinking
-        # tokens that would otherwise consume the generation budget and
-        # truncate the submit_output JSON. `timeout` (a per-invoke wall-clock
-        # budget) is accepted for interface parity with the wrapper backends.
-        # It is NOT enforced here: the progress-based idle timeout (the `read`
-        # timeout) is the primary guard within the invoke, and a `TimeoutBackend`
-        # wrapper (when present) enforces the overall per-invoke budget.
-        t0 = time.time()
-        self._current_phase = phase  # carried to the tool_calls row (A0)
-        payload = self._payload(role, context, reasoning)
-        payload["stream"] = True
-        # Progress-based idle timeout: the `read` timeout is the max time to
-        # wait for the NEXT chunk. A thinking model keeps emitting chunks
-        # (progress), so it never trips this even over a long think; a hung
-        # model emits no chunks, so it trips after idle_timeout seconds. This
-        # replaces the old flat wall-clock (which false-timed-out long-but-
-        # active thinks). We accumulate three buffers from the stream:
-        #   - reasoning_content: the model's chain-of-thought (streamed first);
-        #   - content:           the plain reply (the content-fallback path);
-        #   - tool_calls args:   the forced submit_output call (the tool path).
-        import uuid
-        stream_id = uuid.uuid4().hex[:8]
-        role_id = getattr(role, "id", "")
-        # Bounded retries on a timeout AND on a truncated output: a
-        # Read/Connect/Pool timeout means the request (or its stream) stalled;
-        # a truncated output (finish_reason="length" / truncation-shaped parse
-        # on a plausible, unbalanced JSON prefix) means the generation budget
-        # was exhausted mid-JSON. In both cases the model's partial generation
-        # is lost (a stateless HTTP request), so the only recovery is to retry
-        # the whole request from the start. Up to `max_retries` retries AFTER
-        # the first attempt (default 3 -> up to 4 total attempts), with a short
-        # backoff; the two share the attempt budget. A malformed-shape parse
-        # error or a non-timeout transport error is NOT retried.
-        max_attempts = 1 + self.max_retries
-        for attempt in range(1, max_attempts + 1):
-            # D4: reset the attempt clock each retry so the reported latency is
-            # PER-ATTEMPT (not cumulative across retries + backoff sleeps, which
-            # was misleading — a 3rd-attempt success looked like it took the sum
-            # of all three attempts plus the backoffs).
-            t0 = time.time()
-            reasoning_buf = ""
-            content_buf = ""
-            # Per tool-call index: a model quirk (a known Qwen3 pattern, via
-            # KoboldCpp jinja tools) is to call the forced tool TWICE in one
-            # reply — a placeholder/dummy call followed by the real one. The
-            # OpenAI streaming format identifies each tool call by `index`;
-            # accumulate per-index so the calls stay DISTINCT (an index-blind
-            # concatenation merged them into one "Extra data" string that
-            # crashed the run).
-            tool_args_by_index: Dict[int, str] = {}
-            tool_name_by_index: Dict[int, str] = {}
-            finish_reason = ""
-            try:
-                with httpx.stream(
-                    "POST",
-                    f"{self.base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    json=payload,
-                    # Story 9 (B6): the per-invoke `timeout` (threaded down from
-                    # the TimeoutBackend) caps the httpx `read` timeout so the
-                    # underlying HTTP call is bounded to the TimeoutBackend's
-                    # bound (no long-lived zombie thread). If no per-invoke
-                    # timeout is provided, keep the existing idle_timeout.
-                    timeout=httpx.Timeout(
-                        connect=10.0,
-                        read=(self.idle_timeout if timeout is None
-                              else min(self.idle_timeout, timeout)),
-                        write=10.0, pool=10.0,
-                    ),
-                ) as resp:
-                    resp.raise_for_status()
-                    for line in resp.iter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            obj = json.loads(data)
-                        except json.JSONDecodeError:
-                            continue  # skip a malformed chunk
-                        choices = obj.get("choices") or []
-                        if not choices:
-                            continue
-                        choice = choices[0]
-                        fr = choice.get("finish_reason")
-                        if fr:
-                            finish_reason = fr  # the final chunk reports it
-                        delta = choice.get("delta") or {}
-                        rc = delta.get("reasoning_content") or ""
-                        if rc:
-                            reasoning_buf += rc
-                            self._emit_stream(stream_id, role, "thinking", rc, reasoning)
-                        cc = delta.get("content") or ""
-                        if cc:
-                            content_buf += cc
-                            self._emit_stream(stream_id, role, "content", cc, reasoning)
-                        for tc in delta.get("tool_calls") or []:
-                            # The tool call's `index` (the OpenAI streaming
-                            # format): a second submit_output call in the same
-                            # reply streams as index 1, not a continuation of
-                            # index 0.
-                            try:
-                                idx = int(tc.get("index", 0))
-                            except (TypeError, ValueError):
-                                idx = 0
-                            fn = (tc or {}).get("function") or {}
-                            if fn.get("name"):
-                                tool_name_by_index[idx] = fn["name"]
-                            ta = fn.get("arguments") or ""
-                            if ta:
-                                tool_args_by_index[idx] = (
-                                    tool_args_by_index.get(idx, "") + ta)
-                                self._emit_stream(stream_id, role,
-                                                  "tool_call", ta, reasoning)
-                # Reconstruct the non-streaming message shape and reuse _parse
-                # (tool-call extraction, content fallback, text-shape
-                # recovery). One entry per streamed tool-call index (in index
-                # order) — multiple submit_output calls stay separate for
-                # _parse to select from (the last parseable one wins).
-                message = {"role": "assistant", "content": content_buf}
-                tool_calls = [
-                    {"function": {"name": tool_name_by_index.get(idx,
-                                                                  TOOL_NAME),
-                                  "arguments": tool_args_by_index[idx]}}
-                    for idx in sorted(tool_args_by_index)
-                ]
-                if tool_calls:
-                    message["tool_calls"] = tool_calls
-                out, outcome = self._parse(
-                    {"choices": [{"message": message}]}, finish_reason)
-                # Story 4 (A8/A9/R10): envelope-validate the output and
-                # quarantine a malformed tool_call (a visible note + a safe
-                # fallback / a dropped call — never a crash).
-                out, events = validate_and_quarantine(role, out)
-                for ev in events:
-                    print(ev, file=sys.stderr)
-                if any("invalid envelope" in ev for ev in events):
-                    # An invalid envelope: record it as an error (not the
-                    # standard success row) and return the safe fallback.
-                    self._report(role, "error", t0, error="; ".join(events))
-                    return out
-                if any("quarantined malformed tool_call" in ev for ev in events):
-                    # A quarantined tool_call: record it in the audit trail
-                    # (mirrors the existing `log_tool_call` wiring via on_call).
-                    self._report(role, "quarantined", t0,
-                                 error="; ".join(events))
-                # Observability: log (not reject) a wrong-typed nested key
-                # (e.g. a free-form string instead of a JSON object) so future
-                # free-forms are visible in tool_calls.jsonl. D4: it goes in the
-                # `warning` field (not `error`) — it's non-fatal. A model quirk
-                # that called the forced tool TWICE (a placeholder + the real
-                # one) is also logged as a `warning` (the call succeeded — the
-                # parser used the last parseable call).
-                n_submit = sum(
-                    1 for tc in message.get("tool_calls") or []
-                    if ((tc or {}).get("function") or {}).get(
-                        "name", TOOL_NAME) == TOOL_NAME)
-                multi_note = (f"multiple {TOOL_NAME} calls: {n_submit} — "
-                              f"used the last" if n_submit > 1 else "")
-                warn = " ".join(
-                    w for w in (multi_note, self._nested_type_warnings(out))
-                    if w)
-                self._report(role, outcome, t0, warning=warn)
-                return out
-            except httpx.TimeoutException as e:
-                # A timeout (an idle/connect/read timeout): transient. Retry the
-                # whole request (bounded, with a short backoff), then re-raise.
-                if attempt < max_attempts:
-                    backoff = min(30.0, 5.0 * attempt)
-                    self._report(role, "retry", t0,
-                                 f"attempt {attempt}/{max_attempts} timed out "
-                                 f"({type(e).__name__}); retrying in "
-                                 f"{backoff:.0f}s")
-                    time.sleep(backoff)
-                    continue
-                self._report(role, "error", t0,
-                             f"LLM request timed out after {max_attempts} "
-                             f"attempts (no response chunk for "
-                             f"{self.idle_timeout}s on the last — the model "
-                             f"may be hung) ({type(e).__name__}): {e}")
-                raise
-            except OpenAIOutputError as e:
-                # A parse failure. If it is a *truncation* (the stream ended
-                # mid-JSON: the generation budget was exhausted, or the parse
-                # is truncation-shaped on a plausible, unbalanced JSON
-                # prefix), it is transient — retry the whole request (bounded,
-                # with a short backoff), sharing the attempt budget with
-                # timeouts. A malformed shape the model chose is NOT retried
-                # (the session's invoke_checked handles malformed output at a
-                # higher level).
-                if e.truncated and attempt < max_attempts:
-                    backoff = min(30.0, 5.0 * attempt)
-                    self._report(role, "retry", t0,
-                                 f"attempt {attempt}/{max_attempts} returned "
-                                 f"truncated output (the generation budget "
-                                 f"was exhausted mid-JSON); retrying in "
-                                 f"{backoff:.0f}s")
-                    time.sleep(backoff)
-                    continue
-                self._report(role, "error", t0, str(e))
-                raise
-            except httpx.HTTPError as e:
-                # Another transport error (a connection reset, an HTTP status
-                # error, ...): not a timeout, so not retried (a visible
-                # failure state, never silent).
-                self._report(role, "error", t0, str(e))
-                raise
-        # Unreachable: the loop either returns or raises on the final attempt.
-        raise RuntimeError("unreachable: retry loop exited without a result")
+        """Run one live invoke: build the payload, stream the completion with
+        the progress-based idle timeout, retry on a timeout or a truncated
+        output (bounded, shared attempt budget), and parse the reply into the
+        shared output envelope (quarantining a malformed tool_call). Delegates
+        to ``runtime/llm_api_stream.run_invoke_loop`` (the streaming + bounded
+        retry loop)."""
+        import runtime.llm_api_stream as _stream  # lazy (avoids a cycle)
+        return _stream.run_invoke_loop(
+            self, role, context, reasoning, timeout, phase)
 
 
 def make_backend() -> LLMBackend:
-    """Build the backend selected by the environment (``.env``).
-
-    ``LLM_BACKEND=stub`` (default) -> offline ``StubBackend``.
-    ``LLM_BACKEND=api`` -> ``OpenAIBackend`` from ``LLM_MODEL`` /
+    """Select the backend from the environment (``.env``):
+    ``LLM_BACKEND=stub`` (default) -> the offline ``StubBackend``;
+    ``LLM_BACKEND=api`` -> ``OpenAIBackend`` built from ``LLM_MODEL`` /
     ``LLM_BASE_URL`` / ``LLM_API_KEY`` (structured-output mode from
     ``LLM_STRUCTURED``: ``tools`` (default) or ``json``; generation budget
     from ``LLM_MAX_TOKENS``: default ``8192``; idle timeout from
@@ -875,3 +438,36 @@ def make_backend() -> LLMBackend:
             max_retries=os.getenv("LLM_MAX_RETRIES", "3"),
         )
     return StubBackend()
+
+
+def __getattr__(name: str) -> Any:
+    """Facade re-export (PEP 562): ``run_invoke_loop`` lives in
+    ``runtime/llm_api_stream.py`` (Phase 4); resolve it lazily so
+    ``from runtime.llm_api import run_invoke_loop`` keeps working without a
+    module-level import cycle."""
+    if name == "run_invoke_loop":
+        import runtime.llm_api_stream as _stream
+        return _stream.run_invoke_loop
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = [
+    # core (kept here)
+    "_role_label",
+    "validate_and_quarantine",
+    "OpenAIOutputError",
+    "OpenAIBackend",
+    "make_backend",
+    # facade re-exports (moved to focused modules)
+    "TOOL_NAME",
+    "TOOL_DESCRIPTION",
+    "plausible_json_prefix",
+    "unbalanced_json",
+    "is_truncation",
+    "truncation_note",
+    "parse_json_documents",
+    "parse_tool_args",
+    "parse_reply",
+    "recover_tool_call",
+    "run_invoke_loop",
+]

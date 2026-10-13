@@ -1,4 +1,4 @@
-"""Phase 3 — Org bootstrap + resourcing.
+"""Phase 3 — Org bootstrap + resourcing (core registry).
 
 The Leader proposes department heads → **HR redundancy review** → registry
 creation → department directories + policy markdowns + team directories.
@@ -16,22 +16,23 @@ The hire/fire flow enforces (Organization_Outline.md §2.5):
 
 The HR-resilience initial pass (§2.5.1) is represented by the backup gate: if
 HR is non-functional, resourcing escalates to the user.
+
+**Decomposition (Phase 1):** this file keeps the core — constants, errors,
+the `OrgState` registry, role-definition resolution, the 3-IC cap, and
+directory creation. The approval matrix moved to `runtime/org_approvals.py`,
+the bootstrap flow to `runtime/org_bootstrap.py`, hire/fire to
+`runtime/org_resourcing.py`, and leader replacement to `runtime/org_leader.py`.
+This file re-exports the full public API (backward-compatible facade).
 """
 
 from __future__ import annotations
 
-import inspect
 import json
 import os
-import re
-import sys
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from roles.base import Role
-from roles.worker import worker_output_schema
-from runtime.mission import MissionResult
-from runtime.complexity import classify_complexity
 
 # Required departments (spun up at bootstrap; cannot be fired).
 REQUIRED_DEPARTMENTS = ("hr", "safety", "morality")
@@ -145,33 +146,6 @@ class OrgState:
         return org
 
 
-# --- Approval matrix -------------------------------------------------------
-
-def _is_hr(role: Role) -> bool:
-    return role.department == "hr"
-
-
-def required_approver(initiator: Role, target: Role):
-    """Return `(approver_type, ok, reason)` for a hire/fire.
-
-    - ICs cannot initiate.
-    - HR's own decisions require the Leader.
-    - Only the Leader can hire/fire a department head (HR-approved).
-    - A manager / department head resourcing a direct report requires HR.
-    """
-    if initiator is None:
-        return None, False, "unknown initiator (the role is not in the org)"
-    if initiator.architype == "ic":
-        return None, False, "ICs cannot initiate hiring/firing"
-    if _is_hr(initiator):
-        return "leader", True, "HR's own decisions require the Leader's approval"
-    if target.architype == "department_head":
-        if initiator.architype != "leader":
-            return None, False, "only the Leader can hire/fire a department head"
-        return "hr", True, "the Leader's department-head decisions require HR"
-    return "hr", True, "direct-report resourcing requires HR"
-
-
 # --- Role-definition resolution -------------------------------------------
 
 def resolve_role_definition(org: OrgState, role: Role) -> str:
@@ -230,483 +204,64 @@ def _create_team_dir(role: Role, departments_dir: str) -> None:
         os.makedirs(team_dir, exist_ok=True)
 
 
-# --- Bootstrap -------------------------------------------------------------
+# --- Backward-compatible facade --------------------------------------------
+# The resourcing API moved to focused modules (Phase 1); re-export the full
+# public API so `from runtime.org import hire, fire, bootstrap, ...` keeps
+# working unchanged.
 
-def _bootstrap_context(mission_result: MissionResult,
-                       retry_hint: str = "") -> str:
-    ctx = (
-        "PHASE 3: propose the initial department heads for the mission. "
-        "Produce org_recommendation with the department heads as a NON-EMPTY "
-        "list — use the key `department_heads` (items: {id, department, "
-        "sub_architype, required, mandate}) or, equivalently, the key "
-        "`departments` (items: {name, head, mandate}). You MUST include the "
-        "OPERATIONAL department heads that will actually do the mission's "
-        "work — derive them from the mission's purpose / scope / "
-        "org-recommendation section (the workstreams the mission names, e.g. "
-        "income/operations, data, ml/compute, finance/reporting) — in "
-        "ADDITION to the required governance departments (hr, safety, "
-        "morality, which must also be included). The list must NOT be empty "
-        "and must NOT contain only the required departments: without "
-        "operational heads, Phase 4 cannot dispatch any work."
-    )
-    # Story 11 (B15): on a retry, append the previous attempt's failure reason
-    # so the leader can adjust (instead of re-sending the same context).
-    if retry_hint:
-        ctx += (
-            "\n\nPREVIOUS ATTEMPT FAILED — adjust your proposal. The leader "
-            f"reply did not include an operational department head. "
-            f"Diagnostic: {retry_hint}"
-        )
-    return ctx
+from runtime.org_approvals import (  # noqa: E402,F401
+    _call_approver,
+    _is_hr,
+    required_approver,
+)
+from runtime.org_bootstrap import (  # noqa: E402,F401
+    _bootstrap_context,
+    _dept_slug,
+    _ensure_required,
+    _extract_department_heads,
+    _has_operational_head,
+    _normalize_head_spec,
+    bootstrap,
+)
+from runtime.org_resourcing import (  # noqa: E402,F401
+    _offload,
+    _subtree,
+    fire,
+    hire,
+)
+from runtime.org_leader import (  # noqa: E402,F401
+    replace_leader,
+    run_leader_replacement_vote,
+)
 
-
-def _has_operational_head(heads: List[Dict[str, Any]]) -> bool:
-    """True if the proposal includes at least one **operational** department
-    head (a head whose department is not one of the required governance
-    departments). Without an operational head, Phase 4 cannot dispatch any
-    work, so the bootstrap retries / fails rather than proceeding silently."""
-    for spec in heads or []:
-        if not isinstance(spec, dict):
-            continue
-        dept = str(spec.get("department", "")).strip().lower()
-        if dept and dept not in REQUIRED_DEPARTMENTS:
-            return True
-    return False
-
-
-def _dept_slug(name: str) -> str:
-    """A filesystem-safe slug for a department name (lowercase, underscores) —
-    the leader's free-text department names (e.g. 'Engineering / Data & ML')
-    must become valid directory names."""
-    slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-    return slug or "dept"
-
-
-def _normalize_head_spec(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Normalize a single department-head spec — in **any** of the shapes the
-    leader produces — to ``{id, department, sub_architype, required, mandate}``.
-    Accepts the canonical keys (``department``/``sub_architype``) and the
-    leader's free-text keys (``name``/``head``). Returns ``None`` if the spec
-    has no usable department name or head."""
-    name = str(d.get("department", "") or d.get("name", "")).strip()
-    head = str(d.get("sub_architype", "") or d.get("head", "")).strip()
-    mandate = str(d.get("mandate", "")).strip()
-    if not name and not head:
-        return None
-    rid = str(d.get("id", "")).strip() or f"head_{_dept_slug(name)}"
-    return {
-        "id": rid,
-        "department": _dept_slug(name),
-        "sub_architype": head,
-        "required": bool(d.get("required", False)),
-        "mandate": mandate,
-    }
-
-
-def _extract_department_heads(out: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extract the proposed department heads from the leader's Phase 3 output,
-    accepting the **multiple structures the leader actually produces** (not just
-    the canonical ``org_recommendation.department_heads``). The real LLM leader
-    may emit ``org_recommendation.departments`` (a list of ``{name, head,
-    mandate}``), or free-form some *other* list-of-objects under
-    ``org_recommendation`` (the key name varies run to run). Each spec is
-    normalized to ``{id, department, sub_architype, required, mandate}``."""
-    rec = out.get("org_recommendation") or {}
-    if not isinstance(rec, dict):
-        return []
-
-    def _norm_list(val: Any) -> List[Dict[str, Any]]:
-        if not (isinstance(val, list) and val):
-            return []
-        norm = [_normalize_head_spec(d) for d in val if isinstance(d, dict)]
-        return [n for n in norm if n is not None]
-
-    # 1. Canonical: org_recommendation.department_heads.
-    norm = _norm_list(rec.get("department_heads"))
-    if norm:
-        return norm
-    # 2. The leader's known shape: org_recommendation.departments.
-    norm = _norm_list(rec.get("departments"))
-    if norm:
-        return norm
-    # 3. Fallback: any other list-of-objects under org_recommendation (the
-    #    leader free-forms the key name). Scan the remaining keys and return
-    #    the first that yields at least one usable head.
-    for key, val in rec.items():
-        if key in ("department_heads", "departments"):
-            continue
-        norm = _norm_list(val)
-        if norm:
-            return norm
-    return []
-
-
-def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
-    """Ensure the required departments (hr, safety, morality) exist and are
-    marked non-fireable."""
-    created = []
-    for dept in REQUIRED_DEPARTMENTS:
-        existing = [
-            r for r in org.active_roles()
-            if r.architype == "department_head" and r.department == dept
-        ]
-        if existing:
-            existing[0].is_required = True
-            continue
-        head = Role(
-            id=f"head_{dept}",
-            architype="department_head",
-            sub_architype=f"head_of_{dept}",
-            department=dept,
-            mandate=f"Head of {dept.upper()}.",
-            is_required=True,
-            output_schema=worker_output_schema("department_head"),
-        )
-        org.add_role(head)
-        _create_department_dirs(head, departments_dir)
-        org.log_event("required_department_bootstrapped", None, head.id,
-                      {"department": dept})
-        created.append(head)
-    return created
-
-
-def bootstrap(
-    org: OrgState,
-    backend,
-    leader: Role,
-    mission_result: MissionResult,
-    approver_fn: Callable[[str, str, Role], Dict[str, str]],
-    departments_dir: str = "departments",
-    additive: bool = False,
-    head_retry_budget: int = 3,
-    bootstrap_timeout_seconds: Optional[float] = None,
-) -> List[Role]:
-    """Phase 3: Leader proposes department heads → HR redundancy review →
-    registry creation → directories. Required departments are always present.
-
-    The leader's proposal MUST include at least one **operational** department
-    head (a head whose department is not one of the required governance
-    departments) — without it, no work can be dispatched in Phase 4. If the
-    proposal is empty or contains only required departments, the bootstrap
-    **retries** (bounded, `head_retry_budget`, default 3); if still empty
-    after the retries, it raises a visible `BootstrapError` (never silent).
-
-    In `additive` mode (a revisit), the bootstrap only **adds** roles — a
-    proposed role whose id already exists in the org is skipped (never
-    dropped / overwritten)."""
-    # Bounded retry: the leader's head proposal must include at least one
-    # operational department head (not just the required governance depts).
-    proposed: List[Dict[str, Any]] = []
-    last_out: Dict[str, Any] = {}
-    # Story 11 (B15): on a retry, append the previous attempt's failure reason
-    # to the context so the leader can adjust (instead of re-sending the same
-    # context).
-    retry_hint = ""
-    for _ in range(max(1, head_retry_budget)):
-        last_out = backend.invoke(
-            leader, _bootstrap_context(mission_result, retry_hint=retry_hint),
-            # The Leader's head proposal is a resourcing decision -> thinking on.
-            reasoning=classify_complexity(3, leader, {"is_decision": True}),
-            # The head proposal is a heavy operation (it proposes 5-6 department
-            # heads, each with a mandate, and the downstream hires) — give it a
-            # larger per-invoke budget than the flat default so it doesn't hit
-            # the 300s timeout. `None` uses the default.
-            timeout=bootstrap_timeout_seconds,
-            phase=3,
-        )
-        candidate = _extract_department_heads(last_out)
-        if _has_operational_head(candidate):
-            proposed = candidate
-            break
-        # Story 11 (B15): build the retry hint from the previous attempt's
-        # failure reason (the top-level / `org_recommendation` keys).
-        rec = last_out.get("org_recommendation")
-        rec_keys = (list(rec.keys()) if isinstance(rec, dict)
-                    else type(rec).__name__)
-        top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
-        retry_hint = f"top-level keys: {top_keys}; org_recommendation: {rec_keys}"
-    if not _has_operational_head(proposed):
-        # Visible diagnostic: show exactly what the leader returned so the
-        # cause is self-evident from the traceback (no re-run to debug).
-        rec = last_out.get("org_recommendation")
-        rec_keys = (list(rec.keys()) if isinstance(rec, dict)
-                    else type(rec).__name__)
-        top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
-        raise BootstrapError(
-            "Phase 3 produced no operational department heads "
-            f"(after {head_retry_budget} attempts) — the org would have only "
-            "the required governance departments (hr, safety, morality), so no "
-            "work could be dispatched in Phase 4. Re-run the session.\n"
-            f"  leader reply top-level keys: {top_keys}\n"
-            f"  leader reply org_recommendation: {rec_keys}"
-        )
-    # Story 11 (B16): total org-size cap — refuse a bootstrap that proposes
-    # more heads than the cap (visible note, never silent).
-    current_roles = len(org.roles)
-    if current_roles + len(proposed) > MAX_ORG_ROLES:
-        raise BootstrapError(
-            f"Phase 3 proposed {len(proposed)} department heads, but the org "
-            f"already has {current_roles} roles — adding all heads would "
-            f"exceed the total org-size cap ({MAX_ORG_ROLES}). Refusing the "
-            "bootstrap (visible note, never silent). Re-run with a smaller "
-            "org recommendation."
-        )
-    created: List[Role] = []
-    for spec in proposed:
-        head = Role(
-            id=spec["id"],
-            architype="department_head",
-            sub_architype=spec.get("sub_architype", ""),
-            department=spec.get("department", ""),
-            mandate=spec.get("mandate", ""),
-            is_required=spec.get("required", False),
-            output_schema=worker_output_schema("department_head"),
-        )
-        if additive and org.get(head.id) is not None:
-            # Additive-only: never drop / overwrite an existing role.
-            continue
-        # HR redundancy review (vetoes redundant hires).
-        decision = approver_fn("hr", "hire", head)
-        if decision.get("decision") != "approve":
-            org.log_event("bootstrap_vetoed", leader.id, head.id, decision)
-            continue
-        org.add_role(head)
-        _create_department_dirs(head, departments_dir)
-        org.log_event("bootstrapped", leader.id, head.id,
-                      {"required": head.is_required,
-                       "department": head.department})
-        created.append(head)
-
-    # Required departments are always spun up (and cannot be fired).
-    created.extend(_ensure_required(org, departments_dir))
-    return created
-
-
-# --- Hire / fire -----------------------------------------------------------
-
-def hire(
-    org: OrgState,
-    initiator: Role,
-    new_role: Role,
-    approver_fn: Callable[[str, str, Role], Dict[str, str]],
-    departments_dir: str = "departments",
-    direct_ic_cap: int = DIRECT_IC_CAP,
-) -> Role:
-    """Hire a role through the approval matrix + role-definition resolution +
-    the 3-IC cap + the approver's decision (HR / the Leader)."""
-    approver_type, ok, reason = required_approver(initiator, new_role)
-    if not ok:
-        raise ResourcingError(reason)
-    def_key = resolve_role_definition(org, new_role)
-    _check_ic_cap(org, new_role, direct_ic_cap=direct_ic_cap)
-    decision = approver_fn(approver_type, "hire", new_role)
-    if decision.get("decision") != "approve":
-        org.log_event("hire_vetoed", initiator.id, new_role.id, decision)
-        raise ResourcingVetoed(decision.get("rationale", "vetoed"))
-    org.add_role(new_role)
-    if new_role.architype == "department_head":
-        _create_department_dirs(new_role, departments_dir)
-    _create_team_dir(new_role, departments_dir)
-    org.log_event("hired", initiator.id, new_role.id,
-                  {"approver": approver_type, "def_key": def_key,
-                   "department": new_role.department})
-    return new_role
-
-
-def _offload(org: OrgState, target: Role, departments_dir: str) -> Dict[str, Any]:
-    """HR's offloading: the team's automations remain intact; another team is
-    assigned to continue validating the offloaded workflows. The plan is
-    written to `reports/offloading/`."""
-    offload_dir = os.path.join(os.path.dirname(departments_dir), "reports", "offloading")
-    os.makedirs(offload_dir, exist_ok=True)
-    # Find a continuing team (any other active department head's dept).
-    continuing = [
-        h.department for h in org.department_heads()
-        if h.department != target.department
-    ]
-    plan = {
-        "target": target.id,
-        "department": target.department,
-        "automations_preserved": True,
-        "continuing_team": continuing[0] if continuing else None,
-        "plan_path": os.path.join(offload_dir, f"{target.id}.md"),
-    }
-    with open(plan["plan_path"], "w", encoding="utf-8") as f:
-        f.write(
-            f"# Offloading plan — {target.id}\n\n"
-            f"- automations preserved: {plan['automations_preserved']}\n"
-            f"- continuing team: {plan['continuing_team']}\n"
-        )
-    return plan
-
-
-def _subtree(org: OrgState, root_id: str) -> List[str]:
-    """The ``root`` + all of its **transitive reports** (the firing cascade,
-    Story 22). Computed over the active roles via their ``reports_to`` links:
-    firing a role that has its own reports fires the entire subtree, not just
-    the top. Returns a list of role ids (the root first)."""
-    children: Dict[str, List[str]] = {}
-    for r in org.active_roles():
-        if r.reports_to:
-            children.setdefault(r.reports_to, []).append(r.id)
-    seen: List[str] = [root_id]
-    stack: List[str] = [root_id]
-    while stack:
-        cur = stack.pop()
-        for ch in children.get(cur, []):
-            if ch not in seen:
-                seen.append(ch)
-                stack.append(ch)
-    return seen
-
-
-def _call_approver(approver_fn, approver_type: str, action: str, target: Role,
-                   detail: Optional[Dict[str, Any]] = None):
-    """Call the HR approver, passing the ``detail`` (e.g. the firing cascade
-    size, Story 22) as a 4th argument **when the approver accepts it**.
-    Backward compatible with 3-arg approvers (``detail`` is omitted) — so a
-    user-supplied ``approver_fn(approver_type, action, target)`` keeps working.
-
-    The cascade size is included in the **single** firing approval request
-    (not raised separately per cascaded role): one approver call covers the
-    whole subtree."""
-    accepts_detail = False
-    try:
-        params = inspect.signature(approver_fn).parameters
-        accepts_detail = (
-            any(p.kind == p.VAR_POSITIONAL for p in params.values())
-            or len(params) >= 4
-        )
-    except (TypeError, ValueError):
-        accepts_detail = False
-    if accepts_detail and detail is not None:
-        return approver_fn(approver_type, action, target, detail)
-    return approver_fn(approver_type, action, target)
-
-
-def fire(
-    org: OrgState,
-    initiator: Role,
-    target_id: str,
-    approver_fn: Callable[[str, str, Role], Dict[str, str]],
-    departments_dir: str = "departments",
-    cascade: bool = True,
-) -> Dict[str, Any]:
-    """Fire a role through the approval matrix + the approver's decision (HR
-    determines whether the firing is needed) + offloading. Required
-    departments cannot be fired.
-
-    **Cascading** (Story 22): when ``cascade`` is True (the default), firing a
-    role that has its own reports fires the **entire report subtree** (the
-    target + all transitive reports), not just the top. The **cascade size**
-    (the number of roles that will be fired) is included in the **single** HR
-    approval request (via a 4th ``detail`` argument — not raised separately per
-    cascaded role). Set ``cascade`` to False to fire only the target (the
-    legacy behavior)."""
-    target = org.get(target_id)
-    if target is None:
-        raise ResourcingError(f"unknown role: {target_id}")
-    if target.is_required:
-        raise ResourcingError(
-            f"{target.department} is a required department and cannot be fired"
-        )
-    approver_type, ok, reason = required_approver(initiator, target)
-    if not ok:
-        raise ResourcingError(reason)
-    # The firing cascade (the target + its transitive reports).
-    subtree_ids = _subtree(org, target.id) if cascade else [target.id]
-    detail = {"cascade_size": len(subtree_ids), "cascade_role_ids": subtree_ids}
-    # The single HR approval request includes the cascade size.
-    decision = _call_approver(approver_fn, approver_type, "fire", target, detail)
-    if decision.get("decision") != "approve":
-        org.log_event("fire_vetoed", initiator.id, target_id,
-                      {**decision, **detail})
-        raise ResourcingVetoed(decision.get("rationale", "vetoed"))
-    plan = _offload(org, target, departments_dir)
-    # Fire the whole subtree (the target first, then its reports).
-    for rid in subtree_ids:
-        org.mark_inactive(rid)
-    org.log_event("fired", initiator.id, target_id,
-                  {"approver": approver_type, "offloading": plan,
-                   "department": target.department, **detail})
-    return plan
-
-
-# --- Leader replacement ----------------------------------------------------
-
-def replace_leader(
-    org: OrgState,
-    new_leader: Role,
-    agreeing_head_ids: List[str],
-) -> Role:
-    """Unanimous department-head vote replaces the Leader (§2.2.1). The
-    original prompt/goal is still abided by. Logged."""
-    heads = org.department_heads()
-    if not heads:
-        raise ResourcingError("no department heads to vote")
-    if set(agreeing_head_ids) != {h.id for h in heads}:
-        raise ResourcingError("leader replacement requires UNANIMOUS heads")
-    # The old leader is marked inactive (a firing by this special rule).
-    old = org.get("leader")
-    if old is not None:
-        old.status = "inactive"
-    org.add_role(new_leader)
-    org.log_event("leader_replaced", None, new_leader.id,
-                  {"agreeing_heads": agreeing_head_ids})
-    return new_leader
-
-
-def run_leader_replacement_vote(
-    org: OrgState,
-    backend,
-    new_leader: Role,
-    proposer_id: str,
-    reasoning: str,
-    phase: Optional[int] = None,
-) -> Optional[Role]:
-    """Run the per-head leader-replacement vote (§2.2.1). A single head's
-    proposal (with reasoning) triggers the vote; the replacement proceeds only
-    on UNANIMOUS approval (every active department head votes yes — multiple,
-    not one). The unanimity + no-heads guards live in `replace_leader` (which
-    this calls only on a unanimous yes).
-
-    Each active department head is sent a vote prompt that includes the
-    current leader's id, the proposer's id, and the proposer's reasoning
-    (verbatim); the head votes ``{"vote": "yes"|"no"}``.
-
-    Returns the new leader on a unanimous replacement, or None when the vote
-    was not unanimous (the leader is NOT replaced).
-    """
-    heads = org.department_heads()
-    current = org.get("leader")
-    current_id = current.id if current is not None else "(no leader)"
-    # A single head triggered the vote (with reasoning) — log the proposal.
-    org.log_event("leader_replacement_proposed", proposer_id, current_id,
-                  {"reasoning": reasoning})
-    yes = 0
-    for h in heads:
-        prompt = (
-            f"LEADER-REPLACEMENT VOTE (head {h.id}): the current leader is "
-            f"{current_id}. {proposer_id} proposes replacing the leader with "
-            f"{new_leader.id}, reasoning (verbatim): {reasoning} "
-            "Vote {\"vote\": \"yes\"} to approve the replacement, or "
-            "{\"vote\": \"no\"} to reject it."
-        )
-        out = backend.invoke(h, prompt, phase=phase)
-        vote = str((out or {}).get("vote", "no")).lower()
-        if vote == "yes":
-            yes += 1
-    # Log the collected votes (the outcome is decided below).
-    org.log_event("leader_replacement_voted", proposer_id, current_id,
-                  {"yes": yes, "total": len(heads)})
-    if heads and yes == len(heads):
-        # Unanimous (and there are heads to vote) — replace.
-        replaced = replace_leader(org, new_leader,
-                                  agreeing_head_ids=[h.id for h in heads])
-        print(f"[org] leader-replacement vote unanimous ({yes} of "
-              f"{len(heads)} yes) - leader replaced", file=sys.stderr)
-        return replaced
-    # Partial (or no heads) — do NOT replace.
-    print(f"[org] leader-replacement vote not unanimous ({yes} of "
-          f"{len(heads)} yes)", file=sys.stderr)
-    return None
+__all__ = [
+    # core (kept here)
+    "REQUIRED_DEPARTMENTS",
+    "DIRECT_IC_CAP",
+    "MAX_ORG_ROLES",
+    "ResourcingError",
+    "ResourcingVetoed",
+    "BootstrapError",
+    "OrgState",
+    "resolve_role_definition",
+    "_check_ic_cap",
+    "_create_department_dirs",
+    "_create_team_dir",
+    # facade re-exports (moved to focused modules)
+    "_call_approver",
+    "_is_hr",
+    "required_approver",
+    "_bootstrap_context",
+    "_dept_slug",
+    "_ensure_required",
+    "_extract_department_heads",
+    "_has_operational_head",
+    "_normalize_head_spec",
+    "bootstrap",
+    "_offload",
+    "_subtree",
+    "fire",
+    "hire",
+    "replace_leader",
+    "run_leader_replacement_vote",
+]

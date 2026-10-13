@@ -9,7 +9,17 @@ breaking any existing import**.
 - **Tier 2 (7 files):** `observability/dashboard.py`, `org/tiers.py`, `runtime/pods.py`,
   `runtime/intake.py`, `runtime/mission.py`, `roles/base.py`, `roles/leader.py`
 
-Total: **12 files**, ~7,000 lines today.
+Total: **12 files** audited; **7 proceed** (items 1–6, 8) and **5 are skipped**
+(items 7, 9, 10, 11, 12 — the post-revert audit found those files already at or below
+their target sizes, so splitting them would reduce nothing).
+
+> **Revision (post-revert audit):** the "current" line counts below were corrected
+> against the reverted baseline. Five of the original twelve items target files that
+> are already small; three of them literally specified a post-split size *larger* than
+> the file is today. Those items are marked **SKIPPED**. A **hard gate** now applies
+> to every phase: the **largest file's line count must actually decrease** — a whole-
+> class *move* that leaves an 800-line module does not count (a prior attempt on
+> item 2 proved this: 877 → 78 + 866).
 
 ---
 
@@ -34,7 +44,7 @@ Total: **12 files**, ~7,000 lines today.
 
 ## Tier 1
 
-### 1. `runtime/dispatch.py` (1073 → ~340)
+### 1. `runtime/dispatch.py` (1218 → ~340)
 
 **Responsibilities today:** Phase 4 orchestration (`run_dispatch`), mandate
 decomposition + structured-report assembly + confidence thresholds, role spinning
@@ -63,26 +73,38 @@ logging), and efficiency instrumentation.
 
 ---
 
-### 2. `runtime/llm_api.py` (740 → ~150)
+### 2. `runtime/llm_api.py` (877 → ~500)
 
-**Responsibilities today:** `make_backend()` factory; `OpenAIBackend` (httpx HTTP,
-chunk streaming, progress-based idle timeout + wall-clock backstop, tool-call stats,
-stream records); `RoutingBackend` (complexity classification, thinking budget,
-invocation logging).
+**Responsibilities today:** `make_backend()` factory; `OpenAIBackend` (httpx
+streaming, progress-based idle timeout, bounded retry on timeout/truncation,
+tool-call parsing, content/text-shape fallback, stream emission, tool-call stats);
+module-level helpers (`TOOL_NAME`, `TOOL_DESCRIPTION`, `_role_label`,
+`_tool_call_problem`, `validate_and_quarantine`, `OpenAIOutputError`).
+**Note:** `RoutingBackend` is **not** in this file — it lives in
+`runtime/complexity.py` (alongside `classify_complexity` + `ThinkingBudget`) and is
+imported from there by `runtime/session.py`.
+
+**Technique (class-level split):** the file is dominated by a single ~700-line class,
+so *moving the whole class* would not shrink the largest file (a prior attempt left an
+~866-line module). Instead, extract the class's **pure parsing logic** into free
+functions in `runtime/openai_parse.py`; the class methods become **thin delegations**
+so the `OpenAIBackend._parse(...)` API stays callable and existing tests keep working.
 
 **Target layout:**
 
 | File | Contents | ~Lines |
 |---|---|---|
-| `runtime/llm_api.py` | `make_backend()` factory only. **Facade** re-exporting `OpenAIBackend`, `RoutingBackend`. | 150 |
-| `runtime/openai_backend.py` | `OpenAIBackend` (HTTP + streaming + idle timeout + backstop + tool-call/stream emission). | 420 |
-| `runtime/routing_backend.py` | `RoutingBackend` (level classification via `classify_complexity`, thinking budget, invocation logging). | 200 |
+| `runtime/llm_api.py` | `make_backend()` factory only. **Facade** re-exporting the full public API. | 80 |
+| `runtime/openai_backend.py` | `OpenAIBackend` (HTTP + streaming + idle timeout + retry + tool-call/stream emission + reporting) with thin delegation methods. | 500 |
+| `runtime/openai_parse.py` | Free functions: `parse_completion`, `parse_tool_args`, `parse_json_documents`, `is_truncation`, `truncation_note`, `plausible_json_prefix`, `unbalanced_json`, `recover_tool_call`, `role_label`, `tool_call_problem`, `validate_and_quarantine`, `nested_type_warnings` + `OpenAIOutputError` + constants (`TOOL_NAME`, `TOOL_DESCRIPTION`, `_NESTED_OBJECT_KEYS`, `_TRUNCATION_ERR_PREFIXES`). | 400 |
 
 **Notes / risks:**
+- Keep the `LLMBackend` interface import in each new module (from `runtime.llm`).
+- `validate_and_quarantine` is imported by `tests/test_envelope.py`; the facade keeps
+  that working.
 - The backend chain (Memory → Routing → Timeout → raw) is assembled in
   `session.build_backend`; it imports the classes by name, so the facade keeps that
   working unchanged.
-- Keep the `LLMBackend` interface import in each new module (from `runtime.llm`).
 
 ---
 
@@ -190,25 +212,12 @@ five panels; `render()`.
 
 ---
 
-### 7. `org/tiers.py` (443 → ~120)
+### 7. `org/tiers.py` — SKIPPED (post-revert audit)
 
-**Responsibilities today:** tier math (constants, `tier_of`, `is_head`, `is_leader`,
-`is_code_path`); read rules (`can_read`, `cross_team_read`); code-read rule;
-communication rule (`can_communicate`); pod rule (`validate_pod`).
-
-**Target layout:**
-
-| File | Contents | ~Lines |
-|---|---|---|
-| `org/tiers.py` | Tier math (constants, `tier_of`, `is_head`, `is_leader`, `is_code_path`). **Facade** re-exporting `can_read`, `cross_team_read`, `can_communicate`, `validate_pod` (and `POD_MIN_ROLES`/`POD_MAX_ROLES`). | 120 |
-| `org/read_rules.py` | `can_read`, `cross_team_read`, code-read check. | 130 |
-| `org/communication.py` | `can_communicate`. | 110 |
-| `org/pod_rules.py` | `validate_pod` + `POD_MIN_ROLES`/`POD_MAX_ROLES`. | 100 |
-
-**Notes / risks:**
-- `tiers` is imported as a **module** everywhere (`from org import tiers`,
-  `tiers.can_read(...)`). The facade **must** re-export all rule functions so those
-  call sites keep working unchanged. This is the highest-compat-sensitivity split.
+**Audit:** the file is **195 lines** (the plan's 443 estimate was stale). It is
+already small and cohesive (tier constants + read/communication/pod rules). Splitting
+it would produce 29–63-line fragments with no meaningful reduction of the largest
+file. **Decision:** leave as-is.
 
 ---
 
@@ -234,97 +243,58 @@ communication rule (`can_communicate`); pod rule (`validate_pod`).
 
 ---
 
-### 9. `runtime/intake.py` (379 → ~250)
+### 9. `runtime/intake.py` — SKIPPED (post-revert audit)
 
-**Responsibilities today:** `run_intake` (Phase 1 Q&A loop); intake result structure;
-question/answer extraction + normalization; prompt assembly; confidence/assumption
-logic.
-
-**Target layout:**
-
-| File | Contents | ~Lines |
-|---|---|---|
-| `runtime/intake.py` | `run_intake` main loop. **Facade** re-exporting the result + support API. | 250 |
-| `runtime/intake_support.py` | Intake result structure, question/answer extraction + normalization, prompt assembly, confidence/assumption logic. | 130 |
-
-**Notes / risks:**
-- Light split; `intake.py` is already fairly cohesive. Extract only the non-loop
-  helpers.
+**Audit:** the file is **244 lines** (the plan's 379 estimate was stale). The plan's
+own target (~250) is *larger* than the file is today, so the split as specified would
+reduce nothing. **Decision:** leave as-is.
 
 ---
 
-### 10. `runtime/mission.py` (375 → ~220)
+### 10. `runtime/mission.py` — SKIPPED (post-revert audit)
 
-**Responsibilities today:** `run_mission` (Phase 2 flow + approval); `_render_mission`;
-draft extraction/normalization; success-criteria parsing; versioning.
-
-**Target layout:**
-
-| File | Contents | ~Lines |
-|---|---|---|
-| `runtime/mission.py` | `run_mission` flow + user-approval path. **Facade** re-exporting the doc API. | 220 |
-| `runtime/mission_doc.py` | `_render_mission`, draft extraction/normalization, success-criteria parsing, versioning. | 150 |
-
-**Notes / risks:**
-- `_render_mission` is imported by `run_session.py` (`from runtime.mission import
-  _render_mission`) — the facade keeps that working.
+**Audit:** the file is **206 lines** (the plan's 375 estimate was stale). The plan's
+own target (~220) is *larger* than the file is today, so the split as specified would
+reduce nothing. **Decision:** leave as-is.
 
 ---
 
-### 11. `roles/base.py` (374 → ~250)
+### 11. `roles/base.py` — SKIPPED (post-revert audit)
 
-**Responsibilities today:** `Role` dataclass (identity + contract + org linkage +
-envelope); `to_dict`/`from_dict`; `label()`; `spin_personality()` /
-`spin_sub_architype()`.
-
-**Target layout:**
-
-| File | Contents | ~Lines |
-|---|---|---|
-| `roles/base.py` | `Role` dataclass + `label()` + `to_dict`/`from_dict`. **Facade** re-exporting the spinners. | 250 |
-| `roles/identity.py` | `spin_personality` + `spin_sub_architype` + identity constants. | 90 |
-
-**Notes / risks:**
-- Keep `to_dict`/`from_dict` as **methods** on `Role` (extracting them to module
-  functions would change call sites). Only the spinners move.
+**Audit:** the file is **176 lines** (the plan's 374 estimate was stale). The plan's
+own target (~250) is *larger* than the file is today, so the split as specified would
+reduce nothing. **Decision:** leave as-is.
 
 ---
 
-### 12. `roles/leader.py` (361 → ~120)
+### 12. `roles/leader.py` — SKIPPED (post-revert audit)
 
-**Responsibilities today:** `make_leader()`; leader output-schema builders (intake
-questions/answers, mission draft, `org_recommendation`, synthesis verdict, evaluation,
-efficiency action).
-
-**Target layout:**
-
-| File | Contents | ~Lines |
-|---|---|---|
-| `roles/leader.py` | `make_leader()`. **Facade** re-exporting the schema builders. | 120 |
-| `roles/leader_schemas.py` | All leader output-schema builders (grouped by phase). | 240 |
-
-**Notes / risks:**
-- `make_leader()` is imported by `run_session.py` — the facade keeps that working.
+**Audit:** the file is **196 lines** (the plan's 361 estimate was stale) and is ~150
+lines of a single `LEADER_MANDATE` string constant plus `make_leader()`. Splitting it
+would reduce the largest file by at most ~40 lines. **Decision:** leave as-is.
 
 ---
 
 ## Execution order
 
 Each step is independent (facades preserve imports) and must leave the offline test
-suite green before the next begins. Suggested order (lowest dependency first):
+suite green before the next begins. **Revised order (post-revert audit):** items 7, 9,
+10, 11, 12 are skipped; the remaining phases run by value (largest reduction first),
+with `pods.py` before `dispatch.py` (dependency of `dispatch_pods.py`).
 
 | Phase | Files | Rationale |
 |---|---|---|
-| **A** | `roles/base.py`, `roles/leader.py`, `org/tiers.py` | Leaf modules, pure extraction, highest-compat facades. |
-| **B** | `runtime/pods.py` | Needed before `dispatch.py`. |
-| **C** | `runtime/llm_api.py` | Self-contained backend split. |
-| **D** | `runtime/org.py` | Resourcing split. |
-| **E** | `runtime/session.py` | Orchestrator split (uses backend + org). |
-| **F** | `runtime/dispatch.py` | Largest; depends on `pods.py` (B). |
-| **G** | `runtime/intake.py`, `runtime/mission.py` | Light Phase 1/2 splits. |
-| **H** | `observability/dashboard.py`, `observability/web/app.js` | Independent; verify in a browser. |
+| **1** | `runtime/org.py` | 24 top-level units, pure function moves; 712 → ~260 (−63%). |
+| **2** | `runtime/pods.py` | Needed before `dispatch.py`; proven split; 407 → ~190+. |
+| **3** | `runtime/dispatch.py` | Largest; 30 top-level functions, pure moves; 1218 → ~340 (−72%). |
+| **4** | `runtime/llm_api.py` | Class-level split (parse methods → free functions); 877 → ~500 (−43%). |
+| **5** | `runtime/session.py` | Method extraction (module fns taking `session`); 732 → ~300 (−59%). |
+| **6** | `observability/dashboard.py` | watcher/server are top-level units; 454 → ~70 (−85%). |
+| **7** | `observability/web/app.js` | Function-level; verify in a browser; 715 → max ~300 (−58%). |
 
-Phases A–G are Python; H is the observability stack. H can run in parallel with A–G.
+**Hard gate (per phase):** the **largest file's line count must actually decrease**,
+verified by a line-count audit after each phase. A whole-class *move* that leaves an
+800-line module does **not** count.
 
 ---
 
@@ -340,8 +310,8 @@ Phases A–G are Python; H is the observability stack. H can run in parallel wit
    `history/*.jsonl` + `state/*` outputs (should be identical modulo timestamps).
 4. **Browser check** for Phase H: SSE connects, charts render, active-pod + model-stream
    update, panels populate.
-5. **Line-count audit:** confirm each original file shrank to its target and the new
-   modules landed near their estimates.
+5. **Line-count audit (hard gate):** confirm the **largest file's line count actually
+   decreased** and the new modules landed near their estimates.
 
 ---
 
@@ -359,9 +329,8 @@ Phases A–G are Python; H is the observability stack. H can run in parallel wit
 
 | Area | Before | After |
 |---|---|---|
-| `runtime/` | 9 large files | 9 facades + **19** new focused modules |
-| `org/` | 1 large file | 1 facade + **3** new modules |
-| `roles/` | 2 large files | 2 facades + **2** new modules |
+| `runtime/` | 5 large files (org, pods, dispatch, llm_api, session) | 5 facades + **19** new focused modules (org ×4, pods ×2, dispatch ×5, llm_api ×2, session ×6) |
+| `org/`, `roles/` | — | unchanged (items 7, 11, 12 skipped) |
 | `observability/` | 1 py + 1 js | 1 entry + **2** py modules; **4** js modules |
 
 Every original file remains a thin, backward-compatible facade; the new modules are
