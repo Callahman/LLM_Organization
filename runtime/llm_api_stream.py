@@ -226,21 +226,24 @@ def run_invoke_loop(backend, role, context: str,
                             f"may be hung) ({type(e).__name__}): {e}")
             raise
         except OpenAIOutputError as e:
-            # A parse failure. If it is a *truncation* (the stream ended
-            # mid-JSON: the generation budget was exhausted, or the parse
-            # is truncation-shaped on a plausible, unbalanced JSON
-            # prefix), it is transient — retry the whole request (bounded,
-            # with a short backoff), sharing the attempt budget with
-            # timeouts. A malformed shape the model chose is NOT retried
-            # (the session's invoke_checked handles malformed output at a
-            # higher level).
-            if e.truncated and attempt < max_attempts:
+            # A parse failure. A *transient* failure is retried (bounded,
+            # with a short backoff, sharing the attempt budget with
+            # timeouts): a truncation (the stream ended mid-JSON — the
+            # generation budget was exhausted, or the parse is
+            # truncation-shaped on a plausible, unbalanced JSON prefix; a
+            # fresh attempt may think shorter and fit) or an empty reply
+            # (the model produced no content this attempt; a fresh attempt
+            # may produce something). A malformed shape the model chose is
+            # NOT retried (the session's invoke_checked handles malformed
+            # output at a higher level).
+            if e.retryable and attempt < max_attempts:
                 backoff = min(30.0, 5.0 * attempt)
+                why = ("truncated output (the generation budget was "
+                       "exhausted mid-JSON)" if e.truncated
+                       else "an empty reply (no content produced)")
                 backend._report(role, "retry", t0,
                                 f"attempt {attempt}/{max_attempts} returned "
-                                f"truncated output (the generation budget "
-                                f"was exhausted mid-JSON); retrying in "
-                                f"{backoff:.0f}s")
+                                f"{why}; retrying in {backoff:.0f}s")
                 time.sleep(backoff)
                 continue
             backend._report(role, "error", t0, str(e))

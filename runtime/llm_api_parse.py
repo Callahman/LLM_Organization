@@ -247,10 +247,13 @@ def parse_reply(data: Dict[str, Any],
     truncated = is_truncation(content, finish_reason, content_err)
     note = (truncation_note(content, finish_reason)
             if truncated else "")
+    # An empty reply (no tool call, no content) is a transient failure — the
+    # model produced nothing this attempt (a fresh attempt may produce
+    # something), so it is retryable just like a truncation.
     raise OpenAIOutputError(
         f"reply has no {TOOL_NAME} tool call and no JSON object content"
         f"{note}: {content[:300]!r}"
-    , truncated=truncated)
+    , truncated=truncated, retryable=(truncated or not content.strip()))
 
 
 def recover_tool_call(content: str) -> Optional[Dict[str, Any]]:

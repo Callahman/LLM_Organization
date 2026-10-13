@@ -130,14 +130,21 @@ class OpenAIOutputError(RuntimeError):
     ``truncated`` is True when the failure is a *truncation* (the stream ended
     mid-JSON: the generation budget was exhausted, or the parse failure is
     truncation-shaped on unbalanced JSON) rather than a malformed shape the
-    model chose. Truncations are transient — the bounded retry loop in
-    ``invoke`` retries them (a fresh attempt may think shorter and fit);
-    malformed shapes are not (the envelope-validation layer above handles
+    model chose.
+
+    ``retryable`` is True for *transient* failures — a fresh attempt may
+    succeed: a truncation (the generation budget was exhausted) or an empty
+    reply (the model produced no content this attempt). It defaults to
+    ``truncated``; the bounded retry loop in ``invoke`` retries it (a fresh
+    attempt may think shorter and fit, or produce content at all). Malformed
+    shapes are not retryable (the envelope-validation layer above handles
     those)."""
 
-    def __init__(self, message: str, truncated: bool = False):
+    def __init__(self, message: str, truncated: bool = False,
+                 retryable: Optional[bool] = None):
         super().__init__(message)
         self.truncated = truncated
+        self.retryable = truncated if retryable is None else retryable
 
 
 class OpenAIBackend(LLMBackend):
