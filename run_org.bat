@@ -30,9 +30,11 @@ start "Observability Dashboard" cmd /k "cd /d %ORG_DIR% && .venv\Scripts\python 
 timeout /t 2 >nul
 
 REM === The pipeline runs in THIS window, so you can interact with it ===
-REM --interactive prompts you at the Leader's clarifying questions and the
-REM mission approval. To run unattended (auto-answer / auto-approve), remove
-REM the --interactive flag.
+REM --interactive flow: (1) you are prompted for the initial prompt (your
+REM request to spin up the org), (2) the Leader iterates the Phase 1 intake
+REM until it is confident in the goal, (3) it drafts MISSION.md from the
+REM intake and you approve it, (4) the org is bootstrapped and runs. To run
+REM unattended (auto-answer / auto-approve), remove the --interactive flag.
 .venv\Scripts\python run_session.py --interactive
 
 echo.
