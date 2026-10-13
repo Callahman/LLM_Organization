@@ -257,3 +257,81 @@ def test_http_stream_sends_sse():
         assert "agents" in snap
     finally:
         server.shutdown()
+
+
+# --- Role hierarchy levels (Leader/Head/Manager/IC) --------------------------
+
+def test_level_events_recorded_with_unresolved_level():
+    # Role hierarchy levels (Leader/Head/Manager/IC): an org event records a
+    # time-series level event with the target's level "Unresolved" (the org
+    # chart is saved AFTER the hire — poll_org_chart re-resolves it).
+    w = Watcher(root="/nonexistent")
+    w.ingest_org_event({"kind": "hired", "target": "sales-ops",
+                        "detail": {"department": "sales"}, "ts": 1.0})
+    assert len(w.level_events) == 1
+    ev = w.level_events[0]
+    assert ev["target"] == "sales-ops" and ev["level"] == "Unresolved"
+    assert ev["delta"] == 1
+    # A veto is not a headcount change (no level event).
+    w.ingest_org_event({"kind": "hire_vetoed", "target": "x",
+                        "detail": {"department": "sales"}, "ts": 2.0})
+    assert len(w.level_events) == 1
+
+
+def test_poll_org_chart_builds_roles_and_resolves_levels(tmp_path):
+    # Role hierarchy levels (Leader/Head/Manager/IC): poll_org_chart reads
+    # state/org_chart.json (whole-file atomic JSON), builds the roles-by-id
+    # map, and re-resolves the "Unresolved" level events.
+    sdir = tmp_path / "state"
+    sdir.mkdir()
+    chart = sdir / "org_chart.json"
+    w = Watcher(root=str(tmp_path))
+    # An unresolved level event (from a hire).
+    w.ingest_org_event({"kind": "hired", "target": "sales-ops",
+                        "detail": {"department": "sales"}, "ts": 1.0})
+    # The org chart catches up (saved after the hire).
+    chart.write_text(json.dumps({
+        "roles": {
+            "sales-ops": {"architype": "ic", "department": "sales",
+                          "status": "active"},
+            "sales-mgr": {"architype": "manager", "department": "sales",
+                          "status": "active"},
+            "sales-head": {"architype": "department_head",
+                           "department": "sales", "status": "active"},
+            "old-ic": {"architype": "ic", "department": "sales",
+                       "status": "fired"},
+        },
+    }), encoding="utf-8")
+    w.poll_org_chart()
+    # The roles-by-id map (id -> {id, level, department, status}).
+    assert w.roles_by_id["sales-ops"]["level"] == "IC"
+    assert w.roles_by_id["sales-mgr"]["level"] == "Manager"
+    assert w.roles_by_id["sales-head"]["level"] == "Head"
+    assert w.roles_by_id["old-ic"]["status"] == "fired"
+    # The "Unresolved" level event was re-resolved from the org chart.
+    assert w.level_events[0]["level"] == "IC"
+    # by_level: the Leader is always exactly 1 (not in the org chart); a
+    # fired role keeps its roster entry but no longer counts.
+    assert w._by_level() == {"Leader": 1, "Head": 1, "Manager": 1, "IC": 1}
+    snap = w.snapshot()
+    assert snap["agents"]["by_level"] == {"Leader": 1, "Head": 1,
+                                          "Manager": 1, "IC": 1}
+    assert [r["id"] for r in snap["agents"]["roles"]] == [
+        "old-ic", "sales-head", "sales-mgr", "sales-ops"]
+    assert len(snap["agents"]["level_events"]) == 1
+    # No file change: a second poll is a no-op (size-unchanged).
+    w.roles_by_id.clear()
+    w.poll_org_chart()
+    assert w.roles_by_id == {}
+
+
+def test_snapshot_shape_has_level_keys():
+    # Role hierarchy levels (Leader/Head/Manager/IC): the snapshot's agents
+    # section always carries by_level / roles / level_events (empty before
+    # any org activity).
+    w = Watcher(root="/nonexistent")
+    snap = w.snapshot()
+    assert snap["agents"]["by_level"] == {"Leader": 1, "Head": 0,
+                                          "Manager": 0, "IC": 0}
+    assert snap["agents"]["roles"] == []
+    assert snap["agents"]["level_events"] == []

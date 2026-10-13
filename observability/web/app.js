@@ -529,6 +529,33 @@ function renderModelStream() {
 
 // ---------- render -------------------------------------------------------------
 
+// Role hierarchy levels (Leader/Head/Manager/IC): the current counts per
+// level (the snapshot's agents.by_level) as chips + the roster
+// (agents.roles) with a level badge per role (fired roles are marked).
+function renderLevelChips() {
+  const chips = $('level-chips');
+  const roster = $('role-roster');
+  if (!chips || !roster || !state) return;
+  const byLevel = state.agents.by_level || {};
+  chips.innerHTML = ['Leader', 'Head', 'Manager', 'IC'].map(
+    (l) => l + ' ' + (byLevel[l] || 0)).join(' · ');
+  const roles = state.agents.roles || [];
+  if (!roles.length) {
+    roster.innerHTML =
+      '<div class="roster-empty">no roles in the org chart yet</div>';
+    return;
+  }
+  roster.innerHTML = roles.map((r) =>
+    '<div class="roster-row">' +
+    '<span class="level-badge level-' + String(r.level).toLowerCase() +
+    '">' + r.level + '</span> ' +
+    '<span class="roster-id">' + r.id + '</span> ' +
+    '<span class="roster-dept">' + (r.department || '') + '</span> ' +
+    (r.status !== 'active'
+      ? '<span class="roster-fired">' + r.status + '</span>' : '') +
+    '</div>').join('');
+}
+
 // A5: render the current headcount per department as number chips (the
 // snapshot's agents.by_department is never rendered elsewhere).
 function renderHeadcountChips() {
@@ -669,6 +696,16 @@ function render() {
       .concat(buildCumulativeSeries(
         state.tool_calls, (e) => e.department || 'unknown', (e) => e.ts)),
     true);
+  // Role hierarchy levels (Leader/Head/Manager/IC): the current counts per
+  // level (chips + roster) AND the cumulative hire/fire series (by level —
+  // "Unresolved" levels are re-resolved from the org chart, so the series
+  // keys are the real levels).
+  renderLevelChips();
+  drawTimeSeries(
+    $('chart-levels'),
+    buildCumulativeSeries(
+      state.agents.level_events, (e) => e.level, (e) => e.ts),
+    true, 'no hires yet');
   // A4: segment the code-edits chart by department (like agents-over-time),
 // with applied/refused within each department (applied solid, refused
 // striped). The keyFn combines department + outcome so each department's

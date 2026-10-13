@@ -775,6 +775,13 @@ class OpenAIBackend(LLMBackend):
                 # quarantine a malformed tool_call (a visible note + a safe
                 # fallback / a dropped call — never a crash).
                 out, events = validate_and_quarantine(role, out)
+                # What the model SAID (its plain content text — NOT the
+                # thinking, NOT the submit_output tool_call payload). Carried
+                # under a private key so the MemoryBackend can fold it into
+                # the role's memory: the [content] block the role's next
+                # prompt sees (its own past utterances).
+                if isinstance(out, dict) and content_buf.strip():
+                    out["_content"] = content_buf.strip()
                 for ev in events:
                     print(ev, file=sys.stderr)
                 if any("invalid envelope" in ev for ev in events):

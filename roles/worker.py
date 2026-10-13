@@ -39,9 +39,21 @@ def _schema(properties: Dict[str, Any], required: list) -> Dict[str, Any]:
 # Department head (Phase 4): decompose a department objective into team
 # objectives. The `team_objectives` array is REQUIRED -- the exact shape
 # `runtime/dispatch.py::dispatch` reads (`team_objectives[].manager_id` /
-# `ic_id` / `objective`).
+# `ic_id` / `objective`). The `policy` / `policy_summary` strings are the
+# Phase-4 department-policy fields `runtime/dispatch.py::
+# generate_head_policies` reads (the head generates its department's
+# POLICY.md before creating managers/ICs; managers get the full policy, ICs
+# the policy_summary). Because `OpenAIBackend` offers the role's
+# `output_schema` as the forced `submit_output` tool, these fields MUST be in
+# the schema or the model cannot submit them (the policy was silently never
+# persisted -- the "says it will do it but doesn't" bug).
 HEAD_OUTPUT_SCHEMA: Dict[str, Any] = _schema(
     {
+        # Phase 4: the department's operating policy (written to
+        # `departments/<dept>/<DEPT>_POLICY.md`) + the one-line summary ICs
+        # receive in their context.
+        "policy": {"type": "string"},
+        "policy_summary": {"type": "string"},
         "decomposition": {
             "type": "object",
             "properties": {

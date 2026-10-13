@@ -146,3 +146,43 @@ def test_b8_prune_stale_role_memories(tmp_path):
     assert os.path.exists(os.path.join(directory, "active2.json"))
     assert not os.path.exists(os.path.join(directory, "stale1.json"))
     assert not os.path.exists(os.path.join(directory, "stale2.json"))
+
+
+# --- [content] wiring (the audit fix) ----------------------------------------
+
+def test_model_content_folded_into_memory():
+    # [content] wiring: the model's content text (what it SAID — carried by
+    # the backend under a private `_content` key; NOT the thinking, NOT the
+    # submit_output tool_call payload) is folded into the role's memory
+    # (bounded), so the role's next prompt carries its own past utterances.
+    stub = StubBackend()
+    role = _role("role_c")
+    stub.set_script("role_c", [
+        {"summary": "policy drafted",
+         "_content": "We will ship the policy by Friday."},
+    ])
+    mem = MemoryBackend(stub)
+    mem.invoke(role, "draft the policy")
+    entries = mem.role_memories["role_c"].entries
+    assert any(
+        "said: We will ship the policy by Friday." in e.summary
+        and e.source == "intra-team"
+        for e in entries
+    )
+    # The [content] block is carried into the role's NEXT prompt (the memory
+    # is folded in).
+    mem.invoke(role, "revise the policy")
+    assert "We will ship the policy by Friday." in _prompt_for(stub, "role_c")
+
+
+def test_model_content_is_bounded_in_memory():
+    # [content] wiring: a long [content] text is bounded in the memory (the
+    # memory is folded whole into the prompt, so an unbounded utterance would
+    # blow the prompt budget).
+    from runtime.llm import _bound_text
+    long_text = "word " * 400  # ~2000 chars
+    bounded = _bound_text(long_text)
+    assert len(bounded) <= 601  # the cap + the ellipsis
+    assert bounded.endswith("…")
+    # Whitespace is normalized (newlines collapse to single spaces).
+    assert "\n" not in _bound_text("a\n\nb")

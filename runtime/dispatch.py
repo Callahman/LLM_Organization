@@ -223,10 +223,18 @@ def _head_ctx(head: Role, objective: str, digest: str) -> str:
     )
 
 
-def _manager_ctx(manager: Role, objective: str, policy: str = "") -> str:
+def _manager_ctx(manager: Role, objective: str, policy: str = "",
+                 digest: str = "") -> str:
+    # The prompt contract: {mission} + {department policy} + {short-term
+    # memory} + {current objective}. The mission digest (the org's goal) is
+    # the manager's north star; the department policy (the head's POLICY.md)
+    # is its operating constraint (managers get the FULL policy). The role's
+    # memory (its past [content] outputs) is auto-folded by the
+    # MemoryBackend.
     return (
         f"PHASE 4 (manager {manager.id}): decompose the team objective into "
-        f"IC tasks. Objective: {objective} | Department policy (follow it, and "
+        f"IC tasks. Objective: {objective} | Mission (the org's goal): "
+        f"{digest or '(none)'} | Department policy (follow it, and "
         f"give your ICs tasks that satisfy it): {policy or '(none)'} "
         "Set `decomposition` to a JSON OBJECT (not a string) whose "
         "`ic_tasks` key is a JSON array of objects, each exactly "
@@ -234,7 +242,13 @@ def _manager_ctx(manager: Role, objective: str, policy: str = "") -> str:
     )
 
 
-def _ic_ctx(ic: Role, task: str, policy_summary: str = "") -> str:
+def _ic_ctx(ic: Role, task: str, policy_summary: str = "",
+            digest: str = "") -> str:
+    # The prompt contract: {mission} + {department policy summary} +
+    # {short-term memory} + {current task}. The mission digest (the org's
+    # goal) is the IC's north star; the department policy summary (NOT the
+    # full policy) is its operating constraint. The role's memory (its past
+    # [content] outputs) is auto-folded by the MemoryBackend.
     # The exact team work root (departments/<dept>/<team>/). The IC must write
     # there — a bare top-level dir is refused by the permission layer as
     # out_of_scope, so the prompt names the real root, shows a correct/wrong
@@ -257,6 +271,7 @@ def _ic_ctx(ic: Role, task: str, policy_summary: str = "") -> str:
     return (
         f"PHASE 4 (IC {ic.id}): do the work in your team directory. Your team "
         f"work directory is {team_root}/ — write ALL files there. {path_rules} "
+        f"Mission (the org's goal): {digest or '(none)'} "
         f"Department policy summary (follow it): {policy_summary or '(none)'} "
         f"Task: {task} Set `summary` to a one-line summary of the work done "
         f"and `work_path` to the path of the work (under {team_root}/). If "
@@ -906,6 +921,13 @@ def generate_head_policies(
         )
         if policy:
             _write_policy(head.department, policy, departments_dir)
+        else:
+            # A visible failure state (never silent): the head was invoked for
+            # the department policy but returned none (the policy file stays a
+            # stub and managers/ICs get no policy context). The org event is
+            # surfaced in the dashboard's org-event stream.
+            org.log_event("policy_missing", head.id, None,
+                          {"department": head.department})
         policies[head.id] = {
             "policy": policy,
             "policy_summary": policy_summary,
@@ -1068,7 +1090,8 @@ def dispatch(
                 )
             if manager is not None:
                 mgr_out = backend.invoke(manager, _manager_ctx(manager, t_obj.get("objective", ""),
-                          policy=head_policies.get(head.id, {}).get("policy", "")),
+                          policy=head_policies.get(head.id, {}).get("policy", ""),
+                          digest=digest),
                          reasoning=classify_complexity(4, manager, {}),
                          phase=4)
                 ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
@@ -1100,7 +1123,8 @@ def dispatch(
                         backend, ic, _ic_ctx(ic, task.get("task", ""),
                                               policy_summary=head_policies.get(
                                                   head.id, {}).get(
-                                                  "policy_summary", "")),
+                                                  "policy_summary", ""),
+                                              digest=digest),
                         reasoning=classify_complexity(4, ic, {}),
                         timeout=ic_timeout_seconds,
                         phase=4,
@@ -1166,7 +1190,8 @@ def dispatch(
                     backend, ic, _ic_ctx(ic, t_obj.get("objective", ""),
                                          policy_summary=head_policies.get(
                                              head.id, {}).get(
-                                             "policy_summary", "")),
+                                             "policy_summary", ""),
+                                         digest=digest),
                     reasoning=classify_complexity(4, ic, {}),
                     timeout=ic_timeout_seconds,
                     phase=4,

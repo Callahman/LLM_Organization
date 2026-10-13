@@ -42,6 +42,16 @@ HIRE_KINDS = {
 }
 FIRE_KINDS = {"fired"}
 
+# The role hierarchy levels (Leader/Head/Manager/IC) from an architype
+# (state/org_chart.json's `architype` field). The Leader is NOT in the org
+# chart (it is the org itself), so it is not mapped here — the snapshot's
+# by_level always carries exactly one Leader.
+ARCHITYPE_LEVEL = {
+    "department_head": "Head",
+    "manager": "Manager",
+    "ic": "IC",
+}
+
 POLL_INTERVAL = 1.0
 SNAPSHOT_CAP = 500  # max records per series in a snapshot
 
@@ -72,11 +82,20 @@ class Watcher:
             "efficiency_metrics": os.path.join(h, "efficiency_metrics.jsonl"),
         }
         self.transcripts_dir = os.path.join(root, "pods", "transcripts")
+        # The org's roles (state/org_chart.json — written atomically by
+        # OrgState.save; whole-file JSON, not JSONL). The source of truth for
+        # the role hierarchy levels (Leader/Head/Manager/IC).
+        self.org_chart_path = os.path.join(root, "state", "org_chart.json")
         self._offsets: Dict[str, int] = {}
         self._lock = threading.Lock()
         # state
         self.agents_by_dept: Dict[str, int] = {}
         self.agent_events: List[Dict[str, Any]] = []
+        # Role hierarchy levels (Leader/Head/Manager/IC): the roles known to
+        # the org chart (id -> {id, level, department, status}) + the
+        # hire/fire time series (level_events).
+        self.roles_by_id: Dict[str, Dict[str, Any]] = {}
+        self.level_events: List[Dict[str, Any]] = []
         self.code_edits: List[Dict[str, Any]] = []
         self.tool_calls: List[Dict[str, Any]] = []
         self.cycles: List[Dict[str, Any]] = []
@@ -109,9 +128,19 @@ class Watcher:
         delta = 1 if kind in HIRE_KINDS else -1
         self.agents_by_dept[dept] = max(
             0, self.agents_by_dept.get(dept, 0) + delta)
+        target = e.get("target", "")
         self.agent_events.append({
             "ts": e.get("ts", time.time()), "kind": kind,
-            "target": e.get("target", ""), "department": dept,
+            "target": target, "department": dept,
+            "delta": delta,
+        })
+        # Role hierarchy level (Leader/Head/Manager/IC): a time-series event
+        # for the level charts. The target's level is "Unresolved" at event
+        # time (the org chart is saved AFTER the hire) — it is re-resolved
+        # from the org chart once it catches up (poll_org_chart).
+        self.level_events.append({
+            "ts": e.get("ts", time.time()), "kind": kind,
+            "target": target, "level": "Unresolved",
             "delta": delta,
         })
 
@@ -263,6 +292,59 @@ class Watcher:
                 continue
             self.ingest_pod_transcript(name[:-6], entries)
 
+    def poll_org_chart(self) -> None:
+        """Poll state/org_chart.json (the org's roles, written atomically by
+        OrgState.save — whole-file JSON, not JSONL). Rebuilds the roles-by-id
+        map (id -> {id, level, department, status}) and re-resolves any
+        "Unresolved" level events (the org chart catches up after each
+        hire/fire). The file is re-read only when its size changes."""
+        try:
+            size = os.path.getsize(self.org_chart_path)
+        except OSError:
+            return
+        if self._offsets.get(self.org_chart_path) == size:
+            return
+        self._offsets[self.org_chart_path] = size
+        try:
+            with open(self.org_chart_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+        roles: Dict[str, Dict[str, Any]] = {}
+        for rid, data in (payload.get("roles") or {}).items():
+            if not isinstance(data, dict):
+                continue
+            level = ARCHITYPE_LEVEL.get(data.get("architype", ""), "")
+            if not level:
+                continue
+            roles[rid] = {
+                "id": rid,
+                "level": level,
+                "department": data.get("department", ""),
+                "status": data.get("status", "active"),
+            }
+        self.roles_by_id = roles
+        # Re-resolve the "Unresolved" level events (the org chart now knows
+        # each target's level).
+        for ev in self.level_events:
+            if ev["level"] == "Unresolved" and ev["target"] in roles:
+                ev["level"] = roles[ev["target"]]["level"]
+
+    def _by_level(self) -> Dict[str, int]:
+        """The current role counts by hierarchy level (Leader/Head/Manager/IC).
+        The Leader is always exactly 1 (the org's leader is not in the org
+        chart — it is the org itself); the rest are counted from the org
+        chart's ACTIVE roles (a fired role keeps its roster entry with
+        status=fired but no longer counts)."""
+        counts = {"Leader": 1, "Head": 0, "Manager": 0, "IC": 0}
+        for role in self.roles_by_id.values():
+            if role.get("status", "active") != "active":
+                continue
+            level = role.get("level", "")
+            if level in counts:
+                counts[level] += 1
+        return counts
+
     def poll(self) -> None:
         with self._lock:
             for key, path in self.paths.items():
@@ -288,6 +370,7 @@ class Watcher:
                     else:
                         self.ingest_cycle(e)
             self._poll_transcripts()
+            self.poll_org_chart()
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -336,6 +419,15 @@ class Watcher:
                     "by_department": dict(self.agents_by_dept),
                     "total": sum(self.agents_by_dept.values()),
                     "events": self.agent_events[-SNAPSHOT_CAP:],
+                    # Role hierarchy levels (Leader/Head/Manager/IC):
+                    # by_level (the current counts), roles (the roster — id /
+                    # level / department / status), level_events (the
+                    # hire/fire time series).
+                    "by_level": self._by_level(),
+                    "roles": [
+                        self.roles_by_id[k] for k in sorted(self.roles_by_id)
+                    ],
+                    "level_events": self.level_events[-SNAPSHOT_CAP:],
                 },
                 "code_edits": self.code_edits[-SNAPSHOT_CAP:],
                 "tool_calls": self.tool_calls[-SNAPSHOT_CAP:],
