@@ -410,10 +410,6 @@ performed and is recorded.
 
 ## 7. Additional Process Notes
 
-- **No stub policies.** There should not be any stub policies unless directly built
-  into testing. (This run left 6 of 8 departments as single-file `POLICY.md` stubs —
-  `DEPARTMENT_AUDIT.md` — and 2 commercial sub-teams with no code at all.) Departments
-  must be built out, not stubbed.
 - **Multi-agent pod rounds default.** In multi-agent pods, there should be a **default
   number of rounds** in which the agents converse before the **initiator** of the pod
   leaves with next-steps. (The current `run_pod` already closes via the starter with a
