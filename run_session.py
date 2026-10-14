@@ -143,6 +143,13 @@ def main() -> None:
               "MISSION.md, pods/) is written to a throwaway temp dir instead, "
               "so the real org is left untouched. The pipeline still runs "
               "end-to-end (you see the hires / mission draft / phases).")
+    parser.add_argument(
+        "--prompt", default="", 
+        help="your request to spin up the org (e.g. 'Build a data pipeline "
+             "for our analytics team'). Passed to the Leader as the Phase 1 "
+             "initial prompt, so the mission reflects YOUR goal (not a "
+             "generic one). In --interactive mode, if omitted, you are "
+             "prompted for it.")
     args = parser.parse_args()
 
     user_answer_fn, user_permission_fn, approver_fn = (
@@ -208,8 +215,17 @@ def main() -> None:
         print("Revisiting the current mission (roles remember prior runs)...")
     else:
         print(f"Running the Organization pipeline ({mode})...")
+    # Your request to spin up the org: from --prompt, else (interactive)
+    # prompted for, else blank (an unattended smoke run starts from the
+    # Leader's role info). Passing it means the Phase 1 intake + mission
+    # reflect YOUR goal instead of a generic one.
+    initial_prompt = args.prompt
+    if args.interactive and not initial_prompt:
+        initial_prompt = input(
+            "Describe the organization you want to build "
+            "(Enter = none): ").strip()
     result = session.run(
-        initial_prompt="",  # blank: Phase 1 starts from the Leader's role info
+        initial_prompt=initial_prompt,
         user_answer_fn=user_answer_fn,
         user_permission_fn=user_permission_fn,
         approver_fn=approver_fn,

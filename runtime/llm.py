@@ -157,6 +157,19 @@ class TimeoutBackend(LLMBackend):
         return box["out"]
 
 
+# The [content] text a model said can be long (e.g. a full policy markdown);
+# the role's memory is folded whole into its prompt, so a recorded utterance
+# is bounded (whitespace-normalized, first N chars, deterministic).
+_SAID_CAP = 600
+
+
+def _bound_text(text: str, cap: int = _SAID_CAP) -> str:
+    """A bounded, whitespace-normalized form of the model's [content] text
+    (what it said) for the role's memory."""
+    text = " ".join(text.split())
+    return text if len(text) <= cap else text[:cap].rstrip() + "…"
+
+
 class MemoryBackend(LLMBackend):
     """Wraps any `LLMBackend` and adds **per-role isolated memory**.
 
@@ -238,7 +251,14 @@ class MemoryBackend(LLMBackend):
         input_digest = " ".join(context.split())[:200]
         summary = str(result.get("summary", ""))
         work = result.get("work_path") or result.get("artifact") or ""
+        # What the model SAID (its [content] text — not the thinking, not the
+        # submit_output tool_call payload), carried by the OpenAIBackend under
+        # a private key. Folded in (bounded) so the role's next prompt carries
+        # its own past utterances.
+        said = result.get("_content", "")
         interaction = f"asked: {input_digest} -> did: {summary}"
+        if said:
+            interaction += f" | said: {_bound_text(said)}"
         if work:
             interaction += f" (work: {work})"
         if interaction:

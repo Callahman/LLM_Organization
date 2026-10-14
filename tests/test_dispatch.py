@@ -390,3 +390,86 @@ def test_invoke_ic_recovers_on_corrective_retry():
                           timeout=None, phase=4)
     assert err is None
     assert out == {"summary": "done", "confidence": 0.9}
+
+
+# --- [content] / policy / mission wiring (the audit fixes) -------------------
+
+def test_head_output_schema_carries_policy_fields():
+    # Root-cause fix: the head's forced submit_output schema must carry the
+    # `policy` + `policy_summary` fields — otherwise the department policy the
+    # head authors is silently dropped at submit time (the "says it will, but
+    # doesn't" symptom).
+    from roles.worker import HEAD_OUTPUT_SCHEMA
+    props = HEAD_OUTPUT_SCHEMA.get("properties", {})
+    assert "policy" in props
+    assert "policy_summary" in props
+
+
+def test_policy_missing_event_logged(tmp_path, monkeypatch):
+    # A visible failure state (never silent): when a head returns NO policy
+    # (the model ignored the forced schema), a `policy_missing` org event is
+    # logged and the head proceeds to decomposition.
+    monkeypatch.chdir(tmp_path)  # isolate the policy file write
+    org, leader, head, mgr, ic = _org()
+    backend = StubBackend()
+    backend.set_script("leader", [
+        {"decomposition": {"department_objectives": [
+            {"head_id": "head_analytics", "objective": "build the pipeline"}]}},
+    ])
+    # The head's first invoke (the policy generation) returns NO policy field.
+    backend.set_script("head_analytics", [
+        {"summary": "no policy field", "confidence": 0.9},
+        {"decomposition": {"team_objectives": [
+            {"manager_id": "mgr1", "objective": "build the ETL"}]}},
+    ])
+    backend.set_script("mgr1", [
+        {"decomposition": {"ic_tasks": [
+            {"ic_id": "ic1", "task": "write the extractor"}]}},
+    ])
+    backend.set_script("ic1", [
+        {"summary": "extractor done"}])
+    mission = {"purpose": "a data pipeline", "success_criteria": ["works"],
+               "scope": ["ETL"]}
+    dispatch(backend, org, leader, mission)
+    # The `policy_missing` org event was logged (visible, never silent). The
+    # head id is the event's `initiator` (the `target` is None — the head
+    # reports against itself).
+    assert any(
+        e.get("kind") == "policy_missing"
+        and e.get("initiator") == "head_analytics"
+        for e in org.events
+    )
+
+
+def test_manager_ic_context_carries_mission(tmp_path, monkeypatch):
+    # The mission digest (the org's goal) is passed DOWN to managers and ICs
+    # (not only the heads): the manager's and the IC's context carry the
+    # mission.
+    monkeypatch.chdir(tmp_path)  # isolate the policy file write
+    org, leader, head, mgr, ic = _org()
+    backend = StubBackend()
+    backend.set_script("leader", [
+        {"decomposition": {"department_objectives": [
+            {"head_id": "head_analytics", "objective": "build the pipeline"}]}},
+    ])
+    backend.set_script("head_analytics", [
+        {"policy": "ALWAYS use schema v2.", "policy_summary": "use schema v2",
+         "summary": "policy set", "confidence": 0.9},
+        {"decomposition": {"team_objectives": [
+            {"manager_id": "mgr1", "objective": "build the ETL"}]}},
+    ])
+    backend.set_script("mgr1", [
+        {"decomposition": {"ic_tasks": [
+            {"ic_id": "ic1", "task": "write the extractor"}]}},
+    ])
+    backend.set_script("ic1", [
+        {"summary": "extractor done"}])
+    mission = {"purpose": "a data pipeline", "success_criteria": ["works"],
+               "scope": ["ETL"]}
+    dispatch(backend, org, leader, mission)
+    # The manager's context carries the mission (its digest: purpose).
+    mgr_calls = [ctx for (rid, ctx) in backend.calls if rid == "mgr1"]
+    assert any("a data pipeline" in ctx for ctx in mgr_calls)
+    # The IC's context carries the mission (its digest: purpose).
+    ic_calls = [ctx for (rid, ctx) in backend.calls if rid == "ic1"]
+    assert any("a data pipeline" in ctx for ctx in ic_calls)

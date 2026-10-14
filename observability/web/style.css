@@ -311,6 +311,46 @@ canvas {
   padding: 4px 0;
 }
 
+/* Role hierarchy levels (Leader/Head/Manager/IC): the roster + level badges. */
+.role-roster {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 110px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+.roster-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.roster-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 0;
+}
+.roster-id { font-weight: 600; }
+.roster-dept { color: var(--muted); }
+.roster-fired { color: #f72585; font-size: 11px; }
+.level-badge {
+  display: inline-block;
+  min-width: 58px;
+  text-align: center;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #0b1020;
+}
+.level-leader { background: #ffd166; }
+.level-head { background: #4cc9f0; }
+.level-manager { background: #80ed99; }
+.level-ic { background: #b388ff; }
+
 @media (max-width: 900px) {
   main {
     grid-template-columns: 1fr;

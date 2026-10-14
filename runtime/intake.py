@@ -127,10 +127,12 @@ def run_intake(
     clarifying questions (in tests, a scripted function).
 
     `mission_path` is the existing mission file (if any). When it does not
-    exist, no goal has been established yet, so the intake opens with the
-    hard-coded goal question and does not converge on the Leader's confidence
-    alone (a high-confidence round-1 response must not short-circuit the goal
-    question).
+    exist AND `initial_prompt` is blank, no goal has been established yet, so
+    the intake opens with the hard-coded goal question and does not converge
+    on the Leader's confidence alone (a high-confidence round-1 response must
+    not short-circuit the goal question). When `initial_prompt` is non-blank,
+    the goal is already stated, so the Leader clarifies from it without
+    re-asking the goal.
     """
     transcript: List[Dict[str, Any]] = []
     assumptions: List[str] = []
@@ -138,9 +140,13 @@ def run_intake(
     rounds = 0
     converged = False
 
-    # If no goal is established yet (no MISSION.md), the first question is the
-    # hard-coded goal question (don't trust the Leader's confidence).
-    goal_established = os.path.exists(mission_path)
+    # If no goal is established yet, the first question is the hard-coded goal
+    # question (don't trust the Leader's confidence). A goal is established
+    # when a prior MISSION.md exists OR the user supplied a non-blank initial
+    # prompt (the goal is already stated — don't re-ask it; let the Leader
+    # clarify from the prompt).
+    goal_established = os.path.exists(mission_path) or bool(
+        initial_prompt and initial_prompt.strip())
 
     for r in range(1, question_budget + 1):
         rounds = r
