@@ -37,7 +37,8 @@ class MissionResult:
 
 
 def _mission_context(intake_result: IntakeResult, feedback: str,
-                     current_mission: str = "") -> str:
+                     current_mission: str = "",
+                     informal_draft: str = "") -> str:
     parts = [
         "PHASE 2: codify the global mission (MISSION.md).",
         f"Intake confidence: {intake_result.confidence:.2f} "
@@ -47,6 +48,11 @@ def _mission_context(intake_result: IntakeResult, feedback: str,
         parts.append(
             "CURRENT MISSION (revise it — the goal may have changed):\n"
             + current_mission
+        )
+    if informal_draft:
+        parts.append(
+            "INFORMAL DRAFT (from Phase 1 intake — refine it into the formal "
+            "mission):\n" + informal_draft
         )
     if intake_result.assumptions:
         parts.append("Assumptions to carry (mark in the mission):")
@@ -160,6 +166,7 @@ def run_mission(
     reask_budget: int = 3,
     start_version: Optional[int] = None,
     current_mission: str = "",
+    informal_draft: str = "",
 ) -> MissionResult:
     """Run the Phase 2 mission codification + permission flow.
 
@@ -178,7 +185,8 @@ def run_mission(
 
     while attempts < reask_budget:
         attempts += 1
-        ctx = _mission_context(intake_result, feedback, current_mission)
+        ctx = _mission_context(intake_result, feedback, current_mission,
+                             informal_draft)
         out = backend.invoke(leader, ctx,
                              reasoning=classify_complexity(2, leader, {}), phase=2)
         draft = _mission_draft(out)

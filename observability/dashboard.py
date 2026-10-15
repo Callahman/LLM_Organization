@@ -76,7 +76,7 @@ class Watcher:
             "stream": os.path.join(h, "stream.jsonl"),
             "halt_events": os.path.join(h, "halt_events.jsonl"),
             "efficiency": os.path.join(h, "efficiency.jsonl"),
-            # S22: the per-iteration efficiency metrics (the Phase 3-6 loop
+            # S22: the per-iteration efficiency metrics (the Phase 3-8 loop
             # metrics: T_total, T_p, T_dept, T_role, H_peak, C, N_created,
             # M_satisfaction, E, EFFICIENCY_FLOOR).
             "efficiency_metrics": os.path.join(h, "efficiency_metrics.jsonl"),
@@ -106,7 +106,7 @@ class Watcher:
         # invoke, so the dashboard renders the LATEST line as the current
         # panel (not an accumulation).
         self.efficiency: Optional[Dict[str, Any]] = None
-        # S22: the per-iteration efficiency metrics (the Phase 3-6 loop
+        # S22: the per-iteration efficiency metrics (the Phase 3-8 loop
         # metrics). The log appends one snapshot per iteration, so the
         # dashboard keeps the LATEST line as the current S22 panel.
         self.efficiency_metrics: Optional[Dict[str, Any]] = None
@@ -167,7 +167,7 @@ class Watcher:
         """Ingest one S22 per-iteration efficiency snapshot (from
         history/efficiency_metrics.jsonl). The log appends one snapshot per
         loop iteration, so the dashboard keeps the LATEST line as the current
-        S22 panel (the Phase 3-6 loop metrics: T_total, T_p, T_dept, T_role,
+        S22 panel (the Phase 3-8 loop metrics: T_total, T_p, T_dept, T_role,
         H_peak, C, N_created, M_satisfaction, E, EFFICIENCY_FLOOR)."""
         self.efficiency_metrics = e
 

@@ -32,8 +32,9 @@ def test_pod_max_rounds_plumbed(monkeypatch, tmp_path):
     from runtime.config import load_config
     config = load_config()
     assert config["pod_max_rounds"] == 5
-    # A run_pod call uses it (via a stub that records max_rounds).
-    import runtime.dispatch as d
+    # A run_pod call uses it (via a stub that records max_rounds). _check_pod_triggers
+    # (and its run_pod lookup) live in runtime.dispatch_common after the split.
+    import runtime.dispatch_common as d
     head, mgr, ic = _roles()
     org = OrgState(history_dir=str(tmp_path))
     for r in (head, mgr, ic):

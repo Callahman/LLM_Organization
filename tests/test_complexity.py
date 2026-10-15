@@ -24,8 +24,8 @@ def _role(architype, department="", team=""):
 def test_complex_phases_route_high():
     leader = make_leader()
     assert classify_complexity(2, leader, {}) is Reasoning.HIGH   # mission
-    assert classify_complexity(5, leader, {}) is Reasoning.HIGH   # synthesis
-    assert classify_complexity(6, leader, {}) is Reasoning.HIGH   # evaluation
+    assert classify_complexity(7, leader, {}) is Reasoning.HIGH   # evaluate
+    assert classify_complexity(8, leader, {}) is Reasoning.HIGH   # decide
 
 
 def test_decisions_route_high():
@@ -35,7 +35,7 @@ def test_decisions_route_high():
 
 def test_simple_ic_work_routes_low():
     ic = _role("ic", "analytics", "pipelines")
-    assert classify_complexity(4, ic, {}) is Reasoning.LOW
+    assert classify_complexity(6, ic, {}) is Reasoning.LOW
 
 
 def test_structuring_routes_medium():
@@ -49,8 +49,8 @@ def test_structuring_routes_medium():
 
 def test_disagreement_or_deadlock_routes_high():
     ic = _role("ic", "analytics", "pipelines")
-    assert classify_complexity(4, ic, {"disagreement": True}) is Reasoning.HIGH
-    assert classify_complexity(4, ic, {"deadlock": True}) is Reasoning.HIGH
+    assert classify_complexity(6, ic, {"disagreement": True}) is Reasoning.HIGH
+    assert classify_complexity(6, ic, {"deadlock": True}) is Reasoning.HIGH
 
 
 def test_intake_nonconvergence_routes_high():
@@ -78,7 +78,7 @@ def test_detect_disagreement():
 def test_parse_phase():
     assert parse_phase("PHASE 1: intake") == 1
     assert parse_phase("PHASE 4 (head h1): decompose") == 4
-    assert parse_phase("POD pod_x: speak — topic") == 4
+    assert parse_phase("POD pod_x: speak — topic") == 6
     assert parse_phase("no phase here") == -1
 
 
@@ -99,8 +99,8 @@ def test_routing_backend_routes_and_logs(tmp_path):
     ic = _role("ic", "analytics", "pipelines")
 
     backend.invoke(leader, "PHASE 2: draft the mission")     # HIGH (in budget)
-    backend.invoke(ic, "PHASE 4 (IC ic): do the work")       # LOW
-    backend.invoke(leader, "PHASE 6: evaluate")              # HIGH -> LOW (budget)
+    backend.invoke(ic, "PHASE 6 (IC ic): do the work")       # LOW
+    backend.invoke(leader, "PHASE 8: decide")                # HIGH -> LOW (budget)
 
     assert inner.reasoning_log == [Reasoning.HIGH, Reasoning.LOW, Reasoning.LOW]
     assert os.path.exists(os.path.join(str(tmp_path), "invocations.jsonl"))
@@ -132,8 +132,8 @@ def test_live_path_high_reaches_router(tmp_path):
     assert inner.reasoning_log[-1] is Reasoning.HIGH
 
     # The default (`reasoning=None`) is classified by the router, not forced
-    # LOW: Phase 5 (synthesis) classifies HIGH and the router grants it.
-    memory.invoke(leader, "PHASE 5: synthesize", phase=5)
+    # LOW: Phase 7 (evaluate) classifies HIGH and the router grants it.
+    memory.invoke(leader, "PHASE 7: evaluate", phase=7)
     assert inner.reasoning_log[-1] is Reasoning.HIGH
 
 

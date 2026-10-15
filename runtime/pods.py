@@ -145,10 +145,10 @@ def senior_member(pod: Pod) -> Role:
 def _pod_ctx(pod: Pod, kind: str, prior: str = "",
              budget_tokens: int = 4000) -> str:
     """Build a pod member's context. Starts with "POD" so the routing backend
-    parses it as Phase 4 (execution). The header (and the agenda / input
-    artifacts / prior) is **unbounded** (it must survive); only the transcript
-    entries are token-bounded (via `bounded_assembly` — oldest dropped first
-    when over budget)."""
+    parses it as Phase 6 (execute — the pods fire in Phase 6). The header (and
+    the agenda / input artifacts / prior) is **unbounded** (it must survive);
+    only the transcript entries are token-bounded (via `bounded_assembly` —
+    oldest dropped first when over budget)."""
     # The unbounded part (must survive): the header + agenda + input artifacts
     # + prior.
     header_parts = [f"POD {pod.id}: {kind} — {pod.topic}"]
@@ -172,7 +172,8 @@ def _pod_ctx(pod: Pod, kind: str, prior: str = "",
 def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
             transcripts_dir: Optional[str] = None,
             pod_wall_clock_seconds: float = 600.0,
-            budget_tokens: int = 4000) -> Pod:
+            budget_tokens: int = 4000,
+            phase: int = 4) -> Pod:
     """Run a pod's conversation:
 
     1. the **starter** sets the agenda (it manages the conversation);
@@ -188,7 +189,7 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
     # 1. The starter sets the agenda.
     out = backend.invoke(pod.starter,
                          _pod_ctx(pod, "agenda", budget_tokens=budget_tokens),
-                         reasoning=classify_complexity(4, pod.starter, {}), phase=4)
+                         reasoning=classify_complexity(phase, pod.starter, {}), phase=phase)
     pod.agenda = str(out.get("agenda", ""))
     pod.transcript.append({
         "kind": "agenda", "role": pod.starter.id,
@@ -211,10 +212,10 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
         this_outputs: List[Dict[str, Any]] = []
         disagreement = detect_disagreement(prev_outputs)
         for member in pod.members:
-            level = classify_complexity(4, member, {"disagreement": disagreement})
+            level = classify_complexity(phase, member, {"disagreement": disagreement})
             out = backend.invoke(member,
                                  _pod_ctx(pod, "speak", budget_tokens=budget_tokens),
-                                 reasoning=level, phase=4)
+                                 reasoning=level, phase=phase)
             summary = str(out.get("summary", ""))
             this_round.append((member.id, summary))
             this_outputs.append(out)
@@ -234,7 +235,7 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
     # 3. The starter always closes, producing the decision.
     out = backend.invoke(pod.starter,
                          _pod_ctx(pod, "close", budget_tokens=budget_tokens),
-                         reasoning=classify_complexity(4, pod.starter, {}), phase=4)
+                         reasoning=classify_complexity(phase, pod.starter, {}), phase=phase)
     pod.decision = str(out.get("decision", ""))
     pod.rationale = str(out.get("rationale", ""))
     pod.open_items = as_str_list(out.get("open_items", []))
@@ -277,8 +278,9 @@ def write_transcripts(pod: Pod, transcripts_dir: str = "pods/transcripts") -> st
                         f"{entry.get('decision', '')}\n")
             else:
                 # A solo (single-role) leader step (intake / mission /
-                # bootstrap / synthesis / decision) — render its label +
-                # summary so the dashboard can show the leader's solo work.
+                # bootstrap / plan / staff / execute / evaluate / decide) —
+                # render its label + summary so the dashboard can show the
+                # leader's solo work.
                 f.write(f"- [{entry.get('kind')}, r{entry.get('round')}] "
                         f"{entry.get('role')}: {entry.get('summary', '')}\n")
     return base

@@ -33,6 +33,11 @@ class IntakeResult:
     assumptions: List[str] = field(default_factory=list)
     transcript: List[Dict[str, Any]] = field(default_factory=list)
     audit_path: Optional[str] = None
+    # The INFORMAL mission draft (Phase 1's understanding of the goal) — its
+    # text + where it was saved (state/mission_draft.md, NOT the top-level
+    # MISSION.md; Phase 2 refines it into the formal mission).
+    informal_draft: str = ""
+    informal_draft_path: Optional[str] = None
 
 
 def _assemble_context(
@@ -110,6 +115,65 @@ def _write_audit(
     return path
 
 
+def _restated_goal(transcript: List[Dict[str, Any]]) -> str:
+    """The most recent non-empty `restated_goal` in the intake transcript (the
+    Leader's one-sentence restatement of the goal)."""
+    for entry in reversed(transcript):
+        if entry.get("role") == "leader":
+            goal = str(entry.get("restated_goal", "")).strip()
+            if goal:
+                return goal
+    return ""
+
+
+def _informal_draft(
+    initial_prompt: str,
+    transcript: List[Dict[str, Any]],
+    confidence: float,
+    converged: bool,
+    rounds: int,
+    assumptions: List[str],
+) -> str:
+    """The **INFORMAL** mission draft from Phase 1 (Intake) — the Leader's
+    understanding of the goal (restated goal + assumptions + status). This is
+    NOT the formal, version-controlled MISSION.md (Phase 2 refines it into
+    that); it is a scratch draft saved to `state/mission_draft.md`."""
+    goal = _restated_goal(transcript)
+    lines = [
+        "# MISSION DRAFT (informal — Phase 1 intake)",
+        "",
+        "## Goal",
+        goal or "(not yet restated)",
+        "",
+        "## Initial prompt",
+        initial_prompt.strip() or "(none)",
+        "",
+        "## Assumptions",
+    ]
+    if assumptions:
+        lines.extend(f"- {a}" for a in assumptions)
+    else:
+        lines.append("(none)")
+    lines += [
+        "",
+        "## Status",
+        f"confidence={confidence:.2f} converged={converged} rounds={rounds}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _write_informal_draft(state_dir: str, text: str) -> str:
+    """Write the informal mission draft to `state/mission_draft.md` (NOT the
+    top-level MISSION.md — that is Phase 2's formal, version-controlled
+    write). Returns the path."""
+    os.makedirs(state_dir, exist_ok=True)
+    path = os.path.join(state_dir, "mission_draft.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return path
+
+
 def run_intake(
     backend: LLMBackend,
     leader: Role,
@@ -120,6 +184,7 @@ def run_intake(
     history_dir: str = "history",
     current_mission: str = "",
     mission_path: str = "MISSION.md",
+    state_dir: str = "state",
 ) -> IntakeResult:
     """Run the Phase 1 intake loop.
 
@@ -239,6 +304,14 @@ def run_intake(
         history_dir, initial_prompt, rounds, confidence, assumptions, transcript
     )
 
+    # The INFORMAL mission draft (Phase 1's understanding of the goal) — saved
+    # to state/mission_draft.md (NOT the top-level MISSION.md; Phase 2 refines
+    # it into the formal, version-controlled mission).
+    informal_draft = _informal_draft(
+        initial_prompt, transcript, confidence, converged, rounds, assumptions
+    )
+    informal_draft_path = _write_informal_draft(state_dir, informal_draft)
+
     return IntakeResult(
         confident=confidence >= confidence_threshold,
         converged=converged,
@@ -247,4 +320,6 @@ def run_intake(
         assumptions=assumptions,
         transcript=transcript,
         audit_path=audit_path,
+        informal_draft=informal_draft,
+        informal_draft_path=informal_draft_path,
     )

@@ -7,7 +7,7 @@
 - **Size-capped archives**: oldest moved first; beyond the cap, oldest deleted.
 - **Cross-team-read log**: who read what, why (the duplication-check reads).
 - **Halt-event log**: Safety/Morality halts.
-- **Evaluation reports**: Phase 6 self-improving loop output.
+- **Evaluation reports**: Phase 8 self-improving loop output.
 """
 
 from __future__ import annotations
@@ -172,7 +172,7 @@ class HistoryStore:
     # --- evaluation reports ------------------------------------------------
 
     def write_evaluation_report(self, report: Dict[str, Any]) -> str:
-        """Write a Phase 6 evaluation report to `reports/evaluation/`."""
+        """Write a Phase 8 evaluation report to `reports/evaluation/`."""
         eval_dir = os.path.join(
             os.path.dirname(self.history_dir), "reports", "evaluation"
         )
