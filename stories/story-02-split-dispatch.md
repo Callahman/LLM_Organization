@@ -1,5 +1,10 @@
 # Story 2 — Split `dispatch.py` into plan / staff / execute
 
+> **Status: Done** — `runtime/dispatch.py` is a thin re-export shim; the shared
+> helpers live in `runtime/dispatch_common.py`, and the three phase modules
+> (`runtime/plan.py` Phase 4, `runtime/staff.py` Phase 5, `runtime/execute.py`
+> Phase 6) hold the head / manager / IC workflows.
+
 ## Goal
 
 The monolithic `runtime/dispatch.py` (≈1243 lines) does the old Phase 4

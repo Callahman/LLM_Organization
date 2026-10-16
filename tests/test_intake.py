@@ -30,10 +30,10 @@ def test_vague_prompt_converges(tmp_path):
          "restated_goal": "build a thing that is accurate"},
     ])
 
-    # Round 1 is the hard-coded goal question (no MISSION.md exists); the
-    # Leader then runs rounds 2-4 (converging at round 4). Use an isolated
-    # mission path in tmp_path so the test does not depend on a leftover
-    # MISSION.md in the repo root.
+    # The initial prompt is non-blank, so the goal is already established (no
+    # hard-coded goal question); the Leader clarifies from round 1 and
+    # converges at round 3. Use an isolated mission path in tmp_path so the
+    # test does not depend on a leftover MISSION.md in the repo root.
     mission_path = os.path.join(str(tmp_path), "MISSION.md")
     answers = iter(["build a thing", "a weekly report", "it must be accurate"])
     result = run_intake(
@@ -45,10 +45,11 @@ def test_vague_prompt_converges(tmp_path):
         question_budget=5,
         history_dir=str(tmp_path),
         mission_path=mission_path,
+        state_dir=str(tmp_path),
     )
     assert result.converged
     assert result.confident
-    assert result.rounds == 4
+    assert result.rounds == 3
     # The audit trail was written.
     assert os.path.exists(os.path.join(str(tmp_path), "intake.jsonl"))
 
@@ -61,8 +62,9 @@ def test_clear_prompt_short_circuits(tmp_path):
         {"summary": "clear", "questions": [], "confidence": 0.9,
          "restated_goal": "build a data pipeline that produces a weekly report"},
     ])
-    # Isolated mission path in tmp_path (does not exist -> hard-coded goal
-    # question at round 1), so the test does not depend on the repo root.
+    # Isolated mission path in tmp_path, so the test does not depend on the repo
+    # root. The initial prompt is non-blank, so the goal is established (no
+    # hard-coded goal question); the Leader converges at round 1.
     mission_path = os.path.join(str(tmp_path), "MISSION.md")
     result = run_intake(
         backend,
@@ -73,11 +75,12 @@ def test_clear_prompt_short_circuits(tmp_path):
         question_budget=5,
         history_dir=str(tmp_path),
         mission_path=mission_path,
+        state_dir=str(tmp_path),
     )
     assert result.converged
-    # Round 1 is the hard-coded goal question (no MISSION.md); the Leader
-    # converges at round 2.
-    assert result.rounds == 2
+    # The initial prompt is non-blank, so the goal is established (no
+    # hard-coded goal question); the Leader converges at round 1.
+    assert result.rounds == 1
 
 
 def test_budget_exhaustion_marks_assumptions(tmp_path):
@@ -106,6 +109,7 @@ def test_budget_exhaustion_marks_assumptions(tmp_path):
         question_budget=3,
         history_dir=str(tmp_path),
         mission_path=mission_path,
+        state_dir=str(tmp_path),
     )
     assert not result.converged
     assert not result.confident
@@ -122,8 +126,8 @@ def test_b10_no_convergence_without_restated_goal(tmp_path):
     a fuzzy goal)."""
     leader = make_leader()
     backend = StubBackend()
-    # Round 2: confident but no restated_goal (fuzzy goal) — no convergence.
-    # Round 3: confident and restated_goal — converged.
+    # Round 1: confident but no restated_goal (fuzzy goal) — no convergence.
+    # Round 2: confident and restated_goal — converged.
     backend.set_script("leader", [
         {"summary": "confident but fuzzy", "questions": ["What is the scope?"],
          "confidence": 0.9, "restated_goal": ""},
@@ -141,11 +145,13 @@ def test_b10_no_convergence_without_restated_goal(tmp_path):
         question_budget=5,
         history_dir=str(tmp_path),
         mission_path=mission_path,
+        state_dir=str(tmp_path),
     )
-    # Round 1 is the hard-coded goal question (no MISSION.md); the Leader
-    # gets round 2 (fuzzy, no convergence) and round 3 (restated, converged).
+    # The initial prompt is non-blank, so the goal is established (no hard-coded
+    # goal question); the Leader gets round 1 (fuzzy, no convergence) and
+    # round 2 (restated, converged).
     assert result.converged
-    assert result.rounds == 3
+    assert result.rounds == 2
 
 
 def test_b11_user_answer_fn_raises_is_retried_then_escalated(tmp_path):
@@ -173,6 +179,7 @@ def test_b11_user_answer_fn_raises_is_retried_then_escalated(tmp_path):
             question_budget=5,
             history_dir=str(tmp_path),
             mission_path=mission_path,
+            state_dir=str(tmp_path),
         )
         raise AssertionError("expected UserApprovalError")
     except UserApprovalError as e:

@@ -22,10 +22,10 @@ from runtime.history import HistoryStore
 
 
 def parse_phase(context: str) -> int:
-    """The phase encoded in a context string. "PHASE N" -> N; "POD ..." -> 4
-    (execution); unknown -> -1."""
+    """The phase encoded in a context string. "PHASE N" -> N; "POD ..." -> 6
+    (execute — the pods fire in Phase 6); unknown -> -1."""
     if context.startswith("POD"):
-        return 4
+        return 6
     head = context[:12]
     idx = head.find("PHASE")
     if idx != -1:
@@ -48,11 +48,11 @@ def classify_complexity(phase: int, role, signal: Dict[str, Any]) -> Reasoning:
     tasks -> off (LOW). This is a pure function so the routing logic is
     unit-testable offline, like the other invariants.
     """
-    if phase in (2, 5, 6):                      # mission, synthesis, evaluation
+    if phase in (2, 7, 8):                      # mission, evaluate, decide
         return Reasoning.HIGH
     if signal.get("is_decision"):               # hire/fire/offload, leader vote
         return Reasoning.HIGH
-    if phase == 4:                              # execution
+    if phase in (4, 5, 6):                      # plan / staff / execute
         if signal.get("disagreement") or signal.get("deadlock"):
             return Reasoning.HIGH
         # Structuring work (leader/head/manager decomposition) -> MEDIUM;

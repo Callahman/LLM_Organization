@@ -1,9 +1,10 @@
-"""Unit tests for `runtime/session.py` — the full Phase 1-6 pipeline (Epic 10).
+"""Unit tests for `runtime/session.py` — the full Phase 1-8 pipeline (Epic 10).
 
-The pipeline: intake -> mission (permission) -> org bootstrap -> dispatch ->
-synthesis -> evaluation, with the **bounded** self-improving loop (Phase 6
-"continue" re-enters Phase 1, still abiding by the original goal) and the **BAU
-rule** (a Safety/Morality halt during Phase 4 is the only BAU halt).
+The pipeline: intake -> mission (permission) -> org bootstrap -> plan ->
+staff -> execute -> evaluate -> decide, with the **bounded** self-improving
+loop (Phase 8 "continue" re-enters Phase 1, still abiding by the original
+goal) and the **BAU rule** (a Safety/Morality halt during the work, Phases
+4-6, is the only BAU halt).
 """
 
 import json
@@ -27,7 +28,8 @@ def _approve_fns():
 
 
 def _leader_script_full():
-    """The Leader is invoked once per phase (1-6), in order."""
+    """The Leader is invoked in Phases 1, 2, 3, 4, 7, 8 (the work phases 5-6
+    don't invoke the leader), in order."""
     return [
         {"confidence": 0.9, "questions": []},  # Phase 1: converge in one round
         {"mission_draft": {"purpose": "a data pipeline",
@@ -35,9 +37,9 @@ def _leader_script_full():
         {"org_recommendation": {"department_heads": [
             {"id": "head_analytics", "department": "analytics"}]}},  # Phase 3
         {"decomposition": {"department_objectives": [
-            {"head_id": "head_analytics", "objective": "build the pipeline"}]}},  # Phase 4
-        {"verdict": "complete"},  # Phase 5: synthesis
-        {"verdict": "complete"},  # Phase 6: evaluation -> complete
+            {"head_id": "head_analytics", "objective": "build the pipeline"}]}},  # Phase 4: plan
+        {"verdict": "complete"},  # Phase 7: evaluate
+        {"verdict": "complete"},  # Phase 8: decide -> complete
     ]
 
 
@@ -55,7 +57,7 @@ def test_full_pipeline_completes(tmp_path):
         max_iterations=3,
     )
     assert result.status == "complete"
-    assert result.phases == [1, 2, 3, 4, 5, 6]
+    assert result.phases == {1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1}
     assert result.verdict == "complete"
     assert result.mission.approved
     # The department head was bootstrapped and is in the org.
@@ -80,8 +82,8 @@ def test_escalates_when_mission_rejected(tmp_path):
         max_iterations=3,
     )
     assert result.status == "escalated"
-    # It stopped at Phase 2 (no org bootstrap / dispatch).
-    assert result.phases == [1, 2]
+    # It stopped at Phase 2 (no org bootstrap / plan / staff / execute).
+    assert result.phases == {1: 1, 2: 1}
     assert result.escalation is not None
 
 
@@ -118,9 +120,10 @@ def test_full_chain_hires_managers_and_ics(tmp_path):
 
 
 def test_bau_halt_during_phase4(tmp_path):
-    # Story 3 (A10/B12): a GLOBAL Phase 4 Safety/Morality halt stops the run
-    # before Phase 5 — the halt is CONSUMED, not just recorded (previously
-    # the cycle "still completed": the halt was set but never consumed).
+    # Story 3 (A10/B12): a GLOBAL Safety/Morality halt during the work
+    # (Phases 4-6) stops the run before Phase 7 (evaluate) — the halt is
+    # CONSUMED, not just recorded (previously the cycle "still completed":
+    # the halt was set but never consumed).
     backend = StubBackend()
     backend.set_script("leader", _leader_script_full())
     backend.set_script("head_analytics", [
@@ -143,15 +146,15 @@ def test_bau_halt_during_phase4(tmp_path):
     assert session.bau_halt["department"] == "safety"
     assert session.bau_halt["scope"] == "global"
     assert session.bau_active() is False
-    # The run stops before Phase 5 (no synthesis, no evaluation).
+    # The run stops before Phase 7 (no evaluate, no decide).
     assert result.status == "escalated"
-    assert 5 not in result.phases
-    assert 6 not in result.phases
+    assert 7 not in result.phases
+    assert 8 not in result.phases
 
 
 def test_scoped_bau_halt_during_phase4_continues(tmp_path):
-    # Story 3: a SCOPED Phase 4 halt does not stop the run (Phase 5 + 6 run)
-    # and the halt is recorded (observable).
+    # Story 3: a SCOPED halt during the work does not stop the run (Phase 7 +
+    # 8 run) and the halt is recorded (observable).
     backend = StubBackend()
     backend.set_script("leader", _leader_script_full())
     backend.set_script("head_analytics", [
@@ -170,8 +173,8 @@ def test_scoped_bau_halt_during_phase4_continues(tmp_path):
     )
     # The run continues (non-blocked work) and completes.
     assert result.status == "complete"
-    assert 5 in result.phases
-    assert 6 in result.phases
+    assert 7 in result.phases
+    assert 8 in result.phases
     # The halt is recorded (the scoped halt is observable) and BAU stays
     # active under a scoped halt.
     assert session.bau_halt is not None
@@ -183,9 +186,9 @@ def test_scoped_bau_halt_during_phase4_continues(tmp_path):
 
 
 def test_phase4_crash_leaves_recoverable_checkpoint(tmp_path, monkeypatch):
-    # Story 1 (B1/B4): a crash during Phase 4 must leave the pre-crash state
-    # recoverable — the checkpoint written after Phase 3 (phase <= 4) plus the
-    # persisted org chart + role memory.
+    # Story 1 (B1/B4): a crash during Phase 4 (plan) must leave the pre-crash
+    # state recoverable — the checkpoint written after Phase 3 (phase <= 4)
+    # plus the persisted org chart + role memory.
     backend = StubBackend()
     backend.set_script("leader", _leader_script_full())
     backend.set_script("head_analytics", [
@@ -207,8 +210,8 @@ def test_phase4_crash_leaves_recoverable_checkpoint(tmp_path, monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("simulated crash in Phase 4")
 
-    # Monkeypatch a Phase 4 step (the dispatch) to raise mid-run.
-    monkeypatch.setattr(session_mod.dispatch, "dispatch", boom)
+    # Monkeypatch a Phase 4 step (the plan) to raise mid-run.
+    monkeypatch.setattr(session_mod.plan, "run_plan", boom)
     with pytest.raises(RuntimeError, match="simulated crash"):
         session.run(
             "build a data pipeline",

@@ -353,15 +353,17 @@ function buildCumulativeSeries(records, keyFn, tsFn) {
   }));
 }
 
-// A2: distinct color per phase 1–6 (not all beige) so each phase in the
+// A2: distinct color per phase 1–8 (not all beige) so each phase in the
 // cycle-duration bars is recognizable at a glance.
 const PHASE_COLORS = {
   1: '#4cc9f0',  // intake — cyan
   2: '#f72585',  // mission — magenta
   3: '#ffd166',  // bootstrap — amber
-  4: '#80ed99',  // dispatch — green
-  5: '#b388ff',  // synthesis — purple
-  6: '#ff9e64',  // evaluation — orange
+  4: '#80ed99',  // plan — green
+  5: '#b388ff',  // staff — purple
+  6: '#ff9e64',  // execute — orange
+  7: '#06d6a0',  // evaluate — teal
+  8: '#ef476f',  // decide — red
 };
 
 function buildCycleGroups(cycles) {

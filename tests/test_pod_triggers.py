@@ -10,7 +10,7 @@ carry-over control path wired into the Phase 4 dispatch.
 
 After the pod runs, the decision is carried **all three ways**:
 (1) written to `pods/artifacts/` (+ the HistoryStore decision journal),
-(2) carried up to the leader's Phase 5 synthesis prompt, and
+(2) carried up to the leader's Phase 7 evaluate prompt, and
 (3) seeded into the members' memory as a cross-team `pod:<id>` entry.
 """
 
@@ -175,11 +175,11 @@ def test_no_trigger_no_pod(tmp_path):
 
 
 def test_pod_carry_over_three_ways(tmp_path):
-    # A full session (Phases 1-3 once, 4-5 iterate): trigger A forms a pod in
-    # Phase 4, and the decision is carried all three ways.
+    # A full session (Phases 1-3 once, 4-8 iterate): trigger A forms a pod in
+    # Phase 6 (execute), and the decision is carried all three ways.
     backend = _scripts(conflicting=True)
-    # The leader's script: Phase 1, 2, 3, then Phase 4, 5, 6 (one iteration;
-    # Phase 6 says 'complete' -> the loop stops).
+    # The leader's script: Phase 1, 2, 3, 4, then Phase 7, 8 (one iteration;
+    # Phase 8 says 'complete' -> the loop stops).
     backend.set_script("leader", [
         {"confidence": 0.9, "questions": []},
         {"mission_draft": {"purpose": "a data pipeline",
@@ -188,8 +188,8 @@ def test_pod_carry_over_three_ways(tmp_path):
             {"id": "head_analytics", "department": "analytics"}]}},
         {"decomposition": {"department_objectives": [
             {"head_id": "head_analytics", "objective": "build the pipeline"}]}},
-        {"verdict": "complete"},  # Phase 5
-        {"verdict": "complete"},  # Phase 6 -> stop
+        {"verdict": "complete"},  # Phase 7
+        {"verdict": "complete"},  # Phase 8 -> stop
     ])
     user_answer_fn = lambda qs: "a weekly report"
     user_permission_fn = lambda draft: {"decision": "approve", "feedback": ""}
@@ -214,11 +214,11 @@ def test_pod_carry_over_three_ways(tmp_path):
     # (1) The decision artifact is in pods/artifacts/.
     assert os.path.exists(os.path.join(artifacts_dir, pod.id + ".json"))
     assert os.path.exists(os.path.join(artifacts_dir, pod.id + ".md"))
-    # (2) The decision is in the leader's Phase 5 synthesis prompt.
-    phase5 = [ctx for rid, ctx in backend.calls
-              if rid == "leader" and "PHASE 5" in _objective(ctx)][-1]
-    assert "POD DECISIONS" in phase5
-    assert "approve schema v2" in phase5
+    # (2) The decision is in the leader's Phase 7 evaluate prompt.
+    phase7 = [ctx for rid, ctx in backend.calls
+              if rid == "leader" and "PHASE 7" in _objective(ctx)][-1]
+    assert "POD DECISIONS" in phase7
+    assert "approve schema v2" in phase7
     # (3) The decision is seeded into the members' memory with a `pod:<id>`
     #     source (the cross-team carry-over).
     memories = session.backend.role_memories

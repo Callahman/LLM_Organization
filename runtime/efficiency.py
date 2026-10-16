@@ -1,4 +1,4 @@
-"""S22 — Efficiency trade-off in the Phase 3–6 loop.
+"""S22 — Efficiency trade-off in the Phase 3–8 loop.
 
 The incentive: if the mission can be completed with **LESS headcount / compute
 time**, that is **encouraged**. The key metric is **wall-clock uptime** (local
@@ -23,7 +23,7 @@ This module provides the **measurement + scoring**:
   (0-1), generalized for **BOTH** terminal and recurring goals.
 - :func:`efficiency_score` — the efficiency score
   ``E = M_satisfaction / (0.5·(T_total/T_ref) + 0.5·(C/C_ref))``.
-- :class:`EfficiencyMeter` — instruments the Phase 3–6 loop **per iteration**,
+- :class:`EfficiencyMeter` — instruments the Phase 3–8 loop **per iteration**,
   computes ``E`` with running-average refs over the last ``REF_WINDOW``
   iterations, and appends the per-iteration snapshot to
   ``history/efficiency_metrics.jsonl`` (auditable + the dashboard's Efficiency
@@ -65,13 +65,13 @@ def compute_m_satisfaction(
 
     A pragmatic, deterministic estimate (no model needed):
 
-    - The synthesis **verdict** sets the base (``complete`` -> 1.0,
+    - The evaluate **verdict** sets the base (``complete`` -> 1.0,
       ``continue`` -> 0.5, ``escalate`` -> 0.2).
     - **Terminal goals**: scaled by the fraction of the mission's success
       criteria that have supporting dispatched work (``coverage``).
     - **Recurring goals**: the verdict already reflects the cycle-target
-      attainment (a recurring goal is "met" when the synthesis says the cycle
-      target is reached) — so the base already carries it.
+      attainment (a recurring goal is "met" when the evaluate phase says the
+      cycle target is reached) — so the base already carries it.
 
     The result is clamped to ``[0, 1]``.
     """
@@ -130,7 +130,7 @@ def efficiency_score(
 # --- The per-iteration meter -------------------------------------------------
 
 class EfficiencyMeter:
-    """S22: instruments the Phase 3–6 loop **per iteration** and computes the
+    """S22: instruments the Phase 3–8 loop **per iteration** and computes the
     efficiency score ``E``.
 
     Per iteration it records:
@@ -279,7 +279,7 @@ class EfficiencyMeter:
             return self._last
 
     def panel_text(self) -> str:
-        """Render the latest snapshot as text for the Leader's Phase 5/6 context
+        """Render the latest snapshot as text for the Leader's Phase 7/8 context
         (the full breakdown + ``E`` + the mandate to keep ``E`` high)."""
         snap = self.last()
         if snap is None:

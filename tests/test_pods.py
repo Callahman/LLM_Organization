@@ -137,8 +137,9 @@ def test_pod_ctx_token_bounded():
 def test_chained_pod_skipped_on_empty_decision(tmp_path, monkeypatch):
     # (b) Chained pod skipped on empty decision: a first pod with an empty
     # decision -> the chained pod is not formed (assert via a stub that the
-    # chained run_pod is not called).
-    import runtime.dispatch as d
+    # chained run_pod is not called). _check_pod_triggers (and its run_pod
+    # lookup) live in runtime.dispatch_common after the split.
+    import runtime.dispatch_common as d
     roles = _roles()
     org = OrgState(history_dir=str(tmp_path))
     for r in roles.values():
