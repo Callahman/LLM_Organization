@@ -8,20 +8,25 @@ complete the work and raise the need for testing to the user).
 
 ## The 12 stories
 
-| # | File | Story |
-|---|------|-------|
-| 1 | `story-01-session-restructure.md` | 8-Phase Session restructure (`runtime/session.py`) |
-| 2 | `story-02-split-dispatch.md` | Split `dispatch.py` into plan / staff / execute |
-| 3 | `story-03-headcount-caps.md` | Headcount caps + allotment |
-| 4 | `story-04-pods.md` | Pods (clarification / reporting / headcount / execution) |
-| 5 | `story-05-department-policy.md` | Department policy |
-| 6 | `story-06-department-proposal.md` | Department proposal in the Mission phase |
-| 7 | `story-07-config.md` | Config (new knobs) |
-| 8 | `story-08-cli.md` | CLI (`run_session.py`, `reset_org.py`) |
-| 9 | `story-09-tests.md` | Tests |
-| 10 | `story-10-docs.md` | Docs (doc files to update) |
-| 11 | `story-11-prompts.md` | Prompts directory (`prompts/`) |
-| 12 | `story-12-devils-advocate.md` | Mandatory "devil's advocate" department + combined morality/ethics |
+| # | File | Story | Status |
+|---|------|-------|--------|
+| 1 | `story-01-session-restructure.md` | 8-Phase Session restructure (`runtime/session.py`) | **Done** |
+| 2 | `story-02-split-dispatch.md` | Split `dispatch.py` into plan / staff / execute | **Done** |
+| 3 | `story-03-headcount-caps.md` | Headcount caps + allotment | Pending |
+| 4 | `story-04-pods.md` | Pods (clarification / reporting / headcount / execution) | Pending |
+| 5 | `story-05-department-policy.md` | Department policy | Pending |
+| 6 | `story-06-department-proposal.md` | Department proposal in the Mission phase | Pending |
+| 7 | `story-07-config.md` | Config (new knobs) | Pending |
+| 8 | `story-08-cli.md` | CLI (`run_session.py`, `reset_org.py`) | Pending |
+| 9 | `story-09-tests.md` | Tests | Pending |
+| 10 | `story-10-docs.md` | Docs (doc files to update) | Pending |
+| 11 | `story-11-prompts.md` | Prompts directory (`prompts/`) | Pending |
+| 12 | `story-12-devils-advocate.md` | Mandatory "devil's advocate" department + combined morality/ethics | Pending |
+
+> **Deployment status:** Stories 1–2 are deployed (the 8-phase Session
+> restructure + the `dispatch.py` split, plus the Phase-1 informal draft and the
+> 8-phase label cleanup). The next deployment is **Step 3** (Stories 3 + 4 + 5 —
+> headcount / pods / policy), per the order below.
 
 ## Deployment order (detailed, with reasoning)
 

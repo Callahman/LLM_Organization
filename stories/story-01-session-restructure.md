@@ -1,5 +1,12 @@
 # Story 1 — 8-Phase Session restructure
 
+> **Status: Done** — `Session.run` is the 8-phase sequence (the cycle loop wraps
+> Phases 4–8; Phases 1–3 run once, bounded by `max_iterations`); the Phase-1
+> informal draft is written to `state/mission_draft.md` and refined into the
+> formal `MISSION.md` in Phase 2; the 8-phase labels are applied across the
+> prompts, `solo.record`, the `EfficiencyMeter`, and the dashboard. (The Phase-2
+> department proposal is Story 6 — pending.)
+
 ## Goal
 
 Restructure the `Session.run` pipeline from the current **6 phases** to the

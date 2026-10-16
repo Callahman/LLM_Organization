@@ -1,6 +1,9 @@
 # EPIC: Refactor LLM_Organization to the 8-Phase Department Process
 
-> Status: **Proposed** — planning artifact. Not yet implemented.
+> Status: **Partially implemented** — **Stories 1–2 done** (the 8-phase Session
+> restructure + the `dispatch.py` split into plan/staff/execute, plus the
+> Phase-1 informal draft and the 8-phase label cleanup); **Stories 3–12
+> pending**.
 > Scope: the `D:\LLM\LLM_Organization` codebase (runtime / org / roles / pods / CLI).
 
 ## 1. Overview
@@ -207,30 +210,44 @@ are used as-is. The `department` **field** on `Role` holds the department slug
 > Check a task off as it is done.
 
 ### Story 1 — 8-Phase Session restructure (`runtime/session.py`)
-- [ ] Restructure `Session.run` to the 8 phases: Intake → Mission → Org
+
+**Status: DONE** — `Session.run` is the 8-phase sequence; the cycle loop wraps
+Phases 4–8 (Phases 1–3 run once, bounded by `max_iterations`); the Phase-1
+informal draft is written to `state/mission_draft.md` and refined into the
+formal `MISSION.md` in Phase 2; the 8-phase labels are applied across the
+prompts, `solo.record`, the `EfficiencyMeter`, and the dashboard. (The Phase-2
+**department proposal** is Story 6 — still pending.)
+
+- [x] Restructure `Session.run` to the 8 phases: Intake → Mission → Org
       bootstrap → Plan → Staff → Execute → Evaluate → Decide.
-- [ ] Keep **Intake (Phase 1) = `run_intake`** and **Mission (Phase 2) =
+- [x] Keep **Intake (Phase 1) = `run_intake`** and **Mission (Phase 2) =
       `run_mission`** largely unchanged (only add the department proposal to
-      Phase 2 and the informal draft after Phase 1).
-- [ ] Wire the **cycle loop** (Phase 4 → 5 → 6 → 7 → 8) repeating on "continue",
+      Phase 2 [Story 6] and the informal draft after Phase 1 [done]).
+- [x] Wire the **cycle loop** (Phase 4 → 5 → 6 → 7 → 8) repeating on "continue",
       bounded by `max_iterations`; update the `cycles` counter + `history.log_cycle`.
-- [ ] Update `SessionResult.phases` to `{1..8: count}`.
-- [ ] Update `solo.record` phase labels (Plan/Staff/Execute) + the
+- [x] Update `SessionResult.phases` to `{1..8: count}`.
+- [x] Update `solo.record` phase labels (Plan/Staff/Execute) + the
       `EfficiencyMeter.record_phase` wiring (phases 4–8).
-- [ ] Keep `Session._synthesis` / `Session._evaluate` as the Evaluate / Decide
+- [x] Keep `Session._synthesis` / `Session._evaluate` as the Evaluate / Decide
       bodies (optionally rename to `_evaluate_progress` / `_decide`).
 
 ### Story 2 — Split `dispatch.py` into plan / staff / execute (`runtime/`)
-- [ ] Extract `runtime/dispatch_common.py` (pure move of the shared helpers —
+
+**Status: DONE** — `runtime/dispatch.py` is a thin re-export shim; the shared
+helpers live in `runtime/dispatch_common.py`, and the three phase modules
+(`runtime/plan.py` Phase 4, `runtime/staff.py` Phase 5, `runtime/execute.py`
+Phase 6) hold the head / manager / IC workflows.
+
+- [x] Extract `runtime/dispatch_common.py` (pure move of the shared helpers —
       no logic change).
-- [ ] Create `runtime/plan.py` (Phase 4): the **head workflow** — leader+head
+- [x] Create `runtime/plan.py` (Phase 4): the **head workflow** — leader+head
       clarification pod → department policy → hire managers → allot team/IC
       headcount → head+manager clarification pods → Pod B.
-- [ ] Create `runtime/staff.py` (Phase 5): the **manager workflow** — hire ICs
+- [x] Create `runtime/staff.py` (Phase 5): the **manager workflow** — hire ICs
       → assign tasks → manager+ic clarification pods.
-- [ ] Create `runtime/execute.py` (Phase 6): IC execution → self-edits →
+- [x] Create `runtime/execute.py` (Phase 6): IC execution → self-edits →
       execution pods (A/B/C) → collaboration pod.
-- [ ] Delete `runtime/dispatch.py` (or keep a thin re-export shim for external
+- [x] Delete `runtime/dispatch.py` (or keep a thin re-export shim for external
       importers).
 
 ### Story 3 — Headcount caps + allotment (`runtime/org.py`, `plan.py`, `config.py`)
