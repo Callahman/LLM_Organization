@@ -34,6 +34,11 @@ class MissionResult:
     version: Optional[int]
     mission_path: Optional[str]
     edits: List[Dict[str, Any]] = field(default_factory=list)
+    # Story 6: the department proposal from Phase 2 (the departments + priority
+    # order, as a list of {name, priority, rationale} dicts, in priority order).
+    # Empty if the leader did not propose departments (bootstrap then falls back
+    # to the Phase-3 org_recommendation head proposal).
+    department_proposal: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def _mission_context(intake_result: IntakeResult, feedback: str,
@@ -65,6 +70,16 @@ def _mission_context(intake_result: IntakeResult, feedback: str,
         "`non_goals` (array), `constraints` (array), `org_recommendation` "
         "(object or string), `resource_envelope` (object or string)."
     )
+    # Story 6: also propose the departments the mission needs, in priority
+    # order (Phase 3 creates them).
+    parts.append(
+        "Also set `department_proposal` to a JSON OBJECT with a `departments` "
+        "array in PRIORITY order (highest first); each item is an OBJECT with "
+        "`name` (string, the department), `priority` (integer), and `rationale` "
+        "(string, why the mission needs it). Propose the OPERATIONAL departments "
+        "that will do the mission's work (derived from the purpose/scope), in "
+        "ADDITION to the governance departments (hr, safety, morality)."
+    )
     return "\n".join(parts)
 
 
@@ -83,6 +98,39 @@ def _mission_draft(out: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(rec, str) and rec.strip():
         return {"purpose": rec}
     return {}
+
+
+def _department_proposal(out: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Safely extract the Phase-2 ``department_proposal`` from the Leader's
+    output. Returns a list of ``{name, priority, rationale}`` dicts, in
+    priority order. Tolerates the shapes the real LLM free-forms: a dict with a
+    ``departments`` list, or a bare list; each item a dict (``name`` /
+    ``department``) or a bare string. Returns ``[]`` if absent/empty — so a
+    missing proposal degrades to the Phase-3 ``org_recommendation`` fallback
+    (never a crash)."""
+    rec = (out or {}).get("department_proposal")
+    if isinstance(rec, dict):
+        depts = rec.get("departments")
+    elif isinstance(rec, list):
+        depts = rec
+    else:
+        return []
+    if not (isinstance(depts, list) and depts):
+        return []
+    norm: List[Dict[str, Any]] = []
+    for i, d in enumerate(depts):
+        if isinstance(d, str) and d.strip():
+            norm.append({"name": d.strip(), "priority": i + 1, "rationale": ""})
+        elif isinstance(d, dict):
+            name = str(d.get("name", "") or d.get("department", "")).strip()
+            if not name:
+                continue
+            norm.append({
+                "name": name,
+                "priority": int(d.get("priority", i + 1)),
+                "rationale": str(d.get("rationale", "")),
+            })
+    return norm
 
 
 def _render_mission(draft: Dict[str, Any], version: int) -> str:
@@ -182,6 +230,7 @@ def run_mission(
     version: Optional[int] = None
     feedback = ""
     base_version = start_version or 0
+    proposal: List[Dict[str, Any]] = []  # Story 6
 
     while attempts < reask_budget:
         attempts += 1
@@ -190,6 +239,7 @@ def run_mission(
         out = backend.invoke(leader, ctx,
                              reasoning=classify_complexity(2, leader, {}), phase=2)
         draft = _mission_draft(out)
+        proposal = _department_proposal(out)  # Story 6
         # Story 11 (B11): guard the user-approval callback (bounded retry,
         # visible note, escalate on final failure — never a silent crash).
         decision = guarded_call(user_permission_fn, draft)
@@ -211,4 +261,5 @@ def run_mission(
         version=version,
         mission_path=mission_path if approved else None,
         edits=edits,
+        department_proposal=proposal if approved else [],  # Story 6
     )

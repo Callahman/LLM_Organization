@@ -82,8 +82,8 @@ are used as-is. The `department` **field** on `Role` holds the department slug
 
 | New Phase | Old Phase | What happens |
 |-----------|-----------|--------------|
-| 1. **Intake** | 1. Intake | **Largely unchanged.** Leader asks clarifying questions, refines MISSION.md (**informal**), saves the draft to `state/` |
-| 2. **Mission** | 2. Mission | **Largely unchanged** (now also: leader **proposes the departments** + priority order). Refines MISSION.md into a **formal, versioned** doc; user approves |
+| 1. **Intake** | 1. Intake | **Largely unchanged.** Leader asks clarifying questions (bounded rounds); a confidence threshold decides when to stop. **Convergence is gated on the leader restating the goal (`restated_goal` — a fuzzy goal must not short-circuit the intake); if no goal is established yet, the first question is the hard-coded "What is the organization's goal?"; at budget exhaustion the leader proceeds with its best understanding, explicitly marking assumptions. Refines MISSION.md (**informal**) and saves the draft to `state/` (`state/mission_draft.md`).** |
+| 2. **Mission** | 2. Mission | **Largely unchanged** (now also: leader **proposes the departments** + priority order, which Phase 3 creates). Refines MISSION.md into a **formal, versioned** doc; user approves. **On a revisit (`start_version` set), the version continues (v1 → v2 → ...) and the draft is seeded from the current mission + the Phase-1 informal draft.** |
 | 3. **Org bootstrap** | 3. Bootstrap | Creates the proposed **departments** + hires `department_head`s; leader **allots department headcount caps** (% of total); **Pod A** (all heads + leader) finalizes headcount per department |
 | 4. **Plan** | (part of 4. Dispatch) | Per department: **leader+head clarification pod** → head **authors the department policy** → head **hires `manager`s** → head **allots team/IC headcount** (% of department cap) → **head+manager clarification pods** → **Pod B** (all managers + head) finalizes headcount |
 | 5. **Staff** | (part of 4. Dispatch) | `manager`s **create ICs** + assign tasks → **manager+ic clarification pods** |
@@ -290,10 +290,16 @@ Phase 6) hold the head / manager / IC workflows.
       `department_head` owns the policy).
 
 ### Story 6 — Department proposal in the Mission phase (`roles/leader.py`, `runtime/mission.py`, `runtime/org.py`)
-- [ ] Add a **department-proposal** field to `LEADER_OUTPUT_SCHEMA` (the
+**Status: DONE** — the leader proposes the departments + priority order in Phase
+2 (a `department_proposal` field in `LEADER_OUTPUT_SCHEMA`); `MissionResult`
+carries them; `bootstrap` creates them in Phase 3 (one head per proposed
+department, in priority order), falling back to `org_recommendation` if the
+proposal is absent.
+
+- [x] Add a **department-proposal** field to `LEADER_OUTPUT_SCHEMA` (the
       departments + priority order) — the shape `bootstrap` reads.
-- [ ] `MissionResult` carries the proposed departments.
-- [ ] `bootstrap` accepts the proposed departments (fall back to
+- [x] `MissionResult` carries the proposed departments.
+- [x] `bootstrap` accepts the proposed departments (fall back to
       `org_recommendation` if the new field is absent).
 
 ### Story 7 — Config (`runtime/config.py`, `.env.example`)
@@ -325,7 +331,7 @@ Phase 6) hold the head / manager / IC workflows.
       cross-team / routing rule) + the collaboration pod (IC+manager).
 - [ ] `test_department_policy.py` — the `department_head` (NOT the IC) authors
       the department-scoped policy **after** the leader+head pod.
-- [ ] `test_department_proposal.py` — the leader proposes departments in Mission;
+- [x] `test_department_proposal.py` — the leader proposes departments in Mission;
       Org bootstrap creates them.
 - [ ] `test_prompts.py` — the pipeline's prompts live in the `prompts/`
       location with usage comments.

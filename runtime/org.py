@@ -350,6 +350,30 @@ def _extract_department_heads(out: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
+def _department_proposal_to_heads(mission_result: MissionResult) -> List[Dict[str, Any]]:
+    """Story 6: convert the Phase-2 department proposal (a list of
+    ``{name, priority, rationale}`` dicts, in priority order) into a list of
+    department-head specs (``{id, department, sub_architype, required,
+    mandate}``), in priority order. Each proposed department becomes one head
+    (the Phase-2 proposal is the primary source of the departments to create)."""
+    heads: List[Dict[str, Any]] = []
+    for spec in (mission_result.department_proposal if mission_result else []) or []:
+        if not isinstance(spec, dict):
+            continue
+        name = str(spec.get("name", "")).strip()
+        if not name:
+            continue
+        slug = _dept_slug(name)
+        heads.append({
+            "id": f"head_{slug}",
+            "department": slug,
+            "sub_architype": f"head_of_{slug}",
+            "required": False,
+            "mandate": str(spec.get("rationale", "")).strip() or f"Head of {name}.",
+        })
+    return heads
+
+
 def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
     """Ensure the required departments (hr, safety, morality) exist and are
     marked non-fireable."""
@@ -403,52 +427,61 @@ def bootstrap(
     In `additive` mode (a revisit), the bootstrap only **adds** roles — a
     proposed role whose id already exists in the org is skipped (never
     dropped / overwritten)."""
-    # Bounded retry: the leader's head proposal must include at least one
-    # operational department head (not just the required governance depts).
+    # Story 6: if the leader proposed the departments in Phase 2 (Mission),
+    # create them directly (one head per proposed department, in priority
+    # order) — the Phase-2 proposal is the primary source. Otherwise fall back
+    # to the Phase-3 head proposal (org_recommendation).
     proposed: List[Dict[str, Any]] = []
     last_out: Dict[str, Any] = {}
-    # Story 11 (B15): on a retry, append the previous attempt's failure reason
-    # to the context so the leader can adjust (instead of re-sending the same
-    # context).
-    retry_hint = ""
-    for _ in range(max(1, head_retry_budget)):
-        last_out = backend.invoke(
-            leader, _bootstrap_context(mission_result, retry_hint=retry_hint),
-            # The Leader's head proposal is a resourcing decision -> thinking on.
-            reasoning=classify_complexity(3, leader, {"is_decision": True}),
-            # The head proposal is a heavy operation (it proposes 5-6 department
-            # heads, each with a mandate, and the downstream hires) — give it a
-            # larger per-invoke budget than the flat default so it doesn't hit
-            # the 300s timeout. `None` uses the default.
-            timeout=bootstrap_timeout_seconds,
-            phase=3,
-        )
-        candidate = _extract_department_heads(last_out)
-        if _has_operational_head(candidate):
-            proposed = candidate
-            break
-        # Story 11 (B15): build the retry hint from the previous attempt's
-        # failure reason (the top-level / `org_recommendation` keys).
-        rec = last_out.get("org_recommendation")
-        rec_keys = (list(rec.keys()) if isinstance(rec, dict)
-                    else type(rec).__name__)
-        top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
-        retry_hint = f"top-level keys: {top_keys}; org_recommendation: {rec_keys}"
-    if not _has_operational_head(proposed):
-        # Visible diagnostic: show exactly what the leader returned so the
-        # cause is self-evident from the traceback (no re-run to debug).
-        rec = last_out.get("org_recommendation")
-        rec_keys = (list(rec.keys()) if isinstance(rec, dict)
-                    else type(rec).__name__)
-        top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
-        raise BootstrapError(
-            "Phase 3 produced no operational department heads "
-            f"(after {head_retry_budget} attempts) — the org would have only "
-            "the required governance departments (hr, safety, morality), so no "
-            "work could be dispatched in Phase 4. Re-run the session.\n"
-            f"  leader reply top-level keys: {top_keys}\n"
-            f"  leader reply org_recommendation: {rec_keys}"
-        )
+    dept_proposal = (mission_result is not None
+                     and getattr(mission_result, "department_proposal", None))
+    if dept_proposal:
+        proposed = _department_proposal_to_heads(mission_result)
+    if not proposed:
+        # Bounded retry: the leader's head proposal must include at least one
+        # operational department head (not just the required governance depts).
+        # Story 11 (B15): on a retry, append the previous attempt's failure
+        # reason to the context so the leader can adjust (instead of
+        # re-sending the same context).
+        retry_hint = ""
+        for _ in range(max(1, head_retry_budget)):
+            last_out = backend.invoke(
+                leader, _bootstrap_context(mission_result, retry_hint=retry_hint),
+                # The Leader's head proposal is a resourcing decision -> thinking on.
+                reasoning=classify_complexity(3, leader, {"is_decision": True}),
+                # The head proposal is a heavy operation (it proposes 5-6 department
+                # heads, each with a mandate, and the downstream hires) — give it a
+                # larger per-invoke budget than the flat default so it doesn't hit
+                # the 300s timeout. `None` uses the default.
+                timeout=bootstrap_timeout_seconds,
+                phase=3,
+            )
+            candidate = _extract_department_heads(last_out)
+            if _has_operational_head(candidate):
+                proposed = candidate
+                break
+            # Story 11 (B15): build the retry hint from the previous attempt's
+            # failure reason (the top-level / `org_recommendation` keys).
+            rec = last_out.get("org_recommendation")
+            rec_keys = (list(rec.keys()) if isinstance(rec, dict)
+                        else type(rec).__name__)
+            top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
+            retry_hint = f"top-level keys: {top_keys}; org_recommendation: {rec_keys}"
+        if not _has_operational_head(proposed):
+            # Visible diagnostic: show exactly what the leader returned so the
+            # cause is self-evident from the traceback (no re-run to debug).
+            rec = last_out.get("org_recommendation")
+            rec_keys = (list(rec.keys()) if isinstance(rec, dict)
+                        else type(rec).__name__)
+            top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
+            raise BootstrapError(
+                "Phase 3 produced no operational department heads "
+                f"(after {head_retry_budget} attempts) — the org would have only "
+                "the required governance departments (hr, safety, morality), so no "
+                "work could be dispatched in Phase 4. Re-run the session.\n"
+                f"  leader reply top-level keys: {top_keys}\n"
+                f"  leader reply org_recommendation: {rec_keys}"
+            )
     # Story 11 (B16): total org-size cap — refuse a bootstrap that proposes
     # more heads than the cap (visible note, never silent).
     current_roles = len(org.roles)
