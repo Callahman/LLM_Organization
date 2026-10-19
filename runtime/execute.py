@@ -134,6 +134,44 @@ def run_execute(
                             "pointer": "",
                         })
                         continue
+                    # Story 4: the **collaboration pod** (IC + manager) — if the
+                    # IC's work flagged a collaboration need (`collaborate`),
+                    # the manager sets up the pod (kind="collaboration", capped
+                    # iterations). The pod's outcome is carried into the IC's
+                    # work (the IC retries with the collaboration).
+                    _collaborate = ic_out.get("collaborate")
+                    if _collaborate:
+                        collab_pod = form_pod(
+                            org.roles, manager.id, [manager.id, ic.id],
+                            f"Collaboration needed (IC {ic.id}): "
+                            f"{str(_collaborate)[:80]}",
+                            kind="collaboration",
+                        )
+                        _run_contained_pod(
+                            backend, org, collab_pod,
+                            max_rounds=(config or {}).get(
+                                "collaboration_pod_rounds"),
+                            phase=6)
+                        # The collaboration pod is surfaced in `pods_out` (the
+                        # leader's synthesis + the session's pod records) —
+                        # its run is contained, but the pod itself (membership
+                        # + decision) is recorded like the A/B/C trigger pods.
+                        if pods_out is not None:
+                            pods_out.append(collab_pod)
+                        # The IC retries its work with the collaboration pod's
+                        # outcome (the collaboration plan).
+                        _ic_retry, _ic_retry_err = _invoke_ic(
+                            backend, ic,
+                            _ic_ctx(
+                                ic, task.get("task", ""),
+                                policy_summary=head_policies.get(
+                                    head.id, {}).get("policy_summary", ""),
+                                digest=digest,
+                                clarification=collab_pod.decision or ""),
+                            reasoning=classify_complexity(6, ic, {}),
+                            timeout=ic_timeout_seconds, phase=6)
+                        if _ic_retry_err is None:
+                            ic_out = _ic_retry
                     # Keep the full IC outputs for the pod triggers
                     # (disagreement detection needs the recommendations, not
                     # just the upward reports).
