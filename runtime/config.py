@@ -15,9 +15,35 @@ non-``LLM_*`` org-tuning knobs (plus the two timeout backstops).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from typing import Any, Dict, Tuple
+
+def _parse_routing_rules(raw: str) -> list:
+    """Parse the `ROUTING_RULES` env value into a list of routing-rule strings
+    (the Trigger C execution-pod routing rules — the task types that always go
+    to a pod). Accepts a JSON list (e.g. `["evaluation", "incident"]`) or a
+    comma-separated list (e.g. `evaluation,incident`). An empty value returns
+    an empty list (no routing rules). A value that is valid JSON but neither a
+    list nor a string raises `ValueError` (the knob falls back to the code
+    default with a warning)."""
+    raw = raw.strip()
+    if not raw or raw == "[]":
+        return []
+    try:
+        val = json.loads(raw)
+    except json.JSONDecodeError:
+        # Not JSON — treat it as a comma-separated list (a single word yields a
+        # one-element list).
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    if isinstance(val, list):
+        return [str(v) for v in val]
+    if isinstance(val, str):
+        return [val]
+    raise ValueError(
+        f"expected a JSON list of routing rules, got {type(val).__name__}")
+
 
 # ``.env`` key -> (Session config key, cast). The cast is applied to the raw
 # env string; a value that fails to cast falls back to the code default (a
@@ -65,6 +91,19 @@ ENV_TO_CONFIG: Dict[str, Tuple[str, Any]] = {
     "HEADCOUNT_POD_ROUNDS": ("headcount_pod_rounds", int),
     "EXECUTION_POD_ROUNDS": ("execution_pod_rounds", int),
     "COLLABORATION_POD_ROUNDS": ("collaboration_pod_rounds", int),
+    # Story 7: the **headcount cap defaults** — the default department cap (as
+    # a % of the total, 0.0-1.0) and the default team cap (as a % of the
+    # department cap, 0.0-1.0). These inform the cap allotment (Story 3): the
+    # leader / head allots the caps, and these defaults are the starting point
+    # (read by the cap-allotment context as a resourcing hint).
+    "DEPARTMENT_CAP_DEFAULT": ("department_cap_default", float),
+    "TEAM_CAP_DEFAULT": ("team_cap_default", float),
+    # Story 7: the **execution-pod routing rules** (Trigger C) — a JSON list of
+    # task types that always go to a pod (e.g. ["evaluation", "incident"]), or a
+    # comma-separated list. Plumbed to `pod_routing_rules` — the config key the
+    # Session's Execute phase reads and hands to the A/B/C trigger check
+    # (dispatch_common._check_pod_triggers).
+    "ROUTING_RULES": ("pod_routing_rules", _parse_routing_rules),
 }
 
 # The ``LLM_*`` keys read directly by ``make_backend`` (not mapped here, but
