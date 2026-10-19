@@ -84,20 +84,39 @@ def test_head_generates_policy_before_managers(tmp_path, monkeypatch):
     backend.set_script("leader", [
         {"decomposition": {"department_objectives": [
             {"head_id": "head_analytics", "objective": "build the pipeline"}]}},
+        # leader+head pod (leader is the starter): agenda + close.
+        {"summary": "agenda set", "agenda": "clarify the department's mission"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
     ])
-    # The head's script: [policy, decomposition] — the first invoke is the
-    # policy generation, the second is the decomposition.
+    # The head's script: [pod speak, pod speak, policy, decomposition, pod
+    # agenda, pod close] — the leader+head pod (head is a member: 2 speaks)
+    # runs BEFORE the policy (its main call), then the head+manager pod (head
+    # is the starter: agenda + close) runs after the decomposition.
     backend.set_script("head_analytics", [
+        {"summary": "pod speak 1"},
+        {"summary": "pod speak 2"},
         {"policy": "ALWAYS use schema v2.", "policy_summary": "use schema v2",
          "summary": "policy set", "confidence": 0.9},
         {"decomposition": {"team_objectives": [
             {"manager_id": "mgr1", "objective": "build the ETL"}]}},
+        {"summary": "agenda set", "agenda": "clarify the team's mission"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
     ])
     backend.set_script("mgr1", [
+        {"summary": "pod speak 1"},
+        {"summary": "pod speak 2"},
         {"decomposition": {"ic_tasks": [
             {"ic_id": "ic1", "task": "write the extractor"}]}},
+        # manager+ic pod (mgr1 is the starter): agenda + close.
+        {"summary": "agenda set", "agenda": "clarify ic1's task"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
     ])
     backend.set_script("ic1", [
+        {"summary": "pod speak 1"},
+        {"summary": "pod speak 2"},
         {"summary": "extractor done",
          "work_path": "departments/analytics/pipelines/extractor.md"},
     ])
@@ -293,21 +312,50 @@ class _FlakyBackend:
 
 
 def _decomposition_scripts(backend):
-    """The leader -> head -> manager decomposition scripts (a single IC task)."""
+    """The leader -> head -> manager decomposition scripts (a single IC task).
+
+    The clarification pods (leader+head, head+manager, manager+ic) run BEFORE
+    each main call, so each role's script prepends its pod participation (the
+    starter does agenda + close; the member does 2 speaks) before its main-call
+    entry.
+    """
     backend.set_script("leader", [
         {"decomposition": {"department_objectives": [
             {"head_id": "head_analytics", "objective": "build the pipeline"},
         ]}},
+        # leader+head pod (leader is the starter): agenda + close.
+        {"summary": "agenda set", "agenda": "clarify the department's mission"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
     ])
     backend.set_script("head_analytics", [
+        # leader+head pod (head is a member): 2 speaks.
+        {"summary": "pod speak 1"},
+        {"summary": "pod speak 2"},
+        # The head's policy (its main call, Phase 4).
+        {"policy": "ALWAYS use schema v2.", "policy_summary": "use schema v2",
+         "summary": "policy set", "confidence": 0.9},
+        # The head's decomposition (Phase 4).
         {"decomposition": {"team_objectives": [
             {"manager_id": "mgr1", "objective": "build the ETL"},
         ]}},
+        # head+manager pod (head is the starter): agenda + close.
+        {"summary": "agenda set", "agenda": "clarify the team's mission"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
     ])
     backend.set_script("mgr1", [
+        # head+manager pod (manager is a member): 2 speaks.
+        {"summary": "pod speak 1"},
+        {"summary": "pod speak 2"},
+        # The manager's decomposition (its main call, Phase 5).
         {"decomposition": {"ic_tasks": [
             {"ic_id": "ic1", "task": "write the extractor"},
         ]}},
+        # manager+ic pod (mgr1 is the starter): agenda + close.
+        {"summary": "agenda set", "agenda": "clarify ic1's task"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
     ])
 
 
@@ -342,12 +390,20 @@ def test_dispatch_ic_corrective_retry_recovers():
     org, leader, head, mgr, ic = _org()
     inner = StubBackend()
     _decomposition_scripts(inner)
+    # Option A (pod ABORTS): the manager+ic pod's member speak is a bare call
+    # that propagates out of run_pod and is contained by _run_contained_pod.
+    # ic1's first failure is that pod speak (aborting the pod); its second
+    # failure is the work invoke (first try). The corrective retry (nudge)
+    # then succeeds, consuming work_output at index 0 — the script is just
+    # [work_output] (the failed invokes consume no entries).
     inner.set_script("ic1", [
         {"summary": "extractor done",
          "work_path": "departments/analytics/pipelines/extractor.md"},
     ])
-    # ic1 fails ONCE (the corrective retry succeeds).
-    backend = _FlakyBackend(inner, fail_roles={"ic1"}, fail_times=1)
+    # ic1 fails TWICE: its first invoke (the pod speak, aborting the pod) and
+    # its second invoke (the work, first try) — the corrective retry (nudge)
+    # then succeeds.
+    backend = _FlakyBackend(inner, fail_roles={"ic1"}, fail_times=2)
     mission = {"purpose": "a data pipeline", "success_criteria": ["works"],
                "scope": ["ETL"]}
     reports = dispatch(backend, org, leader, mission)

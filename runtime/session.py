@@ -49,10 +49,10 @@ from roles.base import Role
 from runtime.llm import LLMBackend, MemoryBackend, TimeoutBackend
 from runtime.intake import run_intake, IntakeResult
 from runtime.mission import run_mission, MissionResult, load_mission
-from runtime.org import OrgState, bootstrap
+from runtime.org import OrgState, bootstrap, allot_department_caps
 from runtime import dispatch
 from runtime import plan, staff, execute
-from runtime.pods import SoloTracker
+from runtime.pods import SoloTracker, form_pod, run_pod
 from runtime.history import HistoryStore
 from runtime.timing import TimingTracker, TimingBackend
 from runtime.efficiency import (
@@ -209,7 +209,50 @@ class Session:
 
     # --- Phase 7 evaluate -------------------------------------------------
 
+    def _run_reporting_pods(self) -> None:
+        """Story 4: the **reporting pods** (Phase 7) — the child reports to the
+        parent (after work): ic→manager, manager→head, head→leader. Each is a
+        2-member parent+child pod (kind="reporting"), capped at the reporting
+        pod round count. The decisions the pods close on are carried up to the
+        leader's synthesis (the existing ``self.pods`` carry-over path)."""
+        config = self.config
+        max_rounds = config.get("reporting_pod_rounds")
+        # The leader is not a member of `self.org.roles` — add it so the
+        # head→leader reporting pod can be formed (starter = the leader).
+        roles = {**self.org.roles, self.leader.id: self.leader}
+        # ic→manager + manager→head: each role reports to its `reports_to` boss.
+        for role in self.org.active_roles():
+            if role.architype not in ("ic", "manager"):
+                continue
+            parent_id = getattr(role, "reports_to", None)
+            if not parent_id:
+                continue
+            parent = roles.get(parent_id)
+            if parent is None:
+                continue
+            pod = form_pod(
+                roles, parent.id, [parent.id, role.id],
+                f"{role.id} reports to {parent.id} (status / results / "
+                f"fire-replace-keep decisions + headcount changes)",
+                kind="reporting",
+            )
+            run_pod(self.backend, pod, max_rounds=max_rounds, phase=7)
+        # head→leader: each department head reports to the leader.
+        for head in self.org.department_heads():
+            pod = form_pod(
+                roles, self.leader.id, [self.leader.id, head.id],
+                f"{head.id} reports to {self.leader.id} (status / results / "
+                f"fire-replace-keep decisions + headcount changes)",
+                kind="reporting",
+            )
+            run_pod(self.backend, pod, max_rounds=max_rounds, phase=7)
+
     def _evaluate_progress(self) -> str:
+        # Story 4: the **reporting pods** (ic→manager, manager→head,
+        # head→leader) run BEFORE the leader's synthesis — the child reports
+        # to the parent (after work), and the decisions the pods close on are
+        # carried up to the leader (the existing `self.pods` carry-over path).
+        self._run_reporting_pods()
         ctx = (
             "PHASE 7: check progress against the mission's success criteria AND "
             "assess whether the deliverable can be IMPROVED (more polished, "
@@ -621,6 +664,13 @@ class Session:
                     self.config.get("ic_timeout_seconds")))
             p3_ended = time.time()
             self.org.write_events()
+            # Story 3: the leader allots the **department caps** + **Pod A**
+            # (all heads + the leader, the leader has final say) — the
+            # department headcount is finalized + recorded in the mission
+            # addendum (before the Phase 4 plan allots the team caps).
+            allot_department_caps(
+                self.org, self.backend, self.leader, mission_path,
+                config=self.config)
             # Story 1 (B1): checkpoint after Phase 3 — a crash in Phase 4
             # loses at most the current iteration's hires, not the
             # bootstrapped org.

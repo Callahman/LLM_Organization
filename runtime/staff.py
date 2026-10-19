@@ -27,12 +27,13 @@ from runtime.org import OrgState
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
 from runtime.history import HistoryStore
-from runtime.pods import SoloTracker
+from runtime.pods import SoloTracker, form_pod
 from runtime.plan import PlanResult
 from runtime.dispatch_common import (
     _manager_ctx,
     _decomposition_list,
     _ensure_role,
+    _run_contained_pod,
 )
 
 
@@ -50,6 +51,23 @@ class StaffResult:
 
     plan: PlanResult
     departments: List[Dict[str, Any]] = field(default_factory=list)
+
+
+# --- Story 3: the headcount cap chain (Phase 5 — enforce the team/IC cap) ---
+
+def _team_cap_ok(org: OrgState, department: str, team: str) -> bool:
+    """Story 3: whether a hire into the team is allowed (the current active IC
+    count + 1 ≤ the team cap). If the team has no cap allotted, the hire is
+    allowed (the org then falls back to the per-manager IC cap, ``DIRECT_IC_CAP``)."""
+    cap = org.team_caps.get((department, team))
+    if not cap:
+        return True
+    current = sum(
+        1 for r in org.active_roles()
+        if r.architype == "ic" and r.department == department
+        and r.team == team
+    )
+    return current + 1 <= cap
 
 
 def run_staff(
@@ -78,15 +96,33 @@ def run_staff(
         for t_obj in dept["team_objectives"]:
             manager = org.get(t_obj.get("manager_id", ""))
             if manager is not None:
+                # Story 4: the **head+manager clarification pod** (per team) —
+                # a 2-member parent+child pod that clarifies the team's
+                # mission. It runs BEFORE the manager decomposes (Story 5: the
+                # IC tasks reflect the clarified team mission), and is
+                # **contained** (a pod failure is logged, never takes down the
+                # phase).
+                pod = form_pod(
+                    org.roles, head.id, [head.id, manager.id],
+                    f"Clarify the team's mission (team "
+                    f"{t_obj.get('team') or manager.team})",
+                    kind="clarification",
+                )
+                _run_contained_pod(backend, org, pod,
+                                   max_rounds=(config or {}).get(
+                                       "clarification_pod_rounds"),
+                                   phase=5)
                 # Manager branch: the manager decomposes its team objective
                 # into IC tasks (invoked with the department POLICY + the
-                # bounded mission digest).
+                # bounded mission digest + the clarification pod's outcome
+                # (Story 5)).
                 mgr_out = backend.invoke(
                     manager,
                     _manager_ctx(
                         manager, t_obj.get("objective", ""),
                         policy=head_policies.get(head.id, {}).get("policy", ""),
-                        digest=digest),
+                        digest=digest,
+                        clarification=pod.decision or ""),
                     reasoning=classify_complexity(5, manager, {}), phase=5)
                 ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
                 # Solo (P4, manager): record the manager's decomposition
@@ -102,11 +138,25 @@ def run_staff(
                     )
                 # Hire the ICs the tasks name (the managers->ICs chain, through
                 # the HR approver). Phase 6 (Execute) invokes them.
+                # Story 3: enforce the **team/IC cap** (a hire that would
+                # exceed the team cap is blocked — a visible note, never
+                # silent). (The manager+ic clarification pod runs in Phase 6
+                # (Execute), AFTER the IC's work — see run_execute.)
                 for task in ic_tasks:
-                    ic = org.get(task.get("ic_id", ""))
-                    if ic is None and task.get("ic_id"):
+                    ic_id = task.get("ic_id", "")
+                    if not ic_id:
+                        continue
+                    ic = org.get(ic_id)
+                    if ic is None:
+                        if not _team_cap_ok(org, manager.department, manager.team):
+                            org.log_event(
+                                "team_cap_reached", manager.id, ic_id,
+                                {"department": manager.department,
+                                 "team": manager.team},
+                            )
+                            continue
                         _ensure_role(
-                            org, manager, task.get("ic_id"), "ic",
+                            org, manager, ic_id, "ic",
                             manager.department, manager.team, approver_fn,
                             direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
                         )
@@ -118,19 +168,29 @@ def run_staff(
             else:
                 # Head-directed branch (no manager — the head directs an IC
                 # directly): the single IC the team objective names is hired.
-                ic = org.get(t_obj.get("ic_id", ""))
-                if ic is None and t_obj.get("ic_id"):
-                    # `team` becomes the team work dir
-                    # (departments/<dept>/<team>/). Fall back to the ic_id so
-                    # it is NEVER empty — an empty team leaves the IC with no
-                    # concrete work root.
-                    _ensure_role(
-                        org, head, t_obj.get("ic_id"), "ic",
-                        head.department,
-                        t_obj.get("team") or t_obj.get("ic_id", ""),
-                        approver_fn,
-                        direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
-                    )
+                ic_id = t_obj.get("ic_id", "")
+                if ic_id:
+                    ic = org.get(ic_id)
+                    if ic is None:
+                        # `team` becomes the team work dir
+                        # (departments/<dept>/<team>/). Fall back to the ic_id
+                        # so it is NEVER empty — an empty team leaves the IC
+                        # with no concrete work root.
+                        team = t_obj.get("team") or ic_id
+                        # Story 3: enforce the team/IC cap (a hire that would
+                        # exceed the team cap is blocked — a visible note).
+                        if not _team_cap_ok(org, head.department, team):
+                            org.log_event(
+                                "team_cap_reached", head.id, ic_id,
+                                {"department": head.department, "team": team},
+                            )
+                        else:
+                            _ensure_role(
+                                org, head, ic_id, "ic",
+                                head.department, team, approver_fn,
+                                direct_ic_cap=(config or {}).get(
+                                    "direct_ic_cap", 3),
+                            )
                 teams.append({
                     "t_obj": t_obj,
                     "manager": None,

@@ -29,7 +29,7 @@ from runtime.org import OrgState
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
 from runtime.history import HistoryStore
-from runtime.pods import SoloTracker
+from runtime.pods import SoloTracker, form_pod
 from runtime.staff import StaffResult
 from runtime.dispatch_common import (
     _ic_ctx,
@@ -38,6 +38,7 @@ from runtime.dispatch_common import (
     _invoke_ic,
     _apply_ic_self_edits,
     _check_pod_triggers,
+    _run_contained_pod,
 )
 
 
@@ -97,13 +98,29 @@ def run_execute(
                     ic = org.get(task.get("ic_id", ""))
                     if ic is None:
                         continue
+                    # Story 4: the **manager+ic clarification pod** (per IC) —
+                    # a 2-member parent+child pod that clarifies the IC's
+                    # task. It runs BEFORE the IC's work (Story 5: the work
+                    # reflects the clarified task), and is **contained** (a pod
+                    # failure is logged, never takes down the phase).
+                    pod = form_pod(
+                        org.roles, manager.id, [manager.id, ic.id],
+                        f"Clarify the IC's task (task "
+                        f"{str(task.get('task', ''))[:80]})",
+                        kind="clarification",
+                    )
+                    _run_contained_pod(backend, org, pod,
+                                       max_rounds=(config or {}).get(
+                                           "clarification_pod_rounds"),
+                                       phase=6)
                     ic_out, ic_err = _invoke_ic(
                         backend, ic,
                         _ic_ctx(
                             ic, task.get("task", ""),
                             policy_summary=head_policies.get(
                                 head.id, {}).get("policy_summary", ""),
-                            digest=digest),
+                            digest=digest,
+                            clarification=pod.decision or ""),
                         reasoning=classify_complexity(6, ic, {}),
                         timeout=ic_timeout_seconds, phase=6)
                     if ic_err is not None:

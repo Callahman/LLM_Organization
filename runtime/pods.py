@@ -64,6 +64,25 @@ class Pod:
     # round in `pods/transcripts/` so the dashboard can watch the leader's
     # solo work, not just the multi-role pods.
     solo: bool = False
+    # Story 4: the pod **type** — one of "clarification", "reporting",
+    # "headcount", "execution", "collaboration". It drives the **default
+    # capped round count** (the pod runs for a bounded number of iterations,
+    # then the initiator returns a result) and is recorded in the transcript /
+    # decision artifact. "execution" is the default (the existing A/B/C pods).
+    kind: str = "execution"
+
+
+# Story 4: the **default capped round count per pod kind**. Every pod runs for
+# a bounded number of iterations, then the initiator returns a result. The
+# caller can override the round count per pod (an explicit `max_rounds`), and
+# the config can override the per-kind default (e.g. `CLARIFICATION_POD_ROUNDS`).
+POD_KIND_DEFAULT_ROUNDS: Dict[str, int] = {
+    "clarification": 2,
+    "reporting": 2,
+    "headcount": 3,
+    "execution": 3,
+    "collaboration": 3,
+}
 
 
 def form_pod(
@@ -74,6 +93,7 @@ def form_pod(
     cross_team: bool = False,
     min_roles: int = tiers.POD_MIN_ROLES,
     max_roles: int = tiers.POD_MAX_ROLES,
+    kind: str = "execution",
 ) -> Pod:
     """Form a pod from `roles`: the starter + members, validated against the
     2–6 size and 1-tier-spread bounds (raises `PodMembershipError` if invalid).
@@ -106,7 +126,7 @@ def form_pod(
                         f"(the communication gate)"
                     )
     return Pod(id=_next_pod_id(starter_id), starter=starter,
-               members=members, topic=topic)
+               members=members, topic=topic, kind=kind)
 
 
 def chained_pod(
@@ -169,7 +189,7 @@ def _pod_ctx(pod: Pod, kind: str, prior: str = "",
     return bounded_assembly(agenda, summaries, budget_tokens)
 
 
-def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
+def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
             transcripts_dir: Optional[str] = None,
             pod_wall_clock_seconds: float = 600.0,
             budget_tokens: int = 4000,
@@ -182,10 +202,19 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: int = 3,
        (conflicting recommendations) uses "thinking" (HIGH);
     3. the **starter** always closes, producing the decision.
 
+    **Story 4 (capped iterations):** the round count is **capped** — if
+    ``max_rounds`` is not given, it defaults to the pod's **kind**
+    (``POD_KIND_DEFAULT_ROUNDS``), so every pod runs for a bounded number of
+    iterations before the starter (the initiator) returns a result. An explicit
+    ``max_rounds`` overrides the per-kind default.
+
     When ``transcripts_dir`` is given, the transcript file is (re)written
     after the agenda and after each deliberation round, so the file grows
     **live** (the observability dashboard tails it for the active-pod view).
     """
+    # Story 4: the capped round count defaults to the pod's kind.
+    if max_rounds is None:
+        max_rounds = POD_KIND_DEFAULT_ROUNDS.get(pod.kind, 3)
     # 1. The starter sets the agenda.
     out = backend.invoke(pod.starter,
                          _pod_ctx(pod, "agenda", budget_tokens=budget_tokens),
@@ -258,6 +287,7 @@ def write_transcripts(pod: Pod, transcripts_dir: str = "pods/transcripts") -> st
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     with open(base + ".md", "w", encoding="utf-8") as f:
         f.write(f"# Pod {pod.id}: {pod.topic}\n\n")
+        f.write(f"- kind: {pod.kind}\n")
         f.write(f"- starter: {pod.starter.id}\n")
         f.write(f"- members: {', '.join(m.id for m in pod.members)}\n")
         f.write(f"- agenda: {pod.agenda}\n")
@@ -295,6 +325,7 @@ def write_decision_artifact(pod: Pod, artifacts_dir: str = "pods/artifacts") -> 
     artifact = {
         "pod": pod.id,
         "topic": pod.topic,
+        "kind": pod.kind,
         "decision": pod.decision,
         "rationale": pod.rationale,
         "open_items": pod.open_items,
