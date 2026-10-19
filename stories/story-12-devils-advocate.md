@@ -1,80 +1,114 @@
-# Story 12 — Mandatory "devil's advocate" department + combined morality/ethics
+# Story 12 — "Devil's advocate" role (a leader's direct report / red-team auditor)
 
 ## Goal
 
-Two changes to the department structure:
+Add a **single "devil's advocate" role** — a red-team auditor reporting
+**directly to the leader** — that institutes a formal **"gut check"** on the
+org's outcomes. It is **not** a department: it is one role, created outside the
+normal reporting chain so the people it checks cannot shape what it sees.
 
-1. **The morality + ethics departments are combined** into one.
-2. A **mandatory "devil's advocate" department** (always created in Org
-   bootstrap) whose mandate is to **evaluate the other departments' work** +
-   **raise concerns** (lies, hallucinations, inappropriate work). It is **one
-   of the only departments that can read other departments' directories**
-   (cross-department read access, scoped in `permissions.py`).
+The role's charter:
+
+1. **Always created** in Org bootstrap (mandatory — not optional).
+2. **Cross-department read access** — one of the only roles that can read other
+   departments' directories (scoped in `permissions.py`).
+3. **"Listens" to any pod the leader is in AND any pod the heads are in** — it
+   observes those deliberations, not just the final reports.
+4. **Primed to doubt** — it does not accept information as true; it checks
+   claims against what the pipeline has actually produced.
+5. **Heavy emphasis on moral decision-making** — it flags immoral/improper
+   actions, not just factual errors.
+6. **Phase 7 hook** — in Evaluate it returns a verdict (`clean` /
+   `flag: <findings>`); in **Phase 8 (Decide)** a `flag` is consumed by the
+   leader to **force a re-check** or **block a stop** (don't ship
+   low-quality/immoral outcomes).
+
+> **Examples (the spec's intent):**
+> - A head claiming **"We have generated $1k in revenue"** is **doubted** if
+>   the pipeline hasn't even run yet (no execution artifacts to back the claim).
+> - A head proposing **"generate more revenue by bypassing a website's
+>   robots.txt"** is **flagged as immoral/improper** (an ethics violation,
+>   independent of whether it would work).
 
 ## Files
 
-- `runtime/org.py` — **modify** (the mandatory department is always created;
-  the morality + ethics combination).
+- `runtime/org.py` — **modify** (the role is always created in bootstrap).
+- `runtime/pods.py` — **modify** (the role "listens" to the leader's + heads'
+  pods — it observes their deliberations).
+- `runtime/session.py` — **modify** (the Phase-7 verdict + the Phase-8
+  consequence — a `flag` forces a re-check / blocks a stop).
 - `runtime/permissions.py` — **modify** (the cross-department read access).
 - `org/tiers.py` — **modify** (the `can_read` / `cross_team_read` logic for the
   devil's advocate).
 
 ## Detailed changes
 
-### 12.1 `runtime/org.py` — the mandatory "devil's advocate" department
+### 12.1 `runtime/org.py` — the "devil's advocate" role is always created
 
-In `org.bootstrap` (Phase 3), the **mandatory "devil's advocate" department**
-is **always created** (even if the leader omits it from the
-`department_proposal`, Story 6):
+In `org.bootstrap` (Phase 3), the **"devil's advocate" role** is **always
+created** (even if the leader omits it from the `department_proposal`, Story
+6):
 
-1. **The department slug** — e.g. `devils_advocate` (no apostrophe — it is a
-   slug). Define a constant (e.g. `DEVILS_ADVOCATE_DEPT = "devils_advocate"`).
-2. **Always created** — `org.bootstrap` ensures the devil's advocate
-   department is created (the `departments/devils_advocate/` directory) + the
-   `department_head` is hired (the existing `org.hire` path, HR-approved). This
-   is **in addition to** the leader's proposed departments (the proposal + the
-   mandatory department).
-3. **The mandate** — the devil's advocate head's mandate is to **evaluate the
-   other departments' work** + **raise concerns** (lies, hallucinations,
-   inappropriate work). The mandate is set on the head role (the
-   `department_head` for the `devils_advocate` department).
+1. **The role** — a single `Role` with a `devil's advocate` mandate. It reports
+   **directly to the leader** (it is the leader's direct report — a red-team
+   auditor, not a `department_head` of a working department). Define a constant
+   (e.g. `DEVILS_ADVOCATE_ROLE = "devils_advocate"`).
+2. **Always created** — `org.bootstrap` ensures the role is hired (the existing
+   `org.hire` path, HR-approved). This is **in addition to** the leader's
+   proposed departments (the proposal + the mandatory role).
+3. **The mandate** — the role's mandate is to **institute a formal "gut check"**
+   on the org's outcomes: **primed to doubt** (does not accept claims as true),
+   **heavy on moral decision-making** (flags immoral/improper actions), and to
+   **raise concerns** (fabrication, hallucination, low-quality outcomes). The
+   mandate is set on the role.
 
-### 12.2 `runtime/org.py` — the morality + ethics combination
+> **Note:** the role is **not** a `department_head` and does **not** own a
+> `departments/<slug>/` directory — it is a standalone role reporting to the
+> leader. It does **not** change the architypes (`leader → department_head →
+> manager → ic`) or add a new tier.
 
-The current org has **separate "morality" and "ethics" departments**. They are
-**combined into one**:
+### 12.2 `runtime/pods.py` — the role "listens" to the leader's + heads' pods
 
-1. **The combined department** — e.g. `ethics` (or `morality_ethics`). Define a
-   constant (e.g. `ETHICS_DEPT = "ethics"`).
-2. **The combination** — `org.bootstrap` creates **one** ethics department
-   (not two). If the leader's `department_proposal` (Story 6) includes both
-   "morality" and "ethics", they are **merged** into the single ethics
-   department (the head is hired once).
-3. **The mandate** — the combined ethics department's mandate is the union of
-   the old morality + ethics mandates.
+The role **"listens" to any pod the leader is in AND any pod the heads are in**
+(it observes those deliberations, not just the final reports):
 
-> **Note:** the exact slugs (`devils_advocate`, `ethics`) are up to the
-> implementation — define them as constants in `org.py` (or a config) so they
-> are consistent across the codebase.
+1. **The listener** — when a pod the leader or a head is in is formed (e.g.
+   Pod A — all `department_head`s + the leader; the leader+head clarification
+   pods; the head+manager pods), the devil's advocate role is given **read
+   access to the pod's deliberation** (it observes the pod's messages /
+   clarifications).
+2. **The scope** — the role listens to:
+   - **any pod the leader is in** (e.g. Pod A, the leader-replacement vote, the
+     leader+head clarification pods);
+   - **any pod the heads are in** (e.g. Pod A, the leader+head clarification
+     pods, the head+manager pods).
+3. **The observation** — the role's listening is **visible** (it is logged in
+   the audit trail, matching the existing "visible, never silent" philosophy).
+   The role's reads of the pods' deliberations are recorded in the audit (so
+   the operator can see the cross-pod reads).
+
+> **Note:** "listening" means the role **observes** the pod's deliberation (it
+> reads the pod's messages / clarifications) — it does **not** participate in
+> the pod (it is not a pod member). It uses its cross-department read access to
+> observe the pods.
 
 ### 12.3 `runtime/permissions.py` — the cross-department read access
 
-The devil's advocate department (all its roles) + the leader are **one of the
-only departments that can read other departments' directories**. Update the
-read gate:
+The devil's advocate role + the leader are **one of the only roles that can
+read other departments' directories**. Update the read gate:
 
 1. **`tiers.can_read`** (in `org/tiers.py`) — the current `can_read` allows:
    - the leader: only `MISSION.md`;
    - the head: only its own department policy;
    - the manager / IC: only within its own department.
-   
-   Add an **exception** for the devil's advocate (all its roles) + the leader:
-   they can read **other departments' directories** (the `departments/<other>/`
-   paths). E.g.:
+
+   Add an **exception** for the devil's advocate role + the leader: they can
+   read **other departments' directories** (the `departments/<other>/` paths).
+   E.g.:
    ```python
    def can_read(role, path: str) -> bool:
-       # The devil's advocate (all its roles) + the leader can read other
-       # departments' directories (the cross-department read access).
+       # The devil's advocate role + the leader can read other departments'
+       # directories (the cross-department read access).
        if is_devils_advocate(role) or is_leader(role):
            return path == "MISSION.md" or path.startswith("departments/")
        if is_head(role):
@@ -83,12 +117,12 @@ read gate:
        return path.startswith(f"departments/{role.department}/")
    ```
 2. **`is_devils_advocate(role)`** — a helper (in `org/tiers.py`) that returns
-   True if the role is in the devil's advocate department (e.g.
-   `role.department == DEVILS_ADVOCATE_DEPT`).
+   True if the role **is** the devil's advocate role (e.g.
+   `role.name == DEVILS_ADVOCATE_ROLE` or a dedicated field).
 3. **`permissions.read_reason`** — the read gate in `runtime/permissions.py`
    (the `READ_SCOPE` / the `cross_team_read` logic) is updated to allow the
-   devil's advocate + the leader to read other departments' directories (the
-   `can_read` change in `tiers.py` is the source of truth).
+   devil's advocate role + the leader to read other departments' directories
+   (the `can_read` change in `tiers.py` is the source of truth).
 
 > **Note:** the devil's advocate's cross-department read is **visible** (it is
 > logged in the audit trail, matching the existing "visible, never silent"
@@ -96,17 +130,40 @@ read gate:
 > are recorded in the audit (so the operator can see the cross-department
 > reads).
 
-### 12.4 The devil's advocate's evaluation
+### 12.4 `runtime/session.py` — the Phase-7 verdict + the Phase-8 consequence
 
-The devil's advocate department **evaluates the other departments' work** +
-**raises concerns**. The evaluation happens in **Phase 7 (Evaluate)** (Story
-1): the devil's advocate head reads the other departments' work (via the
-cross-department read access) + raises concerns (lies, hallucinations,
-inappropriate work). The concerns are surfaced to the leader (the evaluation)
-+ the decision (Phase 8).
+The role **institutes a formal "gut check"** on the org's outcomes. The check
+happens in **Phase 7 (Evaluate)** (Story 1) + the consequence in **Phase 8
+(Decide)**:
 
-> **Ordering:** this story **depends on Story 6** (the department proposal) +
-> Story 1 (the 8-phase Session). Do this after Stories 1 + 6.
+1. **Phase 7 (Evaluate)** — the devil's advocate role:
+   - reads the other departments' work (via the cross-department read access);
+   - observes the pods it "listens" to (the leader's + heads' pods);
+   - **doubts** the claims (does not accept them as true — checks them against
+     what the pipeline has actually produced);
+   - **flags** immoral/improper actions (heavy emphasis on moral
+     decision-making);
+   - returns a **verdict**: `clean` (no concerns) or `flag: <findings>`
+     (concerns raised — fabrication, hallucination, low-quality outcomes,
+     immoral/improper actions).
+2. **Phase 8 (Decide)** — the leader consumes the verdict:
+   - if `clean`, the decision proceeds normally (continue / complete /
+     escalate);
+   - if `flag`, the leader **forces a re-check** (re-evaluate the flagged
+     outcomes) or **blocks a stop** (does not complete / ship the low-quality
+     or immoral outcomes). The `flag` is surfaced to the leader (the decision)
+     + the operator (the audit).
+
+> **Note:** the verdict is **visible** (it is logged in the audit trail,
+> matching the existing "visible, never silent" philosophy). The verdict + the
+> Phase-8 consequence are recorded in the audit (so the operator can see the
+> gut check + its consequence).
+
+> **Ordering:** this story **depends on Story 6** (the department proposal —
+> the role is always included in the proposal) + **Story 1** (the 8-phase
+> Session — the Phase-7 verdict + the Phase-8 consequence) + **Story 4** (the
+> pods — the role "listens" to the leader's + heads' pods). Do this after
+> Stories 1 + 4 + 6.
 
 ## Testing
 
@@ -114,9 +171,12 @@ inappropriate work). The concerns are surfaced to the leader (the evaluation)
 > changes, **try to run the test suite once in the repo's virtual environment**
 > (e.g. `python -m pytest tests/ -x` from the project root, using the repo's
 > venv — see `SETUP.md`). Focus on a new `tests/test_devils_advocate.py` (the
-> mandatory department is always created; the cross-department read access is
-> scoped to the devil's advocate + the leader) + the existing
-> `tests/test_permissions.py` + `tests/test_tiers.py` + `tests/test_org.py`.
+> role is always created; the cross-department read access is scoped to the
+> devil's advocate role + the leader; the role "listens" to the leader's +
+> heads' pods; the Phase-7 verdict is returned; the Phase-8 consequence — a
+> `flag` forces a re-check / blocks a stop) + the existing
+> `tests/test_permissions.py` + `tests/test_tiers.py` + `tests/test_org.py` +
+> `tests/test_pods.py`.
 >
 > - **If the tests pass**, you are done.
 > - **If you cannot run the tests** (no venv, missing dependencies, a test

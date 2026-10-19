@@ -75,12 +75,14 @@ it to **accept the proposed departments** (from `MissionResult.department_propos
 > it only touches the leader schema + the mission + the bootstrap. It can be
 > done in parallel with Stories 3–5.
 
-### 6.4 The mandatory "devil's advocate" department (cross-ref Story 12)
+### 6.4 The "devil's advocate" role (cross-ref Story 12)
 
-The **mandatory "devil's advocate" department** (Story 12) is **always
-included** in the leader's `department_proposal` (it is not optional). The
-leader's proposal + the bootstrap ensure the devil's advocate department is
-created (even if the leader omits it). See Story 12 for the details.
+The **"devil's advocate" role** (Story 12) is a **single auditor reporting
+directly to the leader** — a formal **"gut check"** on the org's outcomes
+(**not** a department). It is **always created** in Org bootstrap (it is not
+optional): the bootstrap ensures the role exists (even if the leader omits it
+from the `department_proposal`). The leader's `department_proposal` (this
+story) is updated to always include the role. See Story 12 for the details.
 
 ## Testing
 

@@ -35,11 +35,15 @@ Cross-cutting mechanisms are added:
   IC→manager, manager→head, head→leader), **headcount-finalization pods** (all
   heads + leader; all managers + the head), and **execution pods** (the A/B/C-
   triggered multi-member pods an IC spins up during Execute).
-- **A mandatory "devil's advocate" department** — always created; it evaluates
-  the other departments' work and raises concerns (lies, hallucinations,
-  inappropriate work), and is one of the only departments that can read other
-  departments' directories. The **morality** and **ethics** departments are
-  **combined** into one.
+- **A "devil's advocate" role** — a single red-team auditor reporting
+  **directly to the leader** (always created in bootstrap; one of the only roles
+  that can read other departments' directories). It institutes a formal **"gut
+  check"** on the org's outcomes: it is **primed to doubt** what it hears (it
+  does not accept claims as true) and weighs **moral decision-making** heavily —
+  flagging fabrication, hallucination, and immoral/improper actions. It
+  **"listens"** to any pod the leader or the heads are in, returns a verdict in
+  Phase 7 (Evaluate), and a `flag` is consumed in Phase 8 (Decide) to force a
+  re-check or block a stop.
 
 **The architypes do not change** — `leader`, `department_head`, `manager`, `ic`
 are used as-is. The `department` **field** on `Role` holds the department slug
@@ -88,8 +92,8 @@ are used as-is. The `department` **field** on `Role` holds the department slug
 | 4. **Plan** | (part of 4. Dispatch) | Per department: **leader+head clarification pod** → head **authors the department policy** → head **hires `manager`s** → head **allots team/IC headcount** (% of department cap) → **head+manager clarification pods** → **Pod B** (all managers + head) finalizes headcount |
 | 5. **Staff** | (part of 4. Dispatch) | `manager`s **create ICs** + assign tasks → **manager+ic clarification pods** |
 | 6. **Execute** | (part of 4. Dispatch) | ICs **execute tasks**; **execution pods form** (A/B/C triggers) + a **collaboration pod** (IC+manager) when the IC needs help |
-| 7. **Evaluate** | 5. Synthesis + 6. Evaluation | **Status pods** (manager+IC, head+manager, leader+heads) surface fire/replace/keep + headcount changes; leader **evaluates progress** against the mission |
-| 8. **Decide** | 6. Evaluation | **Continue / complete / escalate** (headcount reassignment can trigger a reorg) |
+| 7. **Evaluate** | 5. Synthesis + 6. Evaluation | **Status pods** (manager+IC, head+manager, leader+heads) surface fire/replace/keep + headcount changes; the **"devil's advocate" role** runs its **gut check** (doubts claims, flags immoral/improper actions) and returns a verdict (`clean` / `flag`); leader **evaluates progress** against the mission |
+| 8. **Decide** | 6. Evaluation | **Continue / complete / escalate** (headcount reassignment can trigger a reorg); a **`flag` from the devil's advocate is consumed** — it forces a re-check or blocks a stop |
 
 ## 4. Key Decisions
 
@@ -191,14 +195,25 @@ are used as-is. The `department` **field** on `Role` holds the department slug
     adapt its structure/headcount on each iteration). Bounded by
     `max_iterations`. A headcount reassignment in Decide can trigger a reorg.
 
-13. **Mandatory "devil's advocate" department + combined morality/ethics** —
-    - The **morality** and **ethics** departments are **combined** into one.
-    - A mandatory **"devil's advocate" department** is added (always created in
-      Org bootstrap). Its purpose is to **evaluate the other departments' work**
-      and **raise concerns** about lies, hallucinations, inappropriate work,
-      etc. It is one of the **only departments that can read other
-      departments' directories** (cross-department read access, granted via
-      `permissions.py`).
+13. **A "devil's advocate" role (a leader's direct report / red-team auditor)**
+    — a formal **"gut check"** on the org's outcomes, **not** a department:
+    - A **single role** reporting **directly to the leader** (always created in
+      Org bootstrap; mandatory). It sits **outside** the normal reporting chain
+      so the people it checks cannot shape what it sees.
+    - **Cross-department read access** — one of the only roles that can read
+      other departments' directories (granted via `permissions.py`).
+    - **"Listens" to any pod the leader is in AND any pod the heads are in**
+      (it observes those deliberations, not just the final reports).
+    - **Primed to doubt** — it does not accept information as true; it checks
+      claims against what the pipeline has actually produced (e.g. a head
+      claiming "$1k revenue" is doubted if the pipeline hasn't run yet).
+    - **Heavy emphasis on moral decision-making** — it flags immoral/improper
+      actions (e.g. "generate more revenue by bypassing a website's robots.txt"
+      is flagged as improper).
+    - **Phase 7 hook** — in Evaluate it returns a verdict (`clean` /
+      `flag: <findings>`); in **Phase 8 (Decide)** a `flag` is consumed by the
+      leader to **force a re-check** or **block a stop** (don't ship
+      low-quality/immoral outcomes).
 
 14. **Prompts are auditable** — the pipeline's prompts (and parts of prompts)
     are extracted into a dedicated `prompts/` location, each with a comment
@@ -362,14 +377,22 @@ proposal is absent.
 - [ ] Add a **comment above each prompt/part** indicating **how/where it is used**
       (which phase / which role / which pod), for auditing + suggesting changes.
 
-### Story 12 — Mandatory "devil's advocate" department + combined morality/ethics (`runtime/org.py`, `runtime/permissions.py`)
-- [ ] **Combine** the **morality** and **ethics** departments into one.
-- [ ] Add a **mandatory "devil's advocate" department** (always created in Org
-      bootstrap). Its mandate: **evaluate the other departments' work** and
-      **raise concerns** about lies, hallucinations, inappropriate work, etc.
-- [ ] Grant it **cross-department read access** — one of the only departments
-      that can read other departments' directories (via `permissions.py`).
-- [ ] Ensure it is always included in the leader's department proposal
+### Story 12 — "Devil's advocate" role (a leader's direct report / red-team auditor) (`runtime/org.py`, `runtime/pods.py`, `runtime/session.py`, `runtime/permissions.py`)
+- [ ] Add a **single "devil's advocate" role** reporting **directly to the
+      leader** (always created in Org bootstrap; mandatory — a formal **"gut
+      check"** on the org's outcomes, not a department).
+- [ ] Grant it **cross-department read access** — one of the only roles that can
+      read other departments' directories (via `permissions.py`).
+- [ ] Make it **"listen" to any pod the leader is in AND any pod the heads are
+      in** (it observes those deliberations, not just the final reports).
+- [ ] **Prime it to doubt** — its mandate does not accept information as true;
+      it checks claims against what the pipeline has actually produced.
+- [ ] Give it a **heavy emphasis on moral decision-making** — it flags
+      immoral/improper actions, not just factual errors.
+- [ ] **Phase 7 hook** — in Evaluate it returns a verdict (`clean` /
+      `flag: <findings>`); in **Phase 8 (Decide)** a `flag` is consumed by the
+      leader to **force a re-check** or **block a stop**.
+- [ ] Update the leader's **department proposal** to always include this role
       (mandatory — not optional).
 
 ## 6. Dependencies + Ordering
@@ -387,7 +410,7 @@ Story 2 (split dispatch)  ── foundational
 
 Story 6 (department proposal)  [independent of the split]
 Story 7 (config)  [independent, parallel]
-Story 12 (devil's advocate dept)  [depends on 2; touches org + permissions]
+Story 12 (devil's advocate role)  [depends on 2, 4; touches org + pods + session + permissions]
 
 Story 9 (tests)  [depends on 1–8, 12]
 Story 10 (docs)  [depends on all]
@@ -402,8 +425,9 @@ Story 11 (prompts)  [depends on 2]
 3. Story 3 (headcount) — cap chain + allotment + finalization pods.
 4. Story 5 (department policy) — head authors the policy after the leader+head pod.
 5. Story 6 (department proposal) + Story 7 (config) — Mission + knobs.
-6. Story 12 (devil's advocate department) — mandatory dept + combined
-   morality/ethics + cross-department read access.
+6. Story 12 (devil's advocate role) — a leader's direct report / red-team
+   auditor: cross-department read + listens to leader/head pods + primed to
+   doubt + moral emphasis + Phase-7 verdict → Phase-8 consequence.
 7. Story 1 (Session restructure) + Story 8 (CLI) — wire the 8 phases + logging.
 8. Story 11 (prompts) — extract the prompts into `prompts/`.
 9. Story 9 (tests) — verify end-to-end offline.
@@ -436,9 +460,13 @@ Story 11 (prompts)  [depends on 2]
 - **Execution pods**: confirm the A/B/C execution pods (disagreement /
   cross-team / routing rule) + the collaboration pod (IC+manager) form during
   Execute.
-- **Mandatory "devil's advocate" department**: confirm it is always created, the
-  morality + ethics departments are combined, and it can read other
-  departments' directories (cross-department read access).
+- **"Devil's advocate" role**: confirm it is always created (a leader's direct
+  report), can read other departments' directories (cross-department read
+  access), "listens" to the leader's and heads' pods, is primed to doubt
+  (doubts a head's "$1k revenue" claim if the pipeline hasn't run), flags
+  immoral/improper actions (e.g. bypassing robots.txt), returns a Phase-7
+  verdict, and a `flag` is consumed in Phase 8 to force a re-check / block a
+  stop.
 - **Department policy**: confirm the `department_head` (NOT the IC) authors the
   department-scoped policy **after** the leader+head pod; the `permissions.py`
   ownership rule is unchanged.
@@ -461,11 +489,11 @@ Story 11 (prompts)  [depends on 2]
 - **Clarification + reporting + headcount-finalization pods are new pod types**
   (deliberate, not A/B/C-triggered) — mitigate by validating each against the
   existing pod invariants and keeping them distinct from the execution pods.
-- **Mandatory "devil's advocate" department** (a new mandatory dept +
-  cross-department read access) — mitigate by making it a distinct Story
-  (Story 12) and by scoping the cross-department read access tightly in
-  `permissions.py` (the devil's advocate — and the leader — are the only ones
-  that can read other departments' directories).
+- **"Devil's advocate" role** (a new leader's direct report + cross-department
+  read access + pod "listening" + a Phase-7/8 hook) — mitigate by making it a
+  distinct Story (Story 12) and by scoping the cross-department read access
+  tightly in `permissions.py` (the devil's advocate — and the leader — are the
+  only ones that can read other departments' directories).
 - **Department-policy timing** (the policy depends on the leader+head pod
   completing first) — mitigate by sequencing the pod → policy strictly in
   `plan.py` (the policy context includes the pod's clarification).

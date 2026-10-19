@@ -21,7 +21,7 @@ complete the work and raise the need for testing to the user).
 | 9 | `story-09-tests.md` | Tests | Pending |
 | 10 | `story-10-docs.md` | Docs (doc files to update) | Pending |
 | 11 | `story-11-prompts.md` | Prompts directory (`prompts/`) | Pending |
-| 12 | `story-12-devils-advocate.md` | Mandatory "devil's advocate" department + combined morality/ethics | Pending |
+| 12 | `story-12-devils-advocate.md` | "Devil's advocate" role (a leader's direct report / red-team auditor) | Pending |
 
 > **Deployment status:** Stories 1–2 are deployed (the 8-phase Session
 > restructure + the `dispatch.py` split, plus the Phase-1 informal draft and the
@@ -99,16 +99,18 @@ dependent code after, and tests/docs last. Each step lists what it does and
 ### Step 5 — Story 11 (prompts) + Story 12 (devil's advocate)
 
 - **What:** Story 11 (extract the prompts into `prompts/`), Story 12 (the
-  mandatory "devil's advocate" department + the combined morality/ethics).
+  "devil's advocate" role — a leader's direct report / red-team auditor that
+  runs a formal "gut check" on the org's outcomes).
 - **Why now:**
   - **Story 11 (prompts)** **depends on Story 2** (the dispatch split) — the
     dispatch / phase contexts live in the new modules (Step 1). Extracting
     them is a **pure move** (no behavior change), so it is safe to do once the
     split is stable.
   - **Story 12 (devil's advocate)** **depends on Story 6** (the department
-    proposal) + **Story 1** (the 8-phase Session) — the mandatory department is
-    always created in Org bootstrap (Phase 3), and its cross-department read
-    access is scoped in `permissions.py`. It must come **after Steps 2 + 4**.
+    proposal) + **Story 1** (the 8-phase Session) + **Story 4** (the pods) —
+    the role is always created in Org bootstrap (Phase 3), it "listens" to the
+    leader's + heads' pods, and its cross-department read access is scoped in
+    `permissions.py`. It must come **after Steps 2 + 4**.
 
 ### Step 6 — Story 9 (tests) + Story 10 (docs) — last
 
