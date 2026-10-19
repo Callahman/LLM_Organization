@@ -1,9 +1,11 @@
 # EPIC: Refactor LLM_Organization to the 8-Phase Department Process
 
-> Status: **Partially implemented** — **Stories 1–2 done** (the 8-phase Session
+> Status: **Partially implemented** — **Stories 1–6 done** (the 8-phase Session
 > restructure + the `dispatch.py` split into plan/staff/execute, plus the
-> Phase-1 informal draft and the 8-phase label cleanup); **Stories 3–12
-> pending**.
+> Phase-1 informal draft and the 8-phase label cleanup; the headcount cap chain
+> (Story 3), the pods incl. the collaboration pod (Story 4), the department
+> policy-after-pod (Story 5), and the department proposal (Story 6));
+> **Stories 7–12 pending**.
 > Scope: the `D:\LLM\LLM_Organization` codebase (runtime / org / roles / pods / CLI).
 
 ## 1. Overview
@@ -266,42 +268,58 @@ Phase 6) hold the head / manager / IC workflows.
       importers).
 
 ### Story 3 — Headcount caps + allotment (`runtime/org.py`, `plan.py`, `config.py`)
-- [ ] Add the **total headcount cap** (from env `HEAD_COUNT_TOTAL`).
-- [ ] Phase 3 (Org bootstrap): the leader **allots department caps** (as a % of
-      the total) to each department.
-- [ ] Phase 4 (Plan): the head **allots team/IC caps** (as a % of the department
-      cap).
-- [ ] Enforce the **cap chain** (total → department → team → IC) — a hire that
-      would exceed a cap is blocked / escalated.
-- [ ] **Record headcount** in the **mission addendum** + each department
-      **policy** (the department's headcount per team).
+**Status: DONE** — the full cap chain is in place.
+- [x] The **total headcount cap** (`HEAD_COUNT_TOTAL`) is read from env
+      (`config.py`) and handed to the phase modules.
+- [x] Phase 3 (Org bootstrap): `org.allot_department_caps` — the leader
+      **allots department caps** (bounded by the total), then **Pod A** (all
+      heads + leader) finalizes them (the leader has final say).
+- [x] Phase 4 (Plan): `plan._allot_team_caps` — the head **allots team/IC caps**
+      (bounded by the department cap), then **Pod B** (all managers + head)
+      finalizes them (the head has final say).
+- [x] The **cap chain** (total → department → team → IC) is enforced — a hire
+      that would exceed a cap is blocked (`staff._team_cap_ok`; a visible
+      `team_cap_reached` event, never silent).
+- [x] Headcount is **recorded** in the **mission addendum**
+      (`org._record_headcount_addendum`) + the department **policy** (the team
+      caps, Story 5).
 
 ### Story 4 — Pods (`runtime/pods.py`, `plan.py`, `staff.py`, `execute.py`)
-- [ ] **Clarification pods** (distinct, 2-member parent+child, before work):
-      leader+`department_head`, `department_head`+`manager`, `manager`+`ic`.
-- [ ] **Reporting pods** (distinct, 2-member parent+child, after work):
-      `ic`→`manager`, `manager`→`department_head`, `department_head`→leader.
-- [ ] **Headcount finalization Pod A** (all `department_head`s + leader, Phase 3)
-      — leader has final say.
-- [ ] **Headcount finalization Pod B** (all `manager`s + the head, Phase 4) —
-      head has final say.
-- [ ] **Execution pods (A/B/C)** in `execute.py`: Trigger A (disagreement),
+**Status: DONE** — all five pod kinds are formed in their phases.
+- [x] **Clarification pods** (2-member parent+child, before work):
+      leader+`department_head` (`plan.py`), `department_head`+`manager`
+      (`staff.py`), `manager`+`ic` (`execute.py`).
+- [x] **Reporting pods** (2-member parent+child, after work, Phase 7):
+      `ic`→`manager`, `manager`→`department_head`, `department_head`→leader
+      (`session._run_reporting_pods`).
+- [x] **Headcount finalization Pod A** (all `department_head`s + leader, Phase 3)
+      — leader has final say (`org.allot_department_caps`).
+- [x] **Headcount finalization Pod B** (all `manager`s + the head, Phase 4) —
+      head has final say (`plan._allot_team_caps`).
+- [x] **Execution pods (A/B/C)** in `execute.py`: Trigger A (disagreement),
       Trigger B (cross-team), Trigger C (routing rule) — the existing
-      `_check_pod_triggers` logic.
-- [ ] **Collaboration pod** (IC + manager) when the IC needs help; the manager
-      propagates the need through the org.
-- [ ] **Capped iterations**: every pod runs for a **capped number of
-      iterations/rounds** (`max_rounds`), then the **initiator returns a result**
-      (next-steps). Make the default round count explicit per pod type.
-- [ ] Validate **all** pods against the existing invariants (size, 1-tier
-      spread, communication gate).
+      `_check_pod_triggers` logic (`kind="execution"`).
+- [x] **Collaboration pod** (IC + manager, `kind="collaboration"`) — when the
+      IC's work flags a collaboration need (`collaborate`), the manager sets up
+      the pod (`execute.run_execute`); the IC retries its work with the pod's
+      outcome.
+- [x] **Capped iterations**: every pod runs for a **capped number of
+      iterations/rounds** (`max_rounds`, defaulting to the per-kind
+      `POD_KIND_DEFAULT_ROUNDS`), then the **initiator returns a result**
+      (`pods.run_pod`).
+- [x] Validate **all** pods against the existing invariants (size, 1-tier
+      spread, communication gate) — `pods.form_pod`.
 
 ### Story 5 — Department policy (`runtime/plan.py`, `runtime/permissions.py`)
-- [ ] Move `generate_head_policies` into `plan.py`, **preceded by the leader+head
-      clarification pod** (the head authors the policy after the pod).
-- [ ] Keep the policy a **department-level artifact** (owned by the head); it
-      **may detail specific team roles / team-level policy** (the head's choice).
-- [ ] `permissions.py` department-policy ownership rule **unchanged** (the
+**Status: DONE** — the policy is authored after the clarification pod.
+- [x] `generate_head_policies` is **called from `plan.run_plan`**, **preceded
+      by the leader+head clarification pod** (the head authors the policy after
+      the pod; the pod → policy sequencing is strict, and the policy context
+      includes the pod's clarified mission).
+- [x] The policy is a **department-level artifact** (owned by the head); it
+      **may detail specific team roles / team-level policy** (the head's choice),
+      including the department's team caps (Story 3).
+- [x] `permissions.py` department-policy ownership rule **unchanged** (the
       `department_head` owns the policy).
 
 ### Story 6 — Department proposal in the Mission phase (`roles/leader.py`, `runtime/mission.py`, `runtime/org.py`)

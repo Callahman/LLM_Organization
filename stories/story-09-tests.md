@@ -1,5 +1,11 @@
 # Story 9 — Tests
 
+> **Progress:** `tests/test_execution_pods.py` is written (the A/B/C execution
+> pods `kind="execution"` + the collaboration pod (IC + manager) — formation,
+> capped iterations, the IC retry, the no-`collaborate` case, and
+> collaboration+execution coexistence). The remaining test files (Story 9's full
+> scope) are still to be written.
+
 ## Goal
 
 Add the **test coverage** for the 8-phase process + the new mechanisms

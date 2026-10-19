@@ -12,10 +12,10 @@ complete the work and raise the need for testing to the user).
 |---|------|-------|--------|
 | 1 | `story-01-session-restructure.md` | 8-Phase Session restructure (`runtime/session.py`) | **Done** |
 | 2 | `story-02-split-dispatch.md` | Split `dispatch.py` into plan / staff / execute | **Done** |
-| 3 | `story-03-headcount-caps.md` | Headcount caps + allotment | Pending |
-| 4 | `story-04-pods.md` | Pods (clarification / reporting / headcount / execution) | Pending |
-| 5 | `story-05-department-policy.md` | Department policy | Pending |
-| 6 | `story-06-department-proposal.md` | Department proposal in the Mission phase | Pending |
+| 3 | `story-03-headcount-caps.md` | Headcount caps + allotment | **Done** |
+| 4 | `story-04-pods.md` | Pods (clarification / reporting / headcount / execution) | **Done** |
+| 5 | `story-05-department-policy.md` | Department policy | **Done** |
+| 6 | `story-06-department-proposal.md` | Department proposal in the Mission phase | **Done** |
 | 7 | `story-07-config.md` | Config (new knobs) | Pending |
 | 8 | `story-08-cli.md` | CLI (`run_session.py`, `reset_org.py`) | Pending |
 | 9 | `story-09-tests.md` | Tests | Pending |
@@ -23,10 +23,13 @@ complete the work and raise the need for testing to the user).
 | 11 | `story-11-prompts.md` | Prompts directory (`prompts/`) | Pending |
 | 12 | `story-12-devils-advocate.md` | "Devil's advocate" role (a leader's direct report / red-team auditor) | Pending |
 
-> **Deployment status:** Stories 1–2 are deployed (the 8-phase Session
+> **Deployment status:** Stories 1–6 are deployed (the 8-phase Session
 > restructure + the `dispatch.py` split, plus the Phase-1 informal draft and the
-> 8-phase label cleanup). The next deployment is **Step 3** (Stories 3 + 4 + 5 —
-> headcount / pods / policy), per the order below.
+> 8-phase label cleanup; the headcount cap chain (Story 3), the pods incl. the
+> collaboration pod (Story 4), the department policy-after-pod (Story 5), and
+> the department proposal (Story 6)). **Step 3** (Stories 3 + 4 + 5 — headcount /
+> pods / policy) is now complete; the next deployment is **Step 4** (Story 7 —
+> config, and Story 8 — CLI; Story 6 already landed), per the order below.
 
 ## Deployment order (detailed, with reasoning)
 

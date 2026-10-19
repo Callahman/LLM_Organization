@@ -309,7 +309,10 @@ def _ic_ctx(ic: Role, task: str, policy_summary: str = "",
         "your work requires changing code, set `code_edits` to a JSON array "
         "of objects, each exactly {\"path\": <str>, \"content\": <str>}. Each "
         f"edit is gated by the permission layer: write under {team_root}/ "
-        "only; the mission and the rules are read-only."
+        "only; the mission and the rules are read-only. If completing this "
+        "task requires collaboration with another role or department, set "
+        "`collaborate` to a one-line description of what you need (leave it "
+        "empty if you can complete the task on your own)."
     )
 
 
