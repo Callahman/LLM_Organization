@@ -26,12 +26,13 @@ import os
 import re
 import sys
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from roles.base import Role
 from roles.worker import worker_output_schema
 from runtime.mission import MissionResult
 from runtime.complexity import classify_complexity
+from runtime.pods import form_pod, run_pod
 
 # Required departments (spun up at bootstrap; cannot be fired).
 REQUIRED_DEPARTMENTS = ("hr", "safety", "morality")
@@ -69,6 +70,14 @@ class OrgState:
         self.role_definitions: Dict[str, Dict[str, Any]] = {}
         self.events: List[Dict[str, Any]] = []
         self.history_dir = history_dir
+        # Story 3: the **headcount cap chain** (top → bottom). The total cap is
+        # in the config (`head_count_total`); the **department caps** (a cap per
+        # department, allotted by the leader in Phase 3, summing to ≤ the total)
+        # and the **team caps** (a cap per team, allotted by the head in Phase 4,
+        # summing to ≤ the department cap) live here so they are queryable at
+        # each hire. A hire that would exceed a cap is blocked / escalated.
+        self.department_caps: Dict[str, int] = {}
+        self.team_caps: Dict[Tuple[str, str], int] = {}
 
     def add_role(self, role: Role) -> None:
         self.roles[role.id] = role
@@ -341,6 +350,30 @@ def _extract_department_heads(out: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
+def _department_proposal_to_heads(mission_result: MissionResult) -> List[Dict[str, Any]]:
+    """Story 6: convert the Phase-2 department proposal (a list of
+    ``{name, priority, rationale}`` dicts, in priority order) into a list of
+    department-head specs (``{id, department, sub_architype, required,
+    mandate}``), in priority order. Each proposed department becomes one head
+    (the Phase-2 proposal is the primary source of the departments to create)."""
+    heads: List[Dict[str, Any]] = []
+    for spec in (mission_result.department_proposal if mission_result else []) or []:
+        if not isinstance(spec, dict):
+            continue
+        name = str(spec.get("name", "")).strip()
+        if not name:
+            continue
+        slug = _dept_slug(name)
+        heads.append({
+            "id": f"head_{slug}",
+            "department": slug,
+            "sub_architype": f"head_of_{slug}",
+            "required": False,
+            "mandate": str(spec.get("rationale", "")).strip() or f"Head of {name}.",
+        })
+    return heads
+
+
 def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
     """Ensure the required departments (hr, safety, morality) exist and are
     marked non-fireable."""
@@ -394,52 +427,61 @@ def bootstrap(
     In `additive` mode (a revisit), the bootstrap only **adds** roles — a
     proposed role whose id already exists in the org is skipped (never
     dropped / overwritten)."""
-    # Bounded retry: the leader's head proposal must include at least one
-    # operational department head (not just the required governance depts).
+    # Story 6: if the leader proposed the departments in Phase 2 (Mission),
+    # create them directly (one head per proposed department, in priority
+    # order) — the Phase-2 proposal is the primary source. Otherwise fall back
+    # to the Phase-3 head proposal (org_recommendation).
     proposed: List[Dict[str, Any]] = []
     last_out: Dict[str, Any] = {}
-    # Story 11 (B15): on a retry, append the previous attempt's failure reason
-    # to the context so the leader can adjust (instead of re-sending the same
-    # context).
-    retry_hint = ""
-    for _ in range(max(1, head_retry_budget)):
-        last_out = backend.invoke(
-            leader, _bootstrap_context(mission_result, retry_hint=retry_hint),
-            # The Leader's head proposal is a resourcing decision -> thinking on.
-            reasoning=classify_complexity(3, leader, {"is_decision": True}),
-            # The head proposal is a heavy operation (it proposes 5-6 department
-            # heads, each with a mandate, and the downstream hires) — give it a
-            # larger per-invoke budget than the flat default so it doesn't hit
-            # the 300s timeout. `None` uses the default.
-            timeout=bootstrap_timeout_seconds,
-            phase=3,
-        )
-        candidate = _extract_department_heads(last_out)
-        if _has_operational_head(candidate):
-            proposed = candidate
-            break
-        # Story 11 (B15): build the retry hint from the previous attempt's
-        # failure reason (the top-level / `org_recommendation` keys).
-        rec = last_out.get("org_recommendation")
-        rec_keys = (list(rec.keys()) if isinstance(rec, dict)
-                    else type(rec).__name__)
-        top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
-        retry_hint = f"top-level keys: {top_keys}; org_recommendation: {rec_keys}"
-    if not _has_operational_head(proposed):
-        # Visible diagnostic: show exactly what the leader returned so the
-        # cause is self-evident from the traceback (no re-run to debug).
-        rec = last_out.get("org_recommendation")
-        rec_keys = (list(rec.keys()) if isinstance(rec, dict)
-                    else type(rec).__name__)
-        top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
-        raise BootstrapError(
-            "Phase 3 produced no operational department heads "
-            f"(after {head_retry_budget} attempts) — the org would have only "
-            "the required governance departments (hr, safety, morality), so no "
-            "work could be dispatched in Phase 4. Re-run the session.\n"
-            f"  leader reply top-level keys: {top_keys}\n"
-            f"  leader reply org_recommendation: {rec_keys}"
-        )
+    dept_proposal = (mission_result is not None
+                     and getattr(mission_result, "department_proposal", None))
+    if dept_proposal:
+        proposed = _department_proposal_to_heads(mission_result)
+    if not proposed:
+        # Bounded retry: the leader's head proposal must include at least one
+        # operational department head (not just the required governance depts).
+        # Story 11 (B15): on a retry, append the previous attempt's failure
+        # reason to the context so the leader can adjust (instead of
+        # re-sending the same context).
+        retry_hint = ""
+        for _ in range(max(1, head_retry_budget)):
+            last_out = backend.invoke(
+                leader, _bootstrap_context(mission_result, retry_hint=retry_hint),
+                # The Leader's head proposal is a resourcing decision -> thinking on.
+                reasoning=classify_complexity(3, leader, {"is_decision": True}),
+                # The head proposal is a heavy operation (it proposes 5-6 department
+                # heads, each with a mandate, and the downstream hires) — give it a
+                # larger per-invoke budget than the flat default so it doesn't hit
+                # the 300s timeout. `None` uses the default.
+                timeout=bootstrap_timeout_seconds,
+                phase=3,
+            )
+            candidate = _extract_department_heads(last_out)
+            if _has_operational_head(candidate):
+                proposed = candidate
+                break
+            # Story 11 (B15): build the retry hint from the previous attempt's
+            # failure reason (the top-level / `org_recommendation` keys).
+            rec = last_out.get("org_recommendation")
+            rec_keys = (list(rec.keys()) if isinstance(rec, dict)
+                        else type(rec).__name__)
+            top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
+            retry_hint = f"top-level keys: {top_keys}; org_recommendation: {rec_keys}"
+        if not _has_operational_head(proposed):
+            # Visible diagnostic: show exactly what the leader returned so the
+            # cause is self-evident from the traceback (no re-run to debug).
+            rec = last_out.get("org_recommendation")
+            rec_keys = (list(rec.keys()) if isinstance(rec, dict)
+                        else type(rec).__name__)
+            top_keys = list(last_out.keys()) if isinstance(last_out, dict) else []
+            raise BootstrapError(
+                "Phase 3 produced no operational department heads "
+                f"(after {head_retry_budget} attempts) — the org would have only "
+                "the required governance departments (hr, safety, morality), so no "
+                "work could be dispatched in Phase 4. Re-run the session.\n"
+                f"  leader reply top-level keys: {top_keys}\n"
+                f"  leader reply org_recommendation: {rec_keys}"
+            )
     # Story 11 (B16): total org-size cap — refuse a bootstrap that proposes
     # more heads than the cap (visible note, never silent).
     current_roles = len(org.roles)
@@ -480,6 +522,107 @@ def bootstrap(
     # Required departments are always spun up (and cannot be fired).
     created.extend(_ensure_required(org, departments_dir))
     return created
+
+
+# --- Story 3: the headcount cap chain (Phase 3 — the leader allots depts) ---
+
+def _allot_caps_ctx(leader: Role, departments: List[str], total: int) -> str:
+    """The context for the leader's department-cap allotment (Phase 3)."""
+    return (
+        f"ORG {leader.id}: Phase 3 — allot the department headcount caps. The "
+        f"total cap is {total} (the max number of roles the org may have). "
+        f"Allot a cap to each department (a % of the total, or an absolute "
+        f"count); the sum of the department caps must be ≤ {total}. "
+        f"Departments: {', '.join(departments) or '(none)'}. Return "
+        f"`department_caps` as a {{department: cap}} mapping."
+    )
+
+
+def _parse_and_clamp_caps(out: Dict[str, Any], departments: List[str],
+                          total: int) -> Dict[str, int]:
+    """Parse the leader's `department_caps` output into a {department: cap}
+    mapping, clamping so the sum is ≤ the total cap (a visible note if
+    clamped — never silent)."""
+    raw = out.get("department_caps")
+    caps: Dict[str, int] = {}
+    if isinstance(raw, dict):
+        for dept in departments:
+            val = raw.get(dept)
+            if isinstance(val, (int, float)) and val > 0:
+                caps[dept] = int(val)
+    s = sum(caps.values())
+    if s > total and caps:
+        scale = total / s
+        caps = {d: max(1, int(c * scale)) for d, c in caps.items()}
+    return caps
+
+
+def _record_headcount_addendum(mission_path: str, total: int,
+                               caps: Dict[str, int]) -> None:
+    """Append a **headcount addendum** to the mission (the org-level headcount
+    record: the total cap + the department caps)."""
+    if not mission_path:
+        return
+    try:
+        with open(mission_path, "a", encoding="utf-8") as f:
+            f.write("\n## Headcount Addendum (Phase 3)\n\n")
+            f.write(f"- total cap: {total}\n")
+            for dept, cap in caps.items():
+                f.write(f"- {dept}: {cap}\n")
+    except OSError:
+        pass
+
+
+def allot_department_caps(
+    org: OrgState,
+    backend,
+    leader: Role,
+    mission_path: str,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, int]:
+    """Phase 3 (after bootstrap): the leader allots the **department caps**
+    (a cap per department, bounded by the total cap), then **Pod A** (all
+    `department_head`s + the leader) finalizes them — the **leader has final
+    say**. The finalized caps are stored on the org + recorded in the **mission
+    addendum**. Returns the finalized `{department: cap}` mapping (empty if no
+    total cap is set — the org then falls back to the per-manager IC cap)."""
+    total = (config or {}).get("head_count_total")
+    if not total:
+        return {}
+    heads = org.department_heads()
+    departments = [h.department for h in heads]
+    # 1. The leader allots the department caps (a resourcing decision).
+    out = backend.invoke(
+        leader, _allot_caps_ctx(leader, departments, int(total)),
+        reasoning=classify_complexity(3, leader, {"is_decision": True}),
+        phase=3,
+    )
+    caps = _parse_and_clamp_caps(out, departments, int(total))
+    # 2. Pod A (all heads + the leader) finalizes the department caps — the
+    #    leader has final say (the pod deliberates; the leader's allotment is
+    #    the final).
+    if heads:
+        # The leader is not a member of `org.roles` — add it so Pod A can be
+        # formed (starter = the leader).
+        roles_with_leader = {**org.roles, leader.id: leader}
+        pod = form_pod(
+            roles_with_leader, leader.id, [h.id for h in heads],
+            f"Finalize the headcount per department (total cap {int(total)})",
+            # Pod A is a headcount deliberation (all heads + the leader) — the
+            # heads are peers (not in one reporting line), so skip the
+            # communication gate (cross_team) and relax the size bound (it can
+            # legitimately exceed the 6-member working-group bound).
+            cross_team=True,
+            max_roles=12,
+            kind="headcount",
+        )
+        run_pod(backend, pod,
+                max_rounds=(config or {}).get("headcount_pod_rounds"),
+                phase=3)
+    # 3. Store on the org + record in the mission addendum.
+    org.department_caps = caps
+    _record_headcount_addendum(mission_path, int(total), caps)
+    return caps
 
 
 # --- Hire / fire -----------------------------------------------------------

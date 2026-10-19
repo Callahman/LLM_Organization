@@ -69,6 +69,27 @@ def mission_digest(mission: Dict[str, Any]) -> str:
     return " | ".join(parts) if parts else "(no mission digest)"
 
 
+def _run_contained_pod(backend: LLMBackend, org: OrgState, pod: Pod,
+                       max_rounds: Optional[int] = None,
+                       phase: int = 4) -> None:
+    """Run a clarification pod with **containment** (Story 4): a backend
+    failure inside the pod is logged (visible, never silent) and the phase
+    continues (the pod's decision stays empty). A clarification pod must not
+    take down the phase it clarifies. The pod's kind drives the default capped
+    round count (an explicit ``max_rounds`` overrides it).
+
+    The pod is always **formed** by the caller (so its membership is validated
+    + recorded); only its **run** is contained here.
+    """
+    try:
+        run_pod(backend, pod, max_rounds=max_rounds, phase=phase)
+    except Exception as e:
+        org.log_event(
+            "pod_failed", pod.starter.id, None,
+            {"pod": pod.id, "kind": pod.kind, "error": str(e)},
+        )
+
+
 def _leader_ctx(digest: str, head_ids: List[str],
                 efficiency_panel: str = "") -> str:
     base = (
@@ -214,18 +235,28 @@ def _head_ctx(head: Role, objective: str, digest: str) -> str:
 
 
 def _manager_ctx(manager: Role, objective: str, policy: str = "",
-                 digest: str = "") -> str:
+                 digest: str = "", clarification: str = "") -> str:
     # The prompt contract: {mission} + {department policy} + {short-term
     # memory} + {current objective}. The mission digest (the org's goal) is
     # the manager's north star; the department policy (the head's POLICY.md)
     # is its operating constraint (managers get the FULL policy). The role's
     # memory (its past [content] outputs) is auto-folded by the
     # MemoryBackend.
+    # **Story 5:** the context also includes the **head+manager clarification
+    # pod's outcome** (``clarification``) — the manager decomposes **after**
+    # the pod, so its IC tasks reflect the clarified team mission (the pod →
+    # decomposition sequencing is strict).
+    clarification_line = (
+        f" | Clarified team mission (from the head+manager clarification "
+        f"pod): {clarification}"
+        if clarification else ""
+    )
     return (
         f"PHASE 5 (manager {manager.id}): decompose the team objective into "
-        f"IC tasks. Objective: {objective} | Mission (the org's goal): "
-        f"{digest or '(none)'} | Department policy (follow it, and "
-        f"give your ICs tasks that satisfy it): {policy or '(none)'} "
+        f"IC tasks. Objective: {objective}{clarification_line} | Mission "
+        f"(the org's goal): {digest or '(none)'} | Department policy (follow "
+        f"it, and give your ICs tasks that satisfy it): "
+        f"{policy or '(none)'} "
         "Set `decomposition` to a JSON OBJECT (not a string) whose "
         "`ic_tasks` key is a JSON array of objects, each exactly "
         "{\"ic_id\": <str>, \"task\": <str>}."
@@ -233,12 +264,16 @@ def _manager_ctx(manager: Role, objective: str, policy: str = "",
 
 
 def _ic_ctx(ic: Role, task: str, policy_summary: str = "",
-            digest: str = "") -> str:
+            digest: str = "", clarification: str = "") -> str:
     # The prompt contract: {mission} + {department policy summary} +
     # {short-term memory} + {current task}. The mission digest (the org's
     # goal) is the IC's north star; the department policy summary (NOT the
     # full policy) is its operating constraint. The role's memory (its past
     # [content] outputs) is auto-folded by the MemoryBackend.
+    # **Story 5:** the context also includes the **manager+ic clarification
+    # pod's outcome** (``clarification``) — the IC does its work **after** the
+    # pod, so the work reflects the clarified task (the pod → work sequencing
+    # is strict).
     # The exact team work root (departments/<dept>/<team>/). The IC must write
     # there — a bare top-level dir is refused by the permission layer as
     # out_of_scope, so the prompt names the real root, shows a correct/wrong
@@ -258,12 +293,18 @@ def _ic_ctx(ic: Role, task: str, policy_summary: str = "",
             "Write under your team directory (departments/<dept>/<team>/); a "
             "bare top-level path is refused as out_of_scope."
         )
+    clarification_line = (
+        f" | Clarified task (from the manager+ic clarification pod): "
+        f"{clarification}"
+        if clarification else ""
+    )
     return (
         f"PHASE 6 (IC {ic.id}): do the work in your team directory. Your team "
         f"work directory is {team_root}/ — write ALL files there. {path_rules} "
         f"Mission (the org's goal): {digest or '(none)'} "
         f"Department policy summary (follow it): {policy_summary or '(none)'} "
-        f"Task: {task} Set `summary` to a one-line summary of the work done "
+        f"Task: {task}{clarification_line} Set `summary` to a one-line summary "
+        f"of the work done "
         f"and `work_path` to the path of the work (under {team_root}/). If "
         "your work requires changing code, set `code_edits` to a JSON array "
         "of objects, each exactly {\"path\": <str>, \"content\": <str>}. Each "
@@ -273,24 +314,35 @@ def _ic_ctx(ic: Role, task: str, policy_summary: str = "",
 
 
 def _policy_ctx(head: Role, mission_digest: str, existing_policy: str,
-                directive: str) -> str:
+                directive: str, clarification: str = "") -> str:
     """The head's Phase 4 policy-generation context. The head is invoked
     BEFORE it decomposes into managers to produce (a) the full department
     POLICY markdown and (b) a POLICY_SUMMARY that distils the key policy points
     for ICs. Context = Mission + the head's existing policy (Department
     Instructions) + the boss's directive (the leader's department objective, or
     the head's mandate for a required dept) + the role's memory (auto-folded by
-    the MemoryBackend)."""
+    the MemoryBackend).
+
+    **Story 5:** the context also includes the **leader+head clarification
+    pod's outcome** (``clarification``) — the policy is authored **after** the
+    pod, so it reflects the clarified mission (the pod → policy sequencing is
+    strict)."""
+    clarification_line = (
+        f" | Clarified mission (from the leader+head clarification pod): "
+        f"{clarification}"
+        if clarification else ""
+    )
     return (
         f"PHASE 4 (head {head.id}): author your department's POLICY so your "
         f"managers and ICs have a clear instruction on how their work fulfils "
         f"the org's goal. Mission: {mission_digest} | Your directive: "
-        f"{directive} | Your existing policy (update it, don't start from "
-        f"scratch): {existing_policy or '(none yet)'} Set `policy` to the FULL "
-        f"policy markdown (how work is broken down, standards, how managers and "
-        f"ICs report) and `policy_summary` to a SHORT summary of the key policy "
-        f"points (a few lines) that ICs will be given directly. Set `summary` "
-        f"to a one-line summary and `confidence` to a number 0-1."
+        f"{directive}{clarification_line} | Your existing policy (update it, "
+        f"don't start from scratch): {existing_policy or '(none yet)'} Set "
+        f"`policy` to the FULL policy markdown (how work is broken down, "
+        f"standards, how managers and ICs report) and `policy_summary` to a "
+        f"SHORT summary of the key policy points (a few lines) that ICs will be "
+        f"given directly. Set `summary` to a one-line summary and `confidence` "
+        f"to a number 0-1."
     )
 
 
@@ -873,6 +925,7 @@ def generate_head_policies(
     dept_objectives: List[Dict[str, Any]],
     mission_digest: str,
     departments_dir: str = "departments",
+    clarifications: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Dict[str, str]]:
     """Phase 4 (pre-decomposition): every department head — operational AND
     required (HR/Safety/Morality) — is invoked to author its department POLICY
@@ -881,13 +934,20 @@ def generate_head_policies(
     any head decomposes into managers, so managers/ICs have a clear instruction
     on how their work fulfils the org's goal.
 
+    **Story 5:** ``clarifications`` is an optional ``{head_id: clarified_mission}``
+    mapping (the **leader+head clarification pod's** outcome). The policy is
+    authored **after** the pod, so the policy context includes the clarification
+    (the pod → policy sequencing is strict). Required governance depts get no
+    clarification (no leader+head clarification pod).
+
     The head's context = Mission + its existing policy (Department
     Instructions) + its directive (the leader's department objective if the
-    leader assigned one, else the head's mandate) + its memory (auto-folded by
-    the MemoryBackend).
+    leader assigned one, else the head's mandate) + the clarification (Story 5)
+    + its memory (auto-folded by the MemoryBackend).
 
     Returns ``{head_id: {"policy": <full text>, "policy_summary": <summary>}}``.
     """
+    clarifications = clarifications or {}
     # A head's directive: the leader's department objective if assigned, else
     # the head's own mandate (a required dept gets no operational objective).
     objective_by_head = {
@@ -904,7 +964,8 @@ def generate_head_policies(
         )
         existing = _read_policy(head.department, departments_dir)
         out = backend.invoke(
-            head, _policy_ctx(head, mission_digest, existing, directive),
+            head, _policy_ctx(head, mission_digest, existing, directive,
+                              clarification=clarifications.get(head.id, "")),
             reasoning=classify_complexity(4, head, {}),
             phase=4,
         )

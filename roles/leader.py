@@ -75,6 +75,31 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
                 "resource_envelope": {},
             },
         },
+        # Phase 2: the department proposal (the departments + priority order).
+        # The leader proposes which departments the mission needs, in priority
+        # order; Phase 3 (Org bootstrap) creates them. Optional at the top level
+        # (so it does not leak into the other phases) but, when present, the
+        # `departments` array is REQUIRED — the exact shape
+        # `runtime/org.py::bootstrap` reads, so the forced submit_output tool
+        # constrains the model to emit it.
+        "department_proposal": {
+            "type": "object",
+            "properties": {
+                "departments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "priority": {"type": "integer"},
+                            "rationale": {"type": "string"},
+                        },
+                        "required": ["name"],
+                    },
+                },
+            },
+            "required": ["departments"],
+        },
         # Phase 3: the org bootstrap head proposal. Optional at the top level
         # (so it does not leak into the other phases) but, when present, the
         # `department_heads` array is REQUIRED — this is the exact shape

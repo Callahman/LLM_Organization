@@ -77,24 +77,71 @@ def _scripts(conflicting=False, cross_team=False, task_type=None,
         ic1_work["recommendation"] = "approve the schema"
         ic2_work["recommendation"] = "concern: the schema breaks the loader"
     backend = StubBackend()
+    # The clarification pods (leader+head, head+manager, manager+ic) run
+    # BEFORE each main call, so each role's script prepends its pod
+    # participation (the starter does agenda + close; the member does 2
+    # speaks) before its main-call entry.
     backend.set_script("leader", [
         {"decomposition": {"department_objectives": [
             {"head_id": "head_analytics", "objective": "build the pipeline"}]}},
+        # leader+head pod (leader is the starter): agenda + close.
+        {"summary": "agenda set", "agenda": "clarify the department's mission"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
     ])
     backend.set_script("head_analytics", [
+        # leader+head pod (head is a member): 2 speaks.
+        {"summary": "pod speak 1"},
+        {"summary": "pod speak 2"},
+        # The head's policy (its main call, Phase 4).
+        {"policy": "ALWAYS use schema v2.", "policy_summary": "schema v2"},
+        # The head's decomposition (Phase 4).
         {"decomposition": {"team_objectives": team_objectives}},
+        # head+manager pod (head is the starter): agenda + close.
+        {"summary": "agenda set", "agenda": "clarify the team's mission"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
     ])
     backend.set_script("mgr1", [
+        # head+manager pod (manager is a member): 2 speaks.
+        {"summary": "pod speak 1"},
+        {"summary": "pod speak 2"},
+        # The manager's decomposition (its main call, Phase 5).
         {"decomposition": {"ic_tasks": [
             {"ic_id": "ic1", "task": "write the extractor"},
             {"ic_id": "ic2", "task": "write the loader"},
         ]}},
+        # manager+ic pod (ic1) (manager is the starter): agenda + close.
+        {"summary": "agenda set", "agenda": "clarify ic1's task"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
+        # manager+ic pod (ic2) (manager is the starter): agenda + close.
+        {"summary": "agenda set", "agenda": "clarify ic2's task"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
+        # The trigger pod (manager is the starter): agenda + close.
         {"summary": "agenda set", "agenda": "resolve the team's open question"},
         {"summary": "close", "decision": "approve schema v2",
          "rationale": "backwards compatible", "open_items": []},
     ])
-    backend.set_script("ic1", [ic1_work, {"summary": "I support schema v2"}])
-    backend.set_script("ic2", [ic2_work, {"summary": "I have migration concerns"}])
+    backend.set_script("ic1", [
+        # manager+ic pod (ic1 is a member): 2 speaks.
+        {"summary": "pod speak 1"},
+        {"summary": "pod speak 2"},
+        # The IC's work (its main call, Phase 6).
+        ic1_work,
+        # The trigger pod (ic1 is a member): speak.
+        {"summary": "I support schema v2"},
+    ])
+    backend.set_script("ic2", [
+        # manager+ic pod (ic2 is a member): 2 speaks.
+        {"summary": "pod speak 1"},
+        {"summary": "pod speak 2"},
+        # The IC's work (its main call, Phase 6).
+        ic2_work,
+        # The trigger pod (ic2 is a member): speak.
+        {"summary": "I have migration concerns"},
+    ])
     return backend
 
 
@@ -188,6 +235,10 @@ def test_pod_carry_over_three_ways(tmp_path):
             {"id": "head_analytics", "department": "analytics"}]}},
         {"decomposition": {"department_objectives": [
             {"head_id": "head_analytics", "objective": "build the pipeline"}]}},
+        # leader+head pod (leader is the starter): agenda + close.
+        {"summary": "agenda set", "agenda": "clarify the department's mission"},
+        {"summary": "close", "decision": "clarified", "rationale": "ok",
+         "open_items": []},
         {"verdict": "complete"},  # Phase 7
         {"verdict": "complete"},  # Phase 8 -> stop
     ])

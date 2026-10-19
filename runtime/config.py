@@ -50,6 +50,21 @@ ENV_TO_CONFIG: Dict[str, Tuple[str, Any]] = {
     # Story 2 (B17): the per-session HIGH-reasoning (thinking) budget — max
     # HIGH invokes before the budget forces a lower level.
     "THINKING_BUDGET": ("thinking_budget", int),
+    # Story 3: the **total headcount cap** — the maximum number of roles
+    # (ICs + managers + heads) the org may have. The leader allots department
+    # caps (% of this) in Phase 3; the head allots team caps (% of the
+    # department cap) in Phase 4; IC counts are bounded by the team cap in
+    # Phase 5.
+    "HEAD_COUNT_TOTAL": ("head_count_total", int),
+    # Story 4: the **per-kind pod round-count overrides** (capped iterations).
+    # Each pod runs for a bounded number of iterations, then the initiator
+    # returns a result. These override the per-kind defaults in
+    # `runtime/pods.py::POD_KIND_DEFAULT_ROUNDS` when set.
+    "CLARIFICATION_POD_ROUNDS": ("clarification_pod_rounds", int),
+    "REPORTING_POD_ROUNDS": ("reporting_pod_rounds", int),
+    "HEADCOUNT_POD_ROUNDS": ("headcount_pod_rounds", int),
+    "EXECUTION_POD_ROUNDS": ("execution_pod_rounds", int),
+    "COLLABORATION_POD_ROUNDS": ("collaboration_pod_rounds", int),
 }
 
 # The ``LLM_*`` keys read directly by ``make_backend`` (not mapped here, but
