@@ -1,11 +1,13 @@
 # EPIC: Refactor LLM_Organization to the 8-Phase Department Process
 
-> Status: **Partially implemented** — **Stories 1–6 done** (the 8-phase Session
+> Status: **Partially implemented** — **Stories 1–8 done** (the 8-phase Session
 > restructure + the `dispatch.py` split into plan/staff/execute, plus the
 > Phase-1 informal draft and the 8-phase label cleanup; the headcount cap chain
 > (Story 3), the pods incl. the collaboration pod (Story 4), the department
-> policy-after-pod (Story 5), and the department proposal (Story 6));
-> **Stories 7–12 pending**.
+> policy-after-pod (Story 5), the department proposal (Story 6), the config
+> knobs incl. the routing rules + cap defaults (Story 7), and the 8-phase CLI
+> logging (Story 8));
+> **Stories 9–12 pending**.
 > Scope: the `D:\LLM\LLM_Organization` codebase (runtime / org / roles / pods / CLI).
 
 ## 1. Overview
@@ -336,16 +338,16 @@ proposal is absent.
       `org_recommendation` if the new field is absent).
 
 ### Story 7 — Config (`runtime/config.py`, `.env.example`)
-- [ ] Add the **headcount knobs**: `HEAD_COUNT_TOTAL` (total cap),
+- [x] Add the **headcount knobs**: `HEAD_COUNT_TOTAL` (total cap),
       department/team cap defaults.
-- [ ] Add the **pod knobs**: clarification-pod rounds, headcount-finalization-pod
+- [x] Add the **pod knobs**: clarification-pod rounds, headcount-finalization-pod
       rounds, execution-pod triggers (`routing_rules`).
-- [ ] Document all new knobs in `.env.example`.
+- [x] Document all new knobs in `.env.example`.
 
 ### Story 8 — CLI (`run_session.py`, `reset_org.py`)
-- [ ] Update the run-mode / phase logging to the 8 phases (`resume_from_phase`:
+- [x] Update the run-mode / phase logging to the 8 phases (`resume_from_phase`:
       a checkpoint at phase 3+ resumes from Phase 4).
-- [ ] `reset_org.py` unchanged (wipes `departments/`, `state/`, `MISSION.md`,
+- [x] `reset_org.py` unchanged (wipes `departments/`, `state/`, `MISSION.md`,
       `history/`, `pods/`, `reports/`, `archives/`).
 
 ### Story 9 — Tests (`tests/`)

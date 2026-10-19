@@ -28,6 +28,25 @@ from runtime.llm_api import make_backend
 from runtime.session import Session
 from roles.leader import make_leader
 
+# Story 8: the 8-phase process (phase number -> name) — used by the visible
+# run-mode / result logging so the phases are shown by name, not just number.
+PHASE_NAMES = {
+    1: "Intake",
+    2: "Mission",
+    3: "Org bootstrap",
+    4: "Plan",
+    5: "Staff",
+    6: "Execute",
+    7: "Evaluate",
+    8: "Decide",
+}
+
+
+def _phase_label(n) -> str:
+    """Format a phase number with its name (e.g. ``Phase 4 (Plan)``)."""
+    name = PHASE_NAMES.get(n)
+    return f"Phase {n} ({name})" if name else f"Phase {n}"
+
 
 def _unattended_callbacks():
     """Auto-answer / auto-approve (a bounded, unattended smoke run)."""
@@ -194,7 +213,7 @@ def main() -> None:
     run_mode, resume_point, resume_from_phase = _decide_run_mode(
         args, mission_path, checkpoint_path)
     print(f"[run-mode] mode={run_mode}, resume from: {resume_point}, "
-          f"resume_from_phase={resume_from_phase}")
+          f"resume_from_phase={_phase_label(resume_from_phase)}")
 
     # S16: a fresh run clears the generated state first (visible, never
     # silent) — the same wipe logic as `reset_org --yes`, so a run with no
@@ -240,7 +259,15 @@ def main() -> None:
 
     print("=== Session complete ===")
     print(f"status:     {result.status}")
-    print(f"phases:     {result.phases}")
+    # The phases dict is {1..8: count} (the 8-phase process) — show it with the
+    # phase names (Story 8).
+    if result.phases:
+        phase_str = ", ".join(
+            f"{_phase_label(p)}: {result.phases.get(p, 0)}"
+            for p in sorted(result.phases))
+    else:
+        phase_str = "(none)"
+    print(f"phases:     {phase_str}")
     print(f"cycles:     {result.cycles}")
     print(f"verdict:    {result.verdict}")
     print(f"evaluation: {result.evaluation}")

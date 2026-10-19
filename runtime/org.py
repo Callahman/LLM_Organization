@@ -526,13 +526,21 @@ def bootstrap(
 
 # --- Story 3: the headcount cap chain (Phase 3 — the leader allots depts) ---
 
-def _allot_caps_ctx(leader: Role, departments: List[str], total: int) -> str:
+def _allot_caps_ctx(leader: Role, departments: List[str], total: int,
+                    department_cap_default: Optional[float] = None) -> str:
     """The context for the leader's department-cap allotment (Phase 3)."""
+    default_hint = ""
+    if department_cap_default is not None:
+        default_hint = (
+            f" The default department cap is {department_cap_default:.0%} of "
+            f"the total (a resourcing hint — adjust per department as needed)."
+        )
     return (
         f"ORG {leader.id}: Phase 3 — allot the department headcount caps. The "
         f"total cap is {total} (the max number of roles the org may have). "
         f"Allot a cap to each department (a % of the total, or an absolute "
-        f"count); the sum of the department caps must be ≤ {total}. "
+        f"count); the sum of the department caps must be ≤ {total}."
+        f"{default_hint} "
         f"Departments: {', '.join(departments) or '(none)'}. Return "
         f"`department_caps` as a {{department: cap}} mapping."
     )
@@ -591,9 +599,12 @@ def allot_department_caps(
         return {}
     heads = org.department_heads()
     departments = [h.department for h in heads]
-    # 1. The leader allots the department caps (a resourcing decision).
+    # 1. The leader allots the department caps (a resourcing decision). The
+    #    `DEPARTMENT_CAP_DEFAULT` knob (if set) is a resourcing hint in the
+    #    context (Story 7).
     out = backend.invoke(
-        leader, _allot_caps_ctx(leader, departments, int(total)),
+        leader, _allot_caps_ctx(leader, departments, int(total),
+                                (config or {}).get("department_cap_default")),
         reasoning=classify_complexity(3, leader, {"is_decision": True}),
         phase=3,
     )

@@ -70,12 +70,20 @@ class PlanResult:
 
 # --- Story 3: the headcount cap chain (Phase 4 — the head allots teams) ---
 
-def _allot_team_caps_ctx(head: Role, teams: List[str], dept_cap: int) -> str:
+def _allot_team_caps_ctx(head: Role, teams: List[str], dept_cap: int,
+                         team_cap_default: Optional[float] = None) -> str:
     """The context for the head's team-cap allotment (Phase 4)."""
+    default_hint = ""
+    if team_cap_default is not None:
+        default_hint = (
+            f" The default team cap is {team_cap_default:.0%} of the "
+            f"department cap (a resourcing hint — adjust per team as needed)."
+        )
     return (
         f"ORG {head.id}: Phase 4 — allot the team headcount caps for your "
         f"department. The department cap is {dept_cap}. Allot a cap to each "
-        f"team; the sum of the team caps must be ≤ {dept_cap}. Teams: "
+        f"team; the sum of the team caps must be ≤ {dept_cap}."
+        f"{default_hint} Teams: "
         f"{', '.join(teams) or '(none)'}. Return `team_caps` as a "
         f"{{team: cap}} mapping."
     )
@@ -112,8 +120,11 @@ def _allot_team_caps(org: OrgState, backend, head: Role,
     if not dept_cap:
         return
     teams = [t.get("team") or t.get("manager_id", "") for t in team_objectives]
+    # The `TEAM_CAP_DEFAULT` knob (if set) is a resourcing hint in the context
+    # (Story 7).
     out = backend.invoke(
-        head, _allot_team_caps_ctx(head, teams, int(dept_cap)),
+        head, _allot_team_caps_ctx(head, teams, int(dept_cap),
+                                   (config or {}).get("team_cap_default")),
         reasoning=classify_complexity(4, head, {"is_decision": True}),
         phase=4,
     )
