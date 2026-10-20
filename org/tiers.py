@@ -64,6 +64,17 @@ def is_head(role) -> bool:
     return role.architype == "department_head"
 
 
+# The "devil's advocate" role (Story 12) — a red-team auditor reporting
+# directly to the leader. It is identified by its id (a single, special role,
+# not a `department_head` of a working department).
+DEVILS_ADVOCATE_ROLE = "devils_advocate"
+
+
+def is_devils_advocate(role) -> bool:
+    """True if the role **is** the devil's advocate role (Story 12)."""
+    return getattr(role, "id", None) == DEVILS_ADVOCATE_ROLE
+
+
 # --- Read scope -------------------------------------------------------------
 
 def policy_path(dept: str) -> str:
@@ -81,13 +92,16 @@ def is_code_path(path: str) -> bool:
 def can_read(role, path: str) -> bool:
     """Can `role` directly read this file path?
 
-    - leader: only `MISSION.md` (which it owns/edits).
+    - leader / devil's advocate: `MISSION.md` **and** any department
+      directory (the cross-department read access, Story 12 — the devil's
+      advocate doubts the org's outcomes by reading what the pipeline has
+      actually produced).
     - department head: only its own department policy markdown (governance,
       not work).
     - manager / ic: only within its own team's department directory.
     """
-    if is_leader(role):
-        return path == "MISSION.md"
+    if is_devils_advocate(role) or is_leader(role):
+        return path == "MISSION.md" or path.startswith("departments/")
     if is_head(role):
         return path == policy_path(role.department)
     # manager / ic
@@ -101,12 +115,18 @@ def can_read_code(role, path: str) -> bool:
     work only as it is brought to them (reports, summaries, decision
     artifacts). Managers and ICs can read code within their own department.
 
+    **Exception (Story 12):** the devil's advocate role **can** read other
+    departments' code — it doubts the org's outcomes by checking the claims
+    against what the pipeline has actually produced.
+
     **Enforced (Story 14):** this invariant is wired into the live path via the
     read gate — `runtime/permissions.py::read_file` refuses a code read for a
     head/leader (and any out-of-scope read) with a visible `PermissionError`,
     and the dispatch's self-edit flow pre-reads the code an IC is about to
     change through that gate.
     """
+    if is_devils_advocate(role):
+        return can_read(role, path) and is_code_path(path)
     if is_leader(role) or is_head(role):
         return False
     return can_read(role, path) and is_code_path(path)
@@ -114,14 +134,20 @@ def can_read_code(role, path: str) -> bool:
 
 def cross_team_read(role, path: str) -> bool:
     """True when a role is reading a *sibling team directory in the same
-    department* (the duplication-check purpose, §2.4). This is the read that
-    must be logged in the audit trail.
+    department* (the duplication-check purpose, §2.4) — or, for the devil's
+    advocate role, a *cross-department* directory (Story 12). This is the read
+    that must be logged in the audit trail.
 
     **Enforced (Story 14):** this invariant is wired into the live path via the
     read gate — `runtime/permissions.py::read_file` **logs** a cross-team read
     (visible, not silent) when a role reads a sibling team dir in the same
     department, so the audit shows the duplication-check read.
+
+    **Story 12:** the devil's advocate role's cross-department reads are logged
+    (its reads of other departments' directories are recorded in the audit).
     """
+    if is_devils_advocate(role):
+        return can_read(role, path) and path.startswith("departments/")
     if is_leader(role) or is_head(role):
         return False
     if not can_read(role, path):

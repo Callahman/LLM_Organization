@@ -17,6 +17,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from prompts import INTAKE_RULES
 from roles.base import Role
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
@@ -62,20 +63,7 @@ def _assemble_context(
             "CURRENT MISSION (the goal may have changed — re-clarify it):\n"
             + current_mission
         )
-    parts.append(
-        "INTAKE RULES:\n"
-        "- Your FIRST question to the user must be \"What is the organization's "
-        "goal?\" — establish the goal before any other clarifying question "
-        "(scope, size, ownership, success criteria). Do not jump into scope or "
-        "org-size clarifications until you understand the goal.\n"
-        "- Only ask clarifying questions you genuinely need; when confident, "
-        "stop.\n"
-        "- When you report confidence >= threshold, you MUST also restate the "
-        "goal in the `restated_goal` field (a one-sentence restatement of what "
-        "the organization is trying to accomplish). Convergence requires a "
-        "non-empty `restated_goal` — a fuzzy goal must not short-circuit the "
-        "intake."
-    )
+    parts.append(INTAKE_RULES)
     if transcript:
         parts.append("Q&A SO FAR:")
         for entry in transcript:

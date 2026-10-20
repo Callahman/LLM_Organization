@@ -31,7 +31,12 @@ from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
 from runtime.history import HistoryStore
 from runtime.timing import TimingTracker
-from runtime.pods import SoloTracker, form_pod, run_pod
+from runtime.pods import (
+    SoloTracker,
+    form_pod,
+    run_pod,
+    log_devils_advocate_listening,
+)
 from runtime.dispatch_common import (
     mission_digest,
     _leader_ctx,
@@ -253,6 +258,9 @@ def run_plan(
             f"Clarify the department's mission (department {head.department})",
             kind="clarification",
         )
+        # Story 12: the devil's advocate "listens" to the leader+head pod
+        # (visible, never silent).
+        log_devils_advocate_listening(org, pod, roles_with_leader)
         _run_contained_pod(backend, org, pod,
                            max_rounds=(config or {}).get(
                                "clarification_pod_rounds"),

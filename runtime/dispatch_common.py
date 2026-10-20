@@ -25,6 +25,15 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from prompts import (
+    HEAD_CTX_DIGEST,
+    HEAD_CTX_INSTRUCTION,
+    HEAD_CTX_OBJ,
+    HEAD_CTX_PREFIX,
+    LEADER_CTX_DIGEST,
+    LEADER_CTX_INSTRUCTION,
+    LEADER_CTX_NO_INVENT,
+)
 from roles.base import Role, spin_personality, spin_sub_architype
 from roles.worker import worker_output_schema
 from org import tiers
@@ -93,14 +102,9 @@ def _run_contained_pod(backend: LLMBackend, org: OrgState, pod: Pod,
 def _leader_ctx(digest: str, head_ids: List[str],
                 efficiency_panel: str = "") -> str:
     base = (
-        "PHASE 4: decompose the mission into department objectives. "
-        f"Mission digest: {digest} "
-        "Set `decomposition` to a JSON OBJECT (not a string) whose "
-        "`department_objectives` key is a NON-EMPTY JSON array of objects, "
-        "each exactly {\"head_id\": <str>, \"objective\": <str>}. "
-        f"The head_id MUST be one of the existing department heads: {head_ids}. "
-        "Do NOT invent new head_ids — only assign objectives to the heads that "
-        "already exist in the org."
+        LEADER_CTX_DIGEST + digest +
+        LEADER_CTX_INSTRUCTION + str(head_ids) +
+        LEADER_CTX_NO_INVENT
     )
     # Story 22: the Leader is invoked with the efficiency panel (per-role /
     # per-department invoke time) so it can act on an inefficient role or
@@ -222,15 +226,10 @@ def _process_efficiency(org, leader, eff: Dict[str, Any], approver_fn,
 
 def _head_ctx(head: Role, objective: str, digest: str) -> str:
     return (
-        f"PHASE 4 (head {head.id}): decompose the department objective into "
-        f"team objectives. Objective: {objective} | Mission digest: {digest} "
-        "Set `decomposition` to a JSON OBJECT (not a string) whose "
-        "`team_objectives` key is a JSON array of objects, each exactly "
-        "{\"manager_id\": <str>, \"team\": <str>, \"objective\": <str>} (or "
-        "{\"ic_id\": <str>, \"team\": <str>, \"objective\": <str>} if you "
-        "direct ICs directly). `team` is the team's directory name (a short "
-        "slug, e.g. \"pipelines\") — it becomes the team work dir "
-        "(departments/<dept>/<team>/) where the team's ICs write their work."
+        HEAD_CTX_PREFIX + head.id +
+        HEAD_CTX_OBJ + objective +
+        HEAD_CTX_DIGEST + digest +
+        HEAD_CTX_INSTRUCTION
     )
 
 

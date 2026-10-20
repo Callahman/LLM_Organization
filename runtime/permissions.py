@@ -188,7 +188,10 @@ def read_reason(role, path: str) -> tuple:
         return False, f"meta_rule: {rel} is a protected invariant " \
                       f"(read-only)"
     # 3. CODE_READ: department heads and the leader cannot read code.
-    if (tiers.is_head(role) or tiers.is_leader(role)) and tiers.is_code_path(rel):
+    #    **Exception (Story 12):** the devil's advocate role **can** read other
+    #    departments' code — it doubts the org's outcomes by checking the
+    #    claims against what the pipeline has actually produced.
+    if tiers.is_code_path(rel) and not tiers.can_read_code(role, rel):
         return False, ("code_read: department heads and the leader cannot "
                        "read code (work products) — only what is brought "
                        "up as a bounded summary + pointer")
