@@ -28,11 +28,13 @@ import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from prompts import BOOTSTRAP_INSTRUCTION, BOOTSTRAP_RETRY
+from org.tiers import DEVILS_ADVOCATE_ROLE
 from roles.base import Role
 from roles.worker import worker_output_schema
 from runtime.mission import MissionResult
 from runtime.complexity import classify_complexity
-from runtime.pods import form_pod, run_pod
+from runtime.pods import form_pod, run_pod, log_devils_advocate_listening
 
 # Required departments (spun up at bootstrap; cannot be fired).
 REQUIRED_DEPARTMENTS = ("hr", "safety", "morality")
@@ -243,29 +245,11 @@ def _create_team_dir(role: Role, departments_dir: str) -> None:
 
 def _bootstrap_context(mission_result: MissionResult,
                        retry_hint: str = "") -> str:
-    ctx = (
-        "PHASE 3: propose the initial department heads for the mission. "
-        "Produce org_recommendation with the department heads as a NON-EMPTY "
-        "list — use the key `department_heads` (items: {id, department, "
-        "sub_architype, required, mandate}) or, equivalently, the key "
-        "`departments` (items: {name, head, mandate}). You MUST include the "
-        "OPERATIONAL department heads that will actually do the mission's "
-        "work — derive them from the mission's purpose / scope / "
-        "org-recommendation section (the workstreams the mission names, e.g. "
-        "income/operations, data, ml/compute, finance/reporting) — in "
-        "ADDITION to the required governance departments (hr, safety, "
-        "morality, which must also be included). The list must NOT be empty "
-        "and must NOT contain only the required departments: without "
-        "operational heads, Phase 4 cannot dispatch any work."
-    )
+    ctx = BOOTSTRAP_INSTRUCTION
     # Story 11 (B15): on a retry, append the previous attempt's failure reason
     # so the leader can adjust (instead of re-sending the same context).
     if retry_hint:
-        ctx += (
-            "\n\nPREVIOUS ATTEMPT FAILED — adjust your proposal. The leader "
-            f"reply did not include an operational department head. "
-            f"Diagnostic: {retry_hint}"
-        )
+        ctx += BOOTSTRAP_RETRY + retry_hint
     return ctx
 
 
@@ -403,6 +387,41 @@ def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
     return created
 
 
+def _ensure_devils_advocate(org: OrgState, leader: Role) -> Optional[Role]:
+    """Ensure the devil's advocate role (Story 12) is always created (even if
+    the leader omits it from the proposal). It reports **directly** to the
+    leader (a red-team auditor, not a `department_head` of a working
+    department). The mandate: institute a formal "gut check" on the org's
+    outcomes — primed to doubt, heavy on moral decision-making, and to raise
+    concerns (fabrication, hallucination, low-quality outcomes)."""
+    existing = org.get(DEVILS_ADVOCATE_ROLE)
+    if existing is not None:
+        return existing
+    da = Role(
+        id=DEVILS_ADVOCATE_ROLE,
+        architype="ic",
+        sub_architype="red_team_auditor",
+        personality="Guardian",
+        mandate=(
+            "Devil's advocate (red-team auditor, reporting directly to the "
+            "leader). Institute a formal 'gut check' on the org's outcomes: "
+            "primed to doubt (does not accept claims as true — checks them "
+            "against what the pipeline has actually produced), heavy on moral "
+            "decision-making (flags immoral/improper actions), and raises "
+            "concerns (fabrication, hallucination, low-quality outcomes). In "
+            "Phase 7 (Evaluate) return a verdict: `clean` (no concerns) or "
+            "`flag: <findings>` (concerns raised — fabrication, "
+            "hallucination, low-quality outcomes, immoral/improper actions)."
+        ),
+        reports_to=leader.id,
+        output_schema=worker_output_schema("ic"),
+    )
+    org.add_role(da)
+    org.log_event("devils_advocate_bootstrapped", leader.id, da.id,
+                  {"reports_to": leader.id})
+    return da
+
+
 def bootstrap(
     org: OrgState,
     backend,
@@ -521,6 +540,11 @@ def bootstrap(
 
     # Required departments are always spun up (and cannot be fired).
     created.extend(_ensure_required(org, departments_dir))
+    # Story 12: the devil's advocate role is always created (even if the
+    # leader omits it) — it reports directly to the leader.
+    da = _ensure_devils_advocate(org, leader)
+    if da is not None:
+        created.append(da)
     return created
 
 
@@ -627,6 +651,9 @@ def allot_department_caps(
             max_roles=12,
             kind="headcount",
         )
+        # Story 12: the devil's advocate "listens" to Pod A (all heads + the
+        # leader) — visible, never silent.
+        log_devils_advocate_listening(org, pod, roles_with_leader)
         run_pod(backend, pod,
                 max_rounds=(config or {}).get("headcount_pod_rounds"),
                 phase=3)

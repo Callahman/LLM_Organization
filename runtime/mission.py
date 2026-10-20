@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from prompts import MISSION_DEPARTMENT_PROPOSAL, MISSION_INSTRUCTION
 from roles.base import Role
 from runtime.intake import IntakeResult
 from runtime.llm import LLMBackend
@@ -64,22 +65,10 @@ def _mission_context(intake_result: IntakeResult, feedback: str,
         parts.extend(f"  - {a}" for a in intake_result.assumptions)
     if feedback:
         parts.append(f"User feedback on the previous draft: {feedback}")
-    parts.append(
-        "Set `mission_draft` to a JSON OBJECT (not a string) with keys: "
-        "`purpose` (string), `success_criteria` (array), `scope` (array), "
-        "`non_goals` (array), `constraints` (array), `org_recommendation` "
-        "(object or string), `resource_envelope` (object or string)."
-    )
+    parts.append(MISSION_INSTRUCTION)
     # Story 6: also propose the departments the mission needs, in priority
     # order (Phase 3 creates them).
-    parts.append(
-        "Also set `department_proposal` to a JSON OBJECT with a `departments` "
-        "array in PRIORITY order (highest first); each item is an OBJECT with "
-        "`name` (string, the department), `priority` (integer), and `rationale` "
-        "(string, why the mission needs it). Propose the OPERATIONAL departments "
-        "that will do the mission's work (derived from the purpose/scope), in "
-        "ADDITION to the governance departments (hr, safety, morality)."
-    )
+    parts.append(MISSION_DEPARTMENT_PROPOSAL)
     return "\n".join(parts)
 
 

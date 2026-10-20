@@ -398,22 +398,29 @@ proposal is absent.
       (which phase / which role / which pod), for auditing + suggesting changes.
 
 ### Story 12 — "Devil's advocate" role (a leader's direct report / red-team auditor) (`runtime/org.py`, `runtime/pods.py`, `runtime/session.py`, `runtime/permissions.py`)
-- [ ] Add a **single "devil's advocate" role** reporting **directly to the
+- [x] Add a **single "devil's advocate" role** reporting **directly to the
       leader** (always created in Org bootstrap; mandatory — a formal **"gut
       check"** on the org's outcomes, not a department).
-- [ ] Grant it **cross-department read access** — one of the only roles that can
+- [x] Grant it **cross-department read access** — one of the only roles that can
       read other departments' directories (via `permissions.py`).
-- [ ] Make it **"listen" to any pod the leader is in AND any pod the heads are
+- [x] Make it **"listen" to any pod the leader is in AND any pod the heads are
       in** (it observes those deliberations, not just the final reports).
-- [ ] **Prime it to doubt** — its mandate does not accept information as true;
+- [x] **Prime it to doubt** — its mandate does not accept information as true;
       it checks claims against what the pipeline has actually produced.
-- [ ] Give it a **heavy emphasis on moral decision-making** — it flags
+- [x] Give it a **heavy emphasis on moral decision-making** — it flags
       immoral/improper actions, not just factual errors.
-- [ ] **Phase 7 hook** — in Evaluate it returns a verdict (`clean` /
+- [x] **Phase 7 hook** — in Evaluate it returns a verdict (`clean` /
       `flag: <findings>`); in **Phase 8 (Decide)** a `flag` is consumed by the
       leader to **force a re-check** or **block a stop**.
-- [ ] Update the leader's **department proposal** to always include this role
+- [x] Update the leader's **department proposal** to always include this role
       (mandatory — not optional).
+- [x] **Repairs (2026-07-10):** the leader's cross-department read access is
+      scoped in `tiers.can_read` (Repair 1) + the leader cannot read code
+      (`tiers.can_read_code`, Repair 2); **12 new tests** in
+      `tests/test_devils_advocate.py` (the role is always created; the
+      cross-department read is scoped to the role + the leader; the role
+      "listens" to the leader's + heads' pods; the Phase-7 verdict; the
+      Phase-8 consequence; the reporting-pod skip).
 
 ## 6. Dependencies + Ordering
 

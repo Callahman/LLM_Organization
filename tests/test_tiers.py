@@ -57,8 +57,12 @@ def test_head_cannot_read_any_code():
 def test_leader_cannot_read_any_code():
     leader = _role("leader", "leader")
     assert tiers.can_read(leader, "MISSION.md")
+    # Story 12: the leader has **cross-department read access** — it can read
+    # the department policies (the governance records of the work), but NOT the
+    # code (work products) — it sees work only as it is brought to it.
+    assert tiers.can_read(leader, "departments/analytics/ANALYTICS_POLICY.md")
     assert not tiers.can_read_code(leader, "departments/analytics/pipelines/a.py")
-    assert not tiers.can_read(leader, "departments/analytics/ANALYTICS_POLICY.md")
+    assert not tiers.can_read_code(leader, "departments/analytics/ANALYTICS_POLICY.md")
 
 
 def test_cross_team_read_flagged():

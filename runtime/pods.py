@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from org import tiers
+from org.tiers import DEVILS_ADVOCATE_ROLE
 from roles.base import Role
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity, detect_disagreement
@@ -160,6 +161,40 @@ def senior_member(pod: Pod) -> Role:
     """The most senior member (lowest tier number). After a pod closes, this
     member shares the outcome up the line."""
     return min(pod.members, key=lambda m: tiers.tier_of(m))
+
+
+def devils_advocate_listens(pod: Pod, roles: Dict[str, Role]) -> Optional[Role]:
+    """The devil's advocate role (Story 12) **"listens"** to any pod the
+    **leader** is in AND any pod the **heads** are in (it observes the
+    deliberation — it does **not** participate; it is not a pod member).
+    Returns the devil's advocate role if it listens to this pod (the leader or
+    a head is a member), else None. The caller logs the listening in the audit
+    (visible, never silent)."""
+    da = roles.get(DEVILS_ADVOCATE_ROLE)
+    if da is None:
+        return None
+    for m in pod.members:
+        if tiers.is_leader(m) or tiers.is_head(m):
+            return da
+    return None
+
+
+def log_devils_advocate_listening(org, pod: Pod,
+                                  roles: Dict[str, Role]) -> None:
+    """Log the devil's advocate role's "listening" to a pod in the audit
+    (Story 12 — visible, never silent). Called after forming a pod the leader
+    or a head is in; the cross-pod read is recorded so the operator can see it.
+    A no-op when the role does not listen to the pod (or when ``org`` has no
+    ``log_event``)."""
+    da = devils_advocate_listens(pod, roles)
+    if da is None:
+        return
+    log_event = getattr(org, "log_event", None)
+    if log_event is None:
+        return
+    log_event("devils_advocate_listening", da.id, pod.id,
+              {"topic": pod.topic, "kind": pod.kind,
+               "pod_members": [m.id for m in pod.members]})
 
 
 def _pod_ctx(pod: Pod, kind: str, prior: str = "",

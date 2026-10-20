@@ -21,7 +21,7 @@ complete the work and raise the need for testing to the user).
 | 9 | `story-09-tests.md` | Tests | Pending |
 | 10 | `story-10-docs.md` | Docs (doc files to update) | Pending |
 | 11 | `story-11-prompts.md` | Prompts directory (`prompts/`) | Pending |
-| 12 | `story-12-devils-advocate.md` | "Devil's advocate" role (a leader's direct report / red-team auditor) | Pending |
+| 12 | `story-12-devils-advocate.md` | "Devil's advocate" role (a leader's direct report / red-team auditor) | **Done** |
 
 > **Deployment status:** Stories 1–8 are deployed (the 8-phase Session
 > restructure + the `dispatch.py` split, plus the Phase-1 informal draft and the
@@ -29,9 +29,12 @@ complete the work and raise the need for testing to the user).
 > collaboration pod (Story 4), the department policy-after-pod (Story 5), the
 > department proposal (Story 6), the config knobs incl. the routing rules + cap
 > defaults (Story 7), and the 8-phase CLI logging (Story 8)). **Step 4**
-> (Stories 6 + 7 + 8 — proposal / config / CLI) is now complete; the next
-> deployment is **Step 5** (Story 11 — prompts, and Story 12 — the "devil's
-> advocate" role), per the order below.
+> (Stories 6 + 7 + 8 — proposal / config / CLI) is now complete. **Step 5**
+> (Story 11 — prompts, and Story 12 — the "devil's advocate" role) is **in
+> progress**: Story 12 (the "devil's advocate" role — always created in
+> bootstrap, cross-department read access, "listens" to the leader's + heads'
+> pods, Phase-7 gut check + Phase-8 consequence) is **code-complete**; Story 11
+> (prompts) is still pending.
 
 ## Deployment order (detailed, with reasoning)
 

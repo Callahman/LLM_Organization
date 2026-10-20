@@ -1,5 +1,11 @@
 # Story 12 — "Devil's advocate" role (a leader's direct report / red-team auditor)
 
+> **Status: Done** — the role is always created in Org bootstrap (12.1); it
+> "listens" to the leader's + heads' pods (12.2); its cross-department read
+> access is scoped in `permissions.py` (12.3); and its Phase-7 gut check
+> returns a verdict (`clean` / `flag`) that Phase 8 consumes (a flag forces a
+> re-check / blocks a stop) (12.4).
+
 ## Goal
 
 Add a **single "devil's advocate" role** — a red-team auditor reporting
@@ -40,6 +46,8 @@ The role's charter:
 - `runtime/permissions.py` — **modify** (the cross-department read access).
 - `org/tiers.py` — **modify** (the `can_read` / `cross_team_read` logic for the
   devil's advocate).
+- `prompts/__init__.py` — **modify** (the `DEVILS_ADVOCATE_INSTRUCTION` prompt
+  — the gut-check instruction, used by `_devils_advocate_verdict`).
 
 ## Detailed changes
 
@@ -159,6 +167,18 @@ happens in **Phase 7 (Evaluate)** (Story 1) + the consequence in **Phase 8
 > Phase-8 consequence are recorded in the audit (so the operator can see the
 > gut check + its consequence).
 
+> **Implementation:** the gut check runs in `runtime/session.py`.
+> `_evaluate_progress` (Phase 7) calls `_devils_advocate_verdict(leader_out,
+> decisions)` **after** the leader's synthesis; it invokes the devil's advocate
+> role (the `DEVILS_ADVOCATE_INSTRUCTION` prompt) with the leader's synthesis +
+> the pods' deliberations + the department work (read via
+> `_department_work_summary` through the cross-department read access), stores
+> the verdict on `self.da_verdict`, and logs it to the audit. `_decide`
+> (Phase 8) consumes `self.da_verdict` — a `flag` forces a re-check (the status
+> is forced to `continue`) / blocks a stop, and is surfaced to the leader (the
+> decision) + the operator (the audit). The check is **contained** (a missing
+> role or an invoke failure is logged and never takes down Phase 7).
+
 > **Ordering:** this story **depends on Story 6** (the department proposal —
 > the role is always included in the proposal) + **Story 1** (the 8-phase
 > Session — the Phase-7 verdict + the Phase-8 consequence) + **Story 4** (the
@@ -185,3 +205,25 @@ happens in **Phase 7 (Evaluate)** (Story 1) + the consequence in **Phase 8
 >   testing to the user** — state clearly that you could not verify the changes
 >   by running the tests, why (the specific error / missing venv), and that the
 >   user should run the test suite to confirm. Do not silently skip this step.
+
+## Repairs
+
+> **Repair 1 (2026-07-10):** `tiers.can_read` — the leader's cross-department
+> read access was not scoped (the `is_leader` branch was missing) — a head/IC
+> read of another department could slip past the read gate. The leader (and
+> the devil's advocate role) now explicitly get the cross-department read
+> (`path == "MISSION.md" or path.startswith("departments/")`), while the head
+> and manager/IC branches keep their own scope.
+>
+> **Repair 2 (2026-07-10):** `tiers.can_read_code` — the leader could read
+> code (the `is_leader` check was missing from the code-read refusal) — a
+> head/leader code read was not refused. The leader is now refused any code
+> read (`if is_leader(role) or is_head(role): return False`); only the
+> devil's advocate role reads code (its cross-department access).
+>
+> **Tests (2026-07-10):** 12 new tests in `tests/test_devils_advocate.py` —
+> the role is always created in bootstrap; the cross-department read is
+> scoped to the role + the leader; the role "listens" to the leader's +
+> heads' pods (and not to IC pods); the Phase-7 verdict (`clean` / `flag` /
+> missing-role); the Phase-8 consequence (a flag blocks a stop, a clean
+> verdict does not); and the reporting-pod skip (no 3-tier-spread pod).

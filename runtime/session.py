@@ -45,6 +45,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from prompts import (
+    DECIDE_INSTRUCTION,
+    DEVILS_ADVOCATE_INSTRUCTION,
+    EVALUATE_INSTRUCTION,
+)
 from roles.base import Role
 from runtime.llm import LLMBackend, MemoryBackend, TimeoutBackend
 from runtime.intake import run_intake, IntakeResult
@@ -52,7 +57,12 @@ from runtime.mission import run_mission, MissionResult, load_mission
 from runtime.org import OrgState, bootstrap, allot_department_caps
 from runtime import dispatch
 from runtime import plan, staff, execute
-from runtime.pods import SoloTracker, form_pod, run_pod
+from runtime.pods import (
+    SoloTracker,
+    form_pod,
+    run_pod,
+    log_devils_advocate_listening,
+)
 from runtime.history import HistoryStore
 from runtime.timing import TimingTracker, TimingBackend
 from runtime.efficiency import (
@@ -182,6 +192,11 @@ class Session:
         )
         self.cycles = 0
 
+        # Story 12: the devil's advocate role's Phase-7 verdict (clean /
+        # flag: <findings>) — consumed in Phase 8 (a flag forces a re-check /
+        # blocks a stop). Reset per cycle in _devils_advocate_verdict.
+        self.da_verdict: Optional[str] = None
+
         # BAU rule state.
         self.pending_user_input: List[Dict[str, Any]] = []
         self.bau_halt: Optional[Dict[str, Any]] = None
@@ -215,6 +230,7 @@ class Session:
         2-member parent+child pod (kind="reporting"), capped at the reporting
         pod round count. The decisions the pods close on are carried up to the
         leader's synthesis (the existing ``self.pods`` carry-over path)."""
+        from org import tiers
         config = self.config
         max_rounds = config.get("reporting_pod_rounds")
         # The leader is not a member of `self.org.roles` — add it so the
@@ -223,6 +239,14 @@ class Session:
         # ic→manager + manager→head: each role reports to its `reports_to` boss.
         for role in self.org.active_roles():
             if role.architype not in ("ic", "manager"):
+                continue
+            # Story 12: the devil's advocate role is a special role (a red-team
+            # auditor reporting to the leader) — it is NOT a normal ic/manager
+            # direct report, so it does not get a reporting pod (it is invoked
+            # directly in Phase 7 via _devils_advocate_verdict). A reporting
+            # pod for it would span 3 tiers (ic→leader) and violate the <=1
+            # tier-spread bound.
+            if tiers.is_devils_advocate(role):
                 continue
             parent_id = getattr(role, "reports_to", None)
             if not parent_id:
@@ -236,6 +260,9 @@ class Session:
                 f"fire-replace-keep decisions + headcount changes)",
                 kind="reporting",
             )
+            # Story 12: the devil's advocate "listens" to a reporting pod when
+            # the parent is a head (visible, never silent).
+            log_devils_advocate_listening(self.org, pod, roles)
             run_pod(self.backend, pod, max_rounds=max_rounds, phase=7)
         # head→leader: each department head reports to the leader.
         for head in self.org.department_heads():
@@ -245,6 +272,9 @@ class Session:
                 f"fire-replace-keep decisions + headcount changes)",
                 kind="reporting",
             )
+            # Story 12: the devil's advocate "listens" to the head→leader pod
+            # (the leader is a member — visible, never silent).
+            log_devils_advocate_listening(self.org, pod, roles)
             run_pod(self.backend, pod, max_rounds=max_rounds, phase=7)
 
     def _evaluate_progress(self) -> str:
@@ -253,14 +283,7 @@ class Session:
         # to the parent (after work), and the decisions the pods close on are
         # carried up to the leader (the existing `self.pods` carry-over path).
         self._run_reporting_pods()
-        ctx = (
-            "PHASE 7: check progress against the mission's success criteria AND "
-            "assess whether the deliverable can be IMPROVED (more polished, "
-            "more fun, more features, better quality). Do NOT stop at the first "
-            "working version — the goal is a polished deliverable, not just a "
-            "working one. Produce a verdict: complete (genuinely polished, "
-            "stop) / continue (can improve, keep iterating) / escalate."
-        )
+        ctx = EVALUATE_INSTRUCTION
         # S22: include the efficiency breakdown + E + the mandate to keep E
         # high (the most recent finished iteration's metrics).
         eff_panel = self.efficiency.panel_text()
@@ -289,9 +312,96 @@ class Session:
                            # the dashboard can show an active halt.
                            "bau_active": self.bau_active(),
                            "bau_halt": self.bau_halt})
+        # Story 12 (Phase 7): the devil's advocate role's gut check — it
+        # doubts the org's outcomes (the leader's synthesis + the pods'
+        # deliberations it "listens" to) against what the pipeline has
+        # actually produced. The verdict is stored on `self.da_verdict` and
+        # consumed in Phase 8.
+        self._devils_advocate_verdict(out, decisions)
         # A1: close the solo pod when the synthesis phase completes.
         self.solo.close("p7", f"evaluate verdict={out.get('verdict', 'complete')}")
         return out.get("verdict", "complete")
+
+    # --- Story 12 (Phase 7): the devil's advocate role's gut check ----------
+
+    def _devils_advocate_verdict(self, leader_out: Dict[str, Any],
+                                 decisions: List[str]) -> Optional[str]:
+        """Story 12 (Phase 7, Evaluate): the devil's advocate role's formal
+        "gut check". It is **primed to doubt** — it checks the claims (the
+        leader's synthesis + the pods' deliberations it "listens" to) against
+        what the pipeline has **actually produced** (the department work),
+        **flags** immoral/improper actions (heavy on moral decision-making),
+        and returns a verdict: `clean` (no concerns) or `flag: <findings>`
+        (concerns raised — fabrication, hallucination, low-quality outcomes,
+        immoral/improper actions).
+
+        The verdict is stored on `self.da_verdict` (consumed in Phase 8) and
+        logged to the audit (visible, never silent). **Contained**: a missing
+        role or an invoke failure is logged and never takes down Phase 7.
+        """
+        from org import tiers
+        da = self.org.get(tiers.DEVILS_ADVOCATE_ROLE)
+        if da is None or da.status != "active":
+            # The role is always created in bootstrap — if it is missing here,
+            # log it visibly (never silent) and skip the gut check.
+            self.org.log_event("devils_advocate_missing", None, None,
+                               {"phase": 7, "cycle": self.cycles})
+            self.da_verdict = None
+            return None
+        ctx = DEVILS_ADVOCATE_INSTRUCTION
+        ctx += " LEADER'S SYNTHESIS (the claims to doubt): " + str(leader_out)
+        if decisions:
+            ctx += " PODS' DELIBERATIONS (observed): " + "; ".join(decisions)
+        dept_work = self._department_work_summary(da)
+        if dept_work:
+            ctx += " DEPARTMENT WORK (what the pipeline has produced): " \
+                   + dept_work
+        try:
+            out = self.backend.invoke(
+                da, ctx,
+                reasoning=classify_complexity(7, da, {"gut_check": True}),
+                phase=7,
+            )
+        except Exception as e:
+            # Contained: an invoke failure is logged, never takes down Phase 7.
+            self.org.log_event("devils_advocate_failed", da.id, None,
+                               {"phase": 7, "cycle": self.cycles,
+                                "error": str(e)})
+            self.da_verdict = None
+            return None
+        verdict = out.get("verdict", "clean")
+        self.da_verdict = verdict
+        # Visible: the verdict is logged to the audit (the operator can see the
+        # gut check; its Phase-8 consequence is logged separately).
+        self.org.log_event("devils_advocate_verdict", da.id, None,
+                           {"phase": 7, "cycle": self.cycles,
+                            "verdict": verdict})
+        return verdict
+
+    def _department_work_summary(self, da) -> str:
+        """Story 12 (Phase 7): a bounded summary of the department work (what
+        the pipeline has **actually produced**) — each department's policy
+        markdown (the governance record of its work). Read through the read
+        gate on behalf of the devil's advocate role (its cross-department read
+        access). Bounded: each policy is truncated; a missing / unreadable file
+        contributes nothing (a read of a new file is not an error)."""
+        from runtime import permissions
+        from org import tiers
+        lines: List[str] = []
+        seen_depts: set = set()
+        for head in self.org.department_heads():
+            dept = head.department
+            if not dept or dept in seen_depts:
+                continue
+            seen_depts.add(dept)
+            try:
+                content = permissions.read_file(da, tiers.policy_path(dept))
+            except Exception:
+                content = ""
+            content = (content or "").strip()
+            if content:
+                lines.append(f"[{dept}] {content[:1500]}")
+        return "\n".join(lines)
 
     # --- Phase 8 decide + continue/complete --------------------------------
 
@@ -337,13 +447,7 @@ class Session:
         self.history.write_evaluation_report(evaluation)
         # S22: include the efficiency breakdown + E + the mandate to keep E
         # high (the most recent finished iteration's metrics).
-        p8_ctx = (
-            "PHASE 8: decide whether to keep iterating. Bias toward 'continue' "
-            "(keep improving the deliverable) unless it is genuinely polished. "
-            "The goal is a high-quality deliverable, not just a working one. "
-            "Choose 'complete' (stop) or 'continue' (another iteration, still "
-            f"abiding by the original goal). Evaluation: {evaluation}"
-        )
+        p8_ctx = DECIDE_INSTRUCTION + str(evaluation)
         eff_panel = self.efficiency.panel_text()
         if eff_panel:
             p8_ctx += " " + eff_panel
@@ -358,9 +462,33 @@ class Session:
         # dashboard can watch it (one transcript file, growing per round).
         self.solo.record("p8", "Phase 8: decide", self.cycles,
                          "decision", out)
+        # Story 12 (Phase 8, Decide): consume the devil's advocate verdict — a
+        # `flag` forces a re-check (re-evaluate the flagged outcomes) or blocks
+        # a stop (does not complete / ship the low-quality or immoral
+        # outcomes). The flag is surfaced to the leader (the decision) + the
+        # operator (the audit).
+        da_verdict = getattr(self, "da_verdict", None)
+        flag_active = bool(da_verdict and da_verdict.startswith("flag"))
+        if flag_active:
+            evaluation["devils_advocate_flag"] = da_verdict
+            self.history._append(
+                "escalations.jsonl",
+                {"phase": 8, "reason": f"devil's advocate flag: {da_verdict}",
+                 "cycle": self.cycles},
+            )
+            # Visible: the Phase-8 consequence is logged to the audit (the
+            # operator can see the gut check + its consequence).
+            self.org.log_event("devils_advocate_flag_consumed", None, None,
+                               {"phase": 8, "cycle": self.cycles,
+                                "verdict": da_verdict, "action": "re-check"})
         # A1: close the solo pod when the evaluation phase completes.
         self.solo.close("p8", f"decide decision={decision}")
         if decision == "continue" and self.cycles < max_iterations:
+            return evaluation, "continue"
+        # Story 12: a flag BLOCKS A STOP — do not complete / ship the
+        # low-quality or immoral outcomes (the status is forced to `continue`
+        # = re-check the flagged outcomes).
+        if flag_active:
             return evaluation, "continue"
         return evaluation, "complete"
 
