@@ -1,0 +1,5 @@
+{"role": "leader", "phase": 1, "requested": "low", "granted": "low", "ts": 1792517603.2444959}
+{"role": "leader", "phase": 2, "requested": "high", "granted": "high", "ts": 1792517603.2632415}
+{"role": "leader", "phase": 3, "requested": "high", "granted": "high", "ts": 1792517603.2784588}
+{"role": "leader", "phase": 3, "requested": "high", "granted": "high", "ts": 1792517603.2829962}
+{"role": "leader", "phase": 3, "requested": "high", "granted": "high", "ts": 1792517603.287103}

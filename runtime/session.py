@@ -264,8 +264,14 @@ class Session:
             # the parent is a head (visible, never silent).
             log_devils_advocate_listening(self.org, pod, roles)
             run_pod(self.backend, pod, max_rounds=max_rounds, phase=7)
-        # head→leader: each department head reports to the leader.
+        # head→leader: each (operational) department head reports to the
+        # leader. The required governance heads (hr / safety / morality) are
+        # skipped — like the Phase 4 clarification pod, the leader+head working
+        # pods exclude the governance departments (they have no work teams to
+        # report status / results / headcount changes on).
         for head in self.org.department_heads():
+            if head.is_required:
+                continue
             pod = form_pod(
                 roles, self.leader.id, [self.leader.id, head.id],
                 f"{head.id} reports to {self.leader.id} (status / results / "

@@ -1,0 +1,5 @@
+{"ts": 1792517603.250574, "per_role": {"leader": 0.006078243255615234}, "per_department": {}, "total_time": 0.006078243255615234, "total_calls": 1}
+{"ts": 1792517603.2647538, "per_role": {"leader": 0.007590532302856445}, "per_department": {}, "total_time": 0.007590532302856445, "total_calls": 2}
+{"ts": 1792517603.281485, "per_role": {"leader": 0.010616779327392578}, "per_department": {}, "total_time": 0.010616779327392578, "total_calls": 3}
+{"ts": 1792517603.284513, "per_role": {"leader": 0.012133598327636719}, "per_department": {}, "total_time": 0.012133598327636719, "total_calls": 4}
+{"ts": 1792517603.289087, "per_role": {"leader": 0.014117717742919922}, "per_department": {}, "total_time": 0.014117717742919922, "total_calls": 5}

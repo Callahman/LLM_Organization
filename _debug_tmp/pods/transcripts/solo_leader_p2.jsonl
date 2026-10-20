@@ -1,0 +1,2 @@
+{"kind": "mission", "role": "leader", "round": 0, "summary": "mission approved=True version=1 attempts=1", "output": {"summary": "mission approved=True version=1 attempts=1", "approved": true, "version": 1, "attempts": 1, "edits": 1}}
+{"kind": "close", "role": "leader", "summary": "mission approved=True, v1", "decision": "mission approved=True, v1"}

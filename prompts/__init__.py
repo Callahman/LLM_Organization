@@ -130,22 +130,182 @@ HEAD_CTX_INSTRUCTION = (
 )
 
 # Phase 5 (Staff) — the manager's IC-decomposition context (the dynamic
-# manager id + objective + policy are composed in by
+# manager id + objective + policy + digest are composed in by
 # runtime/dispatch_common.py::_manager_ctx).
 MANAGER_CTX_PREFIX = "PHASE 5 (manager "
 MANAGER_CTX_OBJ = (
-    "): decompose your team objective into IC tasks. Objective: "
+    "): decompose the team objective into IC tasks. Objective: "
 )
-MANAGER_CTX_POLICY = " | Policy so far: "
+MANAGER_CTX_CLAR_PREFIX = (
+    " | Clarified team mission (from the head+manager clarification pod): "
+)
+MANAGER_CTX_DIGEST = (
+    " | Mission (the org's goal): "
+)
+MANAGER_CTX_POLICY = (
+    " | Department policy (follow it, and give your ICs tasks that satisfy "
+    "it): "
+)
 MANAGER_CTX_INSTRUCTION = (
-    " Set `summary` to a JSON OBJECT with keys: `tasks` (a JSON array of "
-    "objects, each exactly {\"ic_id\": <str>, \"task\": <str>}), `teams` "
-    "(a JSON array of team names — the team work dirs the tasks live in, "
-    "e.g. [\"pipelines\"]), and `policy` (a string — the department's "
-    "operating policy that the ICs will follow). If you do NOT have any "
-    "ICs yet (a fresh team), leave `tasks` as an empty array and set "
-    "`teams` to the team names you expect to form."
+    " Set `decomposition` to a JSON OBJECT (not a string) whose `ic_tasks` "
+    "key is a JSON array of objects, each exactly {\"ic_id\": <str>, "
+    "\"task\": <str>}."
 )
+
+# Phase 6 (Execute) — the IC's work context (the dynamic ic id + team root +
+# path rules + task + policy summary are composed in by
+# runtime/dispatch_common.py::_ic_ctx).
+IC_CTX_PREFIX = "PHASE 6 (IC "
+IC_CTX_WORK_DIR = (
+    "): do the work in your team directory. Your team work directory is "
+)
+IC_CTX_WRITE_ALL = (
+    "/ — write ALL files there. "
+)
+# The path rules — two variants (a concrete team root, or a bare "your team
+# directory" fallback). The concrete variant is built in _ic_ctx with the
+# team_root + the role's own id (the model's default wrong dir).
+IC_CTX_PATH_RULES_CONCRETE_PREFIX = (
+    "Every path MUST start with "
+)
+IC_CTX_PATH_RULES_CONCRETE_MID = (
+    "/ — e.g. correct: "
+)
+IC_CTX_PATH_RULES_CONCRETE_SUFFIX = (
+    "/README.md; wrong: "
+)
+IC_CTX_PATH_RULES_CONCRETE_TAIL = (
+    "/README.md or "
+)
+IC_CTX_PATH_RULES_CONCRETE_END = (
+    "/README.md (a bare top-level dir, or your own id as a directory, is "
+    "refused as out_of_scope)."
+)
+IC_CTX_PATH_RULES_BARE = (
+    "Write under your team directory (departments/<dept>/<team>/); a bare "
+    "top-level path is refused as out_of_scope."
+)
+IC_CTX_DIGEST = (
+    " Mission (the org's goal): "
+)
+IC_CTX_POLICY = (
+    " Department policy summary (follow it): "
+)
+IC_CTX_TASK = (
+    " Task: "
+)
+IC_CTX_CLAR_PREFIX = (
+    " | Clarified task (from the manager+ic clarification pod): "
+)
+IC_CTX_INSTRUCTION_PREFIX = (
+    " Set `summary` to a one-line summary of the work done and `work_path` "
+    "to the path of the work (under "
+)
+IC_CTX_INSTRUCTION_MID = (
+    "/). If your work requires changing code, set `code_edits` to a JSON "
+    "array of objects, each exactly {\"path\": <str>, \"content\": <str>}. "
+    "Each edit is gated by the permission layer: write under "
+)
+IC_CTX_INSTRUCTION_SUFFIX = (
+    "/ only; the mission and the rules are read-only. If completing this "
+    "task requires collaboration with another role or department, set "
+    "`collaborate` to a one-line description of what you need (leave it "
+    "empty if you can complete the task on your own)."
+)
+
+# Phase 4 (Plan) — the head's policy-generation context (the dynamic head id
+# + mission digest + directive + existing policy are composed in by
+# runtime/dispatch_common.py::_policy_ctx).
+POLICY_CTX_PREFIX = "PHASE 4 (head "
+POLICY_CTX_OBJ = (
+    "): author your department's POLICY so your managers and ICs have a "
+    "clear instruction on how their work fulfils the org's goal. Mission: "
+)
+POLICY_CTX_DIRECTIVE = (
+    " | Your directive: "
+)
+POLICY_CTX_CLAR_PREFIX = (
+    " | Clarified mission (from the leader+head clarification pod): "
+)
+POLICY_CTX_EXISTING = (
+    " | Your existing policy (update it, don't start from scratch): "
+)
+POLICY_CTX_INSTRUCTION = (
+    " Set `policy` to the FULL policy markdown (how work is broken down, "
+    "standards, how managers and ICs report) and `policy_summary` to a "
+    "SHORT summary of the key policy points (a few lines) that ICs will be "
+    "given directly. Set `summary` to a one-line summary and `confidence` "
+    "to a number 0-1."
+)
+
+# Phase 6 (Execute) — the IC's one corrective-retry nudge (appended to the
+# same task's context when the first reply was malformed / missing). Used by
+# runtime/dispatch_common.py::_invoke_ic.
+IC_RETRY_NUDGE = (
+    "\n\n[RETRY] Your previous reply for this task was not a valid "
+    "structured call (its JSON arguments were malformed or missing). "
+    "Call the submit_output tool exactly once; its arguments must be ONE "
+    "complete JSON object matching your role's output schema. Do not "
+    "emit placeholder or dummy calls."
+)
+
+# Phase 6 (Execute) — the IC's self-edit correction context (the IC's
+# proposed code edits were REFUSED by the permission layer; it re-proposes
+# them with corrected paths). Used by
+# runtime/dispatch_common.py::_retry_refused_edits.
+SELF_EDIT_CORRECTION_PREFIX = (
+    "PHASE 6 (IC "
+)
+SELF_EDIT_CORRECTION_MID = (
+    ") — self-edit correction. Some of your proposed code edits were "
+    "REFUSED by the permission layer:\n"
+)
+SELF_EDIT_CORRECTION_SUFFIX = (
+    "\nRe-propose the refused edits with corrected paths (write under your "
+    "team work dir; the mission and the rules are read-only). Set "
+    "`code_edits` to a JSON array of objects, each exactly "
+    "{\"path\": <str>, \"content\": <str>}. If a refused edit cannot be "
+    "placed in an allowed scope, omit it."
+)
+
+# Phase 4 (Plan) — the automation IC's script-writing context (S22: the
+# automation-over-headcount flow spins up an IC to write a Python script for
+# a recurring task). Used by runtime/dispatch_common.py::run_automation.
+AUTOMATION_CTX_PREFIX = (
+    "PHASE 4 (automation IC "
+)
+AUTOMATION_CTX_MID = (
+    "): write a Python script for the recurring task. Task: "
+)
+AUTOMATION_CTX_SUFFIX = (
+    " Set `script` to the FULL Python script (a self-contained script that "
+    "performs the recurring task end to end) and `summary` to a one-line "
+    "summary of what the script does."
+)
+
+# Phase 6 (Execute) — the pod's upward-report prompt (the most senior pod
+# member shares the pod's decision up the line). Used by
+# runtime/dispatch_common.py::_check_pod_triggers.
+POD_UPWARD_REPORT_PREFIX = (
+    "POD "
+)
+POD_UPWARD_REPORT_MID = (
+    " outcome to share up the line — decision: "
+)
+POD_UPWARD_REPORT_SUFFIX = (
+    ". Produce an upward report of the pod's decision."
+)
+
+# Phase 6 (Execute) — the pod context labels (the pod member's context is
+# mostly dynamic data — the topic, the agenda, the input artifacts, the
+# prior; these are the static labels that frame it). Used by
+# runtime/pods.py::_pod_ctx. `kind` is one of "agenda" / "speak" / "close".
+POD_CTX_HEADER_PREFIX = "POD "
+POD_CTX_HEADER_MID = ": "
+POD_CTX_HEADER_DASH = " — "
+POD_CTX_AGENDA_LABEL = "AGENDA: "
+POD_CTX_ARTIFACTS_LABEL = "INPUT ARTIFACTS: "
+POD_CTX_PRIOR_LABEL = "PRIOR: "
 
 # ---------------------------------------------------------------------------
 # Phase 7 (Evaluate)

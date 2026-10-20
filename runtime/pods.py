@@ -24,6 +24,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from org import tiers
 from org.tiers import DEVILS_ADVOCATE_ROLE
+from prompts import (
+    POD_CTX_AGENDA_LABEL,
+    POD_CTX_ARTIFACTS_LABEL,
+    POD_CTX_HEADER_DASH,
+    POD_CTX_HEADER_MID,
+    POD_CTX_HEADER_PREFIX,
+    POD_CTX_PRIOR_LABEL,
+)
 from roles.base import Role
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity, detect_disagreement
@@ -205,14 +213,22 @@ def _pod_ctx(pod: Pod, kind: str, prior: str = "",
     only the transcript entries are token-bounded (via `bounded_assembly` —
     oldest dropped first when over budget)."""
     # The unbounded part (must survive): the header + agenda + input artifacts
-    # + prior.
-    header_parts = [f"POD {pod.id}: {kind} — {pod.topic}"]
+    # + prior. The static labels live in prompts/ (Story 11 — a pure move);
+    # the dynamic data (the pod id, the kind, the topic, the agenda, the
+    # artifacts, the prior) is composed in here.
+    header_parts = [
+        POD_CTX_HEADER_PREFIX + pod.id +
+        POD_CTX_HEADER_MID + kind +
+        POD_CTX_HEADER_DASH + pod.topic
+    ]
     if pod.agenda:
-        header_parts.append(f"AGENDA: {pod.agenda}")
+        header_parts.append(POD_CTX_AGENDA_LABEL + pod.agenda)
     if pod.input_artifacts:
-        header_parts.append("INPUT ARTIFACTS: " + ", ".join(pod.input_artifacts))
+        header_parts.append(
+            POD_CTX_ARTIFACTS_LABEL + ", ".join(pod.input_artifacts)
+        )
     if prior:
-        header_parts.append(f"PRIOR: {prior}")
+        header_parts.append(POD_CTX_PRIOR_LABEL + prior)
     agenda = "\n".join(header_parts)
     # The bounded part: the transcript entries (speak + carried_decision).
     summaries: List[Tuple[str, str]] = []

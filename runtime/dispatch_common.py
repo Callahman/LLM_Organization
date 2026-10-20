@@ -26,13 +26,51 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from prompts import (
+    AUTOMATION_CTX_MID,
+    AUTOMATION_CTX_PREFIX,
+    AUTOMATION_CTX_SUFFIX,
     HEAD_CTX_DIGEST,
     HEAD_CTX_INSTRUCTION,
     HEAD_CTX_OBJ,
     HEAD_CTX_PREFIX,
+    IC_CTX_CLAR_PREFIX,
+    IC_CTX_DIGEST,
+    IC_CTX_INSTRUCTION_MID,
+    IC_CTX_INSTRUCTION_PREFIX,
+    IC_CTX_INSTRUCTION_SUFFIX,
+    IC_CTX_PATH_RULES_BARE,
+    IC_CTX_PATH_RULES_CONCRETE_END,
+    IC_CTX_PATH_RULES_CONCRETE_MID,
+    IC_CTX_PATH_RULES_CONCRETE_PREFIX,
+    IC_CTX_PATH_RULES_CONCRETE_SUFFIX,
+    IC_CTX_PATH_RULES_CONCRETE_TAIL,
+    IC_CTX_POLICY,
+    IC_CTX_PREFIX,
+    IC_CTX_TASK,
+    IC_CTX_WORK_DIR,
+    IC_CTX_WRITE_ALL,
+    IC_RETRY_NUDGE,
     LEADER_CTX_DIGEST,
     LEADER_CTX_INSTRUCTION,
     LEADER_CTX_NO_INVENT,
+    MANAGER_CTX_CLAR_PREFIX,
+    MANAGER_CTX_DIGEST,
+    MANAGER_CTX_INSTRUCTION,
+    MANAGER_CTX_OBJ,
+    MANAGER_CTX_POLICY,
+    MANAGER_CTX_PREFIX,
+    POLICY_CTX_CLAR_PREFIX,
+    POLICY_CTX_DIRECTIVE,
+    POLICY_CTX_EXISTING,
+    POLICY_CTX_INSTRUCTION,
+    POLICY_CTX_OBJ,
+    POLICY_CTX_PREFIX,
+    POD_UPWARD_REPORT_MID,
+    POD_UPWARD_REPORT_PREFIX,
+    POD_UPWARD_REPORT_SUFFIX,
+    SELF_EDIT_CORRECTION_MID,
+    SELF_EDIT_CORRECTION_PREFIX,
+    SELF_EDIT_CORRECTION_SUFFIX,
 )
 from roles.base import Role, spin_personality, spin_sub_architype
 from roles.worker import worker_output_schema
@@ -245,20 +283,20 @@ def _manager_ctx(manager: Role, objective: str, policy: str = "",
     # pod's outcome** (``clarification``) — the manager decomposes **after**
     # the pod, so its IC tasks reflect the clarified team mission (the pod →
     # decomposition sequencing is strict).
+    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # dynamic data (the manager id, the objective, the policy, the digest, the
+    # clarification) is composed in here.
     clarification_line = (
-        f" | Clarified team mission (from the head+manager clarification "
-        f"pod): {clarification}"
+        MANAGER_CTX_CLAR_PREFIX + clarification
         if clarification else ""
     )
     return (
-        f"PHASE 5 (manager {manager.id}): decompose the team objective into "
-        f"IC tasks. Objective: {objective}{clarification_line} | Mission "
-        f"(the org's goal): {digest or '(none)'} | Department policy (follow "
-        f"it, and give your ICs tasks that satisfy it): "
-        f"{policy or '(none)'} "
-        "Set `decomposition` to a JSON OBJECT (not a string) whose "
-        "`ic_tasks` key is a JSON array of objects, each exactly "
-        "{\"ic_id\": <str>, \"task\": <str>}."
+        MANAGER_CTX_PREFIX + manager.id +
+        MANAGER_CTX_OBJ + objective +
+        clarification_line +
+        MANAGER_CTX_DIGEST + (digest or "(none)") +
+        MANAGER_CTX_POLICY + (policy or "(none)") +
+        MANAGER_CTX_INSTRUCTION
     )
 
 
@@ -278,40 +316,36 @@ def _ic_ctx(ic: Role, task: str, policy_summary: str = "",
     # out_of_scope, so the prompt names the real root, shows a correct/wrong
     # pair, and forbids the role's own id as a directory (the default the
     # model falls into when no concrete root is given).
+    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # dynamic data (the ic id, the team root, the path rules, the task, the
+    # policy summary, the clarification) is composed in here.
     if ic.department and ic.team:
         team_root = f"departments/{ic.department}/{ic.team}"
         path_rules = (
-            f"Every path MUST start with {team_root}/ — e.g. correct: "
-            f"{team_root}/README.md; wrong: {ic.team}/README.md or "
-            f"{ic.id}/README.md (a bare top-level dir, or your own id as a "
-            f"directory, is refused as out_of_scope)."
+            IC_CTX_PATH_RULES_CONCRETE_PREFIX + team_root +
+            IC_CTX_PATH_RULES_CONCRETE_MID + team_root +
+            IC_CTX_PATH_RULES_CONCRETE_SUFFIX + ic.team +
+            IC_CTX_PATH_RULES_CONCRETE_TAIL + ic.id +
+            IC_CTX_PATH_RULES_CONCRETE_END
         )
     else:
         team_root = "your team directory"
-        path_rules = (
-            "Write under your team directory (departments/<dept>/<team>/); a "
-            "bare top-level path is refused as out_of_scope."
-        )
+        path_rules = IC_CTX_PATH_RULES_BARE
     clarification_line = (
-        f" | Clarified task (from the manager+ic clarification pod): "
-        f"{clarification}"
+        IC_CTX_CLAR_PREFIX + clarification
         if clarification else ""
     )
     return (
-        f"PHASE 6 (IC {ic.id}): do the work in your team directory. Your team "
-        f"work directory is {team_root}/ — write ALL files there. {path_rules} "
-        f"Mission (the org's goal): {digest or '(none)'} "
-        f"Department policy summary (follow it): {policy_summary or '(none)'} "
-        f"Task: {task}{clarification_line} Set `summary` to a one-line summary "
-        f"of the work done "
-        f"and `work_path` to the path of the work (under {team_root}/). If "
-        "your work requires changing code, set `code_edits` to a JSON array "
-        "of objects, each exactly {\"path\": <str>, \"content\": <str>}. Each "
-        f"edit is gated by the permission layer: write under {team_root}/ "
-        "only; the mission and the rules are read-only. If completing this "
-        "task requires collaboration with another role or department, set "
-        "`collaborate` to a one-line description of what you need (leave it "
-        "empty if you can complete the task on your own)."
+        IC_CTX_PREFIX + ic.id +
+        IC_CTX_WORK_DIR + team_root +
+        IC_CTX_WRITE_ALL + path_rules +
+        IC_CTX_DIGEST + (digest or "(none)") +
+        IC_CTX_POLICY + (policy_summary or "(none)") +
+        IC_CTX_TASK + task +
+        clarification_line +
+        IC_CTX_INSTRUCTION_PREFIX + team_root +
+        IC_CTX_INSTRUCTION_MID + team_root +
+        IC_CTX_INSTRUCTION_SUFFIX
     )
 
 
@@ -329,22 +363,20 @@ def _policy_ctx(head: Role, mission_digest: str, existing_policy: str,
     pod's outcome** (``clarification``) — the policy is authored **after** the
     pod, so it reflects the clarified mission (the pod → policy sequencing is
     strict)."""
+    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # dynamic data (the head id, the mission digest, the directive, the
+    # existing policy, the clarification) is composed in here.
     clarification_line = (
-        f" | Clarified mission (from the leader+head clarification pod): "
-        f"{clarification}"
+        POLICY_CTX_CLAR_PREFIX + clarification
         if clarification else ""
     )
     return (
-        f"PHASE 4 (head {head.id}): author your department's POLICY so your "
-        f"managers and ICs have a clear instruction on how their work fulfils "
-        f"the org's goal. Mission: {mission_digest} | Your directive: "
-        f"{directive}{clarification_line} | Your existing policy (update it, "
-        f"don't start from scratch): {existing_policy or '(none yet)'} Set "
-        f"`policy` to the FULL policy markdown (how work is broken down, "
-        f"standards, how managers and ICs report) and `policy_summary` to a "
-        f"SHORT summary of the key policy points (a few lines) that ICs will be "
-        f"given directly. Set `summary` to a one-line summary and `confidence` "
-        f"to a number 0-1."
+        POLICY_CTX_PREFIX + head.id +
+        POLICY_CTX_OBJ + mission_digest +
+        POLICY_CTX_DIRECTIVE + directive +
+        clarification_line +
+        POLICY_CTX_EXISTING + (existing_policy or "(none yet)") +
+        POLICY_CTX_INSTRUCTION
     )
 
 
@@ -405,13 +437,8 @@ def _invoke_ic(backend: LLMBackend, ic: Role, ctx: str, reasoning,
     complete submit_output call) — the same one-retry-on-refusal pattern the
     self-edit path already uses.
     """
-    nudge = (
-        "\n\n[RETRY] Your previous reply for this task was not a valid "
-        "structured call (its JSON arguments were malformed or missing). "
-        "Call the submit_output tool exactly once; its arguments must be ONE "
-        "complete JSON object matching your role's output schema. Do not "
-        "emit placeholder or dummy calls."
-    )
+    # The nudge text lives in prompts/ (Story 11 — a pure move).
+    nudge = IC_RETRY_NUDGE
     try:
         return backend.invoke(
             ic, ctx, reasoning=reasoning, timeout=timeout, phase=phase,
@@ -556,14 +583,13 @@ def _retry_refused_edits(
     reasons = "\n".join(
         "- %s — %s" % (r.get("path", ""), r.get("error", "")) for r in refused
     )
+    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # dynamic data (the ic id, the refusal reasons) is composed in here.
     ctx = (
-        f"PHASE 6 (IC {ic.id}) — self-edit correction. Some of your proposed "
-        f"code edits were REFUSED by the permission layer:\n{reasons}\n"
-        "Re-propose the refused edits with corrected paths (write under your "
-        "team work dir; the mission and the rules are read-only). Set "
-        "`code_edits` to a JSON array of objects, each exactly "
-        "{\"path\": <str>, \"content\": <str>}. If a refused edit cannot be "
-        "placed in an allowed scope, omit it."
+        SELF_EDIT_CORRECTION_PREFIX + ic.id +
+        SELF_EDIT_CORRECTION_MID +
+        reasons +
+        SELF_EDIT_CORRECTION_SUFFIX
     )
     try:
         out = backend.invoke(ic, ctx,
@@ -718,11 +744,12 @@ def run_automation(org, leader, eff, backend, approver_fn, history=None,
         return {"task": task, "script_path": script_path, "ic_fired": None,
                 "error": "could not hire the automation IC"}
     # Step 2: the IC writes the Python script for the recurring task.
+    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # dynamic data (the ic id, the task) is composed in here.
     ctx = (
-        f"PHASE 4 (automation IC {ic.id}): write a Python script for the "
-        f"recurring task. Task: {task} Set `script` to the FULL Python script "
-        f"(a self-contained script that performs the recurring task end to "
-        f"end) and `summary` to a one-line summary of what the script does."
+        AUTOMATION_CTX_PREFIX + ic.id +
+        AUTOMATION_CTX_MID + task +
+        AUTOMATION_CTX_SUFFIX
     )
     out = backend.invoke(ic, ctx,
                          reasoning=classify_complexity(4, ic, {}), phase=4)
@@ -855,10 +882,13 @@ def _check_pod_triggers(
         pods_out.append(pod)
     # The most senior member shares the outcome up the line.
     senior = senior_member(pod)
+    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # dynamic data (the pod id, the decision) is composed in here.
     backend.invoke(
         senior,
-        f"POD {pod.id} outcome to share up the line — decision: {pod.decision}. "
-        "Produce an upward report of the pod's decision.",
+        POD_UPWARD_REPORT_PREFIX + pod.id +
+        POD_UPWARD_REPORT_MID + pod.decision +
+        POD_UPWARD_REPORT_SUFFIX,
         reasoning=classify_complexity(phase, senior, {}),
         phase=phase,
     )

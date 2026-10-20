@@ -351,9 +351,9 @@ proposal is absent.
       `history/`, `pods/`, `reports/`, `archives/`).
 
 ### Story 9 — Tests (`tests/`)
-- [ ] `test_phases.py` — the 8-phase structure + cycle loop (repeats on
+- [x] `test_phases.py` — the 8-phase structure + cycle loop (repeats on
       "continue", bounded by `max_iterations`).
-- [ ] `test_intake_mission_unchanged.py` — Intake (Phase 1) + Mission (Phase 2)
+- [x] `test_intake_mission_unchanged.py` — Intake (Phase 1) + Mission (Phase 2)
       largely unchanged; the informal draft is saved to `state/` (not
       `MISSION.md`); Phase 2 writes the formal `MISSION.md`.
 - [ ] `test_headcount.py` — the cap chain (total → department → team → IC);
@@ -364,11 +364,11 @@ proposal is absent.
       clarifications forward.
 - [ ] `test_execution_pods.py` — the A/B/C execution pods (disagreement /
       cross-team / routing rule) + the collaboration pod (IC+manager).
-- [ ] `test_department_policy.py` — the `department_head` (NOT the IC) authors
+- [x] `test_department_policy.py` — the `department_head` (NOT the IC) authors
       the department-scoped policy **after** the leader+head pod.
 - [x] `test_department_proposal.py` — the leader proposes departments in Mission;
       Org bootstrap creates them.
-- [ ] `test_prompts.py` — the pipeline's prompts live in the `prompts/`
+- [x] `test_prompts.py` — the pipeline's prompts live in the `prompts/`
       location with usage comments.
 
 ### Story 10 — Docs
@@ -387,14 +387,14 @@ proposal is absent.
       (structure unchanged), `EPIC.md` (this file).
 
 ### Story 11 — Prompts directory (`prompts/`)
-- [ ] Create a `prompts/` directory (or a single `prompts.py` module) to store
+- [x] Create a `prompts/` directory (or a single `prompts.py` module) to store
       the pipeline's prompts (and parts of prompts).
-- [ ] Extract the prompts currently built inline in `runtime/llm_api.py`
+- [x] Extract the prompts currently built inline in `runtime/llm_api.py`
       (`_context`) and the phase modules: the **intake** context, **mission**
       context, **leader** context, **head** context, **manager** context, **IC**
       context, **policy** context, and the **pod** prompts (agenda / rounds /
       close).
-- [ ] Add a **comment above each prompt/part** indicating **how/where it is used**
+- [x] Add a **comment above each prompt/part** indicating **how/where it is used**
       (which phase / which role / which pod), for auditing + suggesting changes.
 
 ### Story 12 — "Devil's advocate" role (a leader's direct report / red-team auditor) (`runtime/org.py`, `runtime/pods.py`, `runtime/session.py`, `runtime/permissions.py`)
