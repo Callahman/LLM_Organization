@@ -149,33 +149,34 @@ def _allot_team_caps(org: OrgState, backend, head: Role,
     # 2. Pod B (all managers + the head) finalizes the team caps — the head
     # has final say (the pod deliberates; the head's allotment is the final).
     # The head is a member (like Pod A's leader) so a single-manager
-    # department still forms a valid pod (the 2-member minimum). A pod
-    # failure is contained (a visible org event; the head's allotment stands).
+    # department still forms a valid pod (the 2-member minimum). Any pod
+    # failure (membership or a member's malformed reply) is contained (a
+    # visible org event; the head's allotment stands).
     managers = [org.get(t.get("manager_id", "")) for t in team_objectives]
     managers = [m for m in managers if m is not None]
     if managers:
-        pod = form_pod(
-            org.roles, head.id, [head.id] + [m.id for m in managers],
-            f"Finalize the manager/IC headcount per team (department cap "
-            f"{int(dept_cap)})",
-            # Pod B is a headcount deliberation (all managers + the head) — the
-            # managers are peers (not in one reporting line), so skip the
-            # communication gate (cross_team) and relax the size bound (it can
-            # legitimately exceed the 6-member working-group bound).
-            cross_team=True,
-            max_roles=12,
-            kind="headcount",
-        )
         try:
+            pod = form_pod(
+                org.roles, head.id, [head.id] + [m.id for m in managers],
+                f"Finalize the manager/IC headcount per team (department cap "
+                f"{int(dept_cap)})",
+                # Pod B is a headcount deliberation (all managers + the head) —
+                # the managers are peers (not in one reporting line), so skip
+                # the communication gate (cross_team) and relax the size bound
+                # (it can legitimately exceed the 6-member working-group bound).
+                cross_team=True,
+                max_roles=12,
+                kind="headcount",
+            )
             run_pod(backend, pod,
                     max_rounds=(config or {}).get("headcount_pod_rounds"),
                     phase=4)
         except Exception as e:
-            # A pod failure (e.g. a manager's malformed / free-form reply) is
-            # contained — a visible org event; the head's allotment stands
-            # (the head has final say).
+            # A pod failure (a membership issue, or a manager's malformed /
+            # free-form reply) is contained — a visible org event; the head's
+            # allotment stands (the head has final say).
             org.log_event("headcount_pod_failed", head.id, None,
-                          {"pod": pod.id, "kind": pod.kind, "error": str(e)})
+                          {"error": str(e)})
     # 3. Store on the org (the head's caps are the final — the head has final
     # say).
     for team, cap in caps.items():
