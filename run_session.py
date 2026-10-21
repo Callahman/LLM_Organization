@@ -123,8 +123,13 @@ def _decide_run_mode(args, mission_path, checkpoint_path):
             with open(checkpoint_path, encoding="utf-8") as f:
                 cp = json.load(f)
             cp_phase, cp_cycle = cp.get("phase", 3), cp.get("cycle", 0)
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as e:
+            # Visible: a corrupt / unreadable checkpoint is not silently
+            # ignored — the operator sees it and knows the run falls back to
+            # the default resume point (phase 3).
+            print(f"[checkpoint] corrupt/unreadable checkpoint at "
+                  f"{checkpoint_path} ({e}) — falling back to the default "
+                  f"resume point (phase 3)")
         # A checkpoint at phase 3 or 4 -> resume from Phase 4 (skip Phases
         # 1-3; the org + mission are loaded, the dispatch continues).
         resume_from_phase = 4 if cp_phase >= 3 else cp_phase + 1
@@ -157,11 +162,11 @@ def main() -> None:
              "this to start a brand-new mission.")
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="D7: preview what a run would do without mutating the org's "
-              "state — the run's audit trail (history/, departments/, state/, "
-              "MISSION.md, pods/) is written to a throwaway temp dir instead, "
-              "so the real org is left untouched. The pipeline still runs "
-              "end-to-end (you see the hires / mission draft / phases).")
+        help="D7: preview what a run would do — the pipeline runs end-to-end "
+              "against the REAL project (no throwaway temp dir), so its state "
+              "(history/, departments/, state/, MISSION.md, pods/) is written "
+              "to the real project. You see the hires / mission draft / "
+              "phases, and can inspect the actual artifacts a run produces.")
     parser.add_argument(
         "--prompt", default="", 
         help="your request to spin up the org (e.g. 'Build a data pipeline "
@@ -192,18 +197,14 @@ def main() -> None:
     # (before, only the two timeout backstops were passed and the rest used
     # hardcoded defaults). Unknown/unused .env keys produce a visible warning.
     config = load_config()
-    # D7: --dry-run previews a run without mutating the real org — the pipeline
-    # runs end-to-end, but its state (history/, departments/, state/,
-    # MISSION.md, pods/) is written to a throwaway temp dir instead. The
-    # pipeline's paths are relative to the CWD, so chdir'ing to a temp dir
-    # redirects every write.
-    dry_run_dir = None
+    # D7: --dry-run previews a run against the REAL project (no throwaway temp
+    # dir) — the pipeline runs end-to-end and its state (history/, departments/,
+    # state/, MISSION.md, pods/) is written to the real project, so the operator
+    # can inspect the actual artifacts a run would produce.
     if args.dry_run:
-        import tempfile
-        dry_run_dir = tempfile.mkdtemp(prefix="org_dry_run_")
-        os.chdir(dry_run_dir)
-        print(f"[dry-run] previewing in a throwaway dir: {dry_run_dir} "
-              f"(the real org is left untouched)")
+        print("[dry-run] previewing a run against the real project (no "
+              "throwaway dir) — the pipeline's state is written to the real "
+              "project")
 
     # S15/S16: decide the run mode (fresh vs revisit) + the resume point. The
     # default mode is revisit (S15: run_session.py defaults to --revisit when

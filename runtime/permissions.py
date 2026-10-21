@@ -207,11 +207,6 @@ def read_reason(role, path: str) -> tuple:
     return True, f"read: {role.id} may read {rel}"
 
 
-def can_read_path(role, path: str) -> bool:
-    """True if *role* may read *path* (see `read_reason` for the why)."""
-    return read_reason(role, path)[0]
-
-
 def write_file(role, path: str, content: str) -> str:
     """Write *content* to *path* if *role* may edit it.
 

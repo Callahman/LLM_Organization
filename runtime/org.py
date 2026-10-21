@@ -387,13 +387,45 @@ def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
     return created
 
 
+# The devil's advocate's own policy (in place) — the governance record of the
+# DA's mandate, mirroring the working departments' policies. Written to
+# departments/devils_advocate/DEVILS_ADVOCATE_POLICY.md at bootstrap.
+_DA_POLICY = (
+    "# DEVILS_ADVOCATE POLICY\n\n"
+    "_(the devil's advocate — red-team auditor, reporting directly to the "
+    "leader; the governance record of its mandate)_\n\n"
+    "## Mandate\n"
+    "Institute a formal 'gut check' on the org's outcomes: primed to doubt "
+    "(checks claims against what the pipeline has actually produced), heavy "
+    "on moral decision-making (flags immoral/improper actions), and raises "
+    "concerns (fabrication, hallucination, low-quality outcomes).\n\n"
+    "## Operating Rules\n"
+    "1. Doubt by default: do not accept claims as true — check them against "
+    "the department work (the policies the pipeline has actually produced).\n"
+    "2. Moral scrutiny: flag immoral/improper actions (not just low-quality "
+    "ones).\n"
+    "3. Concerns: raise fabrication, hallucination, and low-quality outcomes.\n"
+    "4. Verdict: in Phase 7 (Evaluate) return `clean` (no concerns) or "
+    "`flag: <findings>` (concerns raised).\n\n"
+    "## Cross-Department Read\n"
+    "The devil's advocate reads other departments' policies (the governance "
+    "record of their work) to check the claims against what the pipeline has "
+    "produced.\n"
+)
+
+
 def _ensure_devils_advocate(org: OrgState, leader: Role) -> Optional[Role]:
     """Ensure the devil's advocate role (Story 12) is always created (even if
     the leader omits it from the proposal). It reports **directly** to the
     leader (a red-team auditor, not a `department_head` of a working
     department). The mandate: institute a formal "gut check" on the org's
     outcomes — primed to doubt, heavy on moral decision-making, and to raise
-    concerns (fabrication, hallucination, low-quality outcomes)."""
+    concerns (fabrication, hallucination, low-quality outcomes).
+
+    The DA has its **own policy in place** (a red-team auditor policy, written
+    to ``departments/devils_advocate/DEVILS_ADVOCATE_POLICY.md``) and can
+    **read other departments' policies** (the cross-department read access,
+    Story 12)."""
     existing = org.get(DEVILS_ADVOCATE_ROLE)
     if existing is not None:
         return existing
@@ -402,6 +434,7 @@ def _ensure_devils_advocate(org: OrgState, leader: Role) -> Optional[Role]:
         architype="ic",
         sub_architype="red_team_auditor",
         personality="Guardian",
+        department=DEVILS_ADVOCATE_ROLE,
         mandate=(
             "Devil's advocate (red-team auditor, reporting directly to the "
             "leader). Institute a formal 'gut check' on the org's outcomes: "
@@ -417,8 +450,16 @@ def _ensure_devils_advocate(org: OrgState, leader: Role) -> Optional[Role]:
         output_schema=worker_output_schema("ic"),
     )
     org.add_role(da)
+    # The DA has its own policy in place (a red-team auditor policy) — written
+    # to departments/devils_advocate/DEVILS_ADVOCATE_POLICY.md (the governance
+    # record of the DA's mandate, mirroring the working departments' policies).
+    da_policy_dir = os.path.join("departments", DEVILS_ADVOCATE_ROLE)
+    os.makedirs(da_policy_dir, exist_ok=True)
+    da_policy_path = os.path.join(da_policy_dir, "DEVILS_ADVOCATE_POLICY.md")
+    with open(da_policy_path, "w", encoding="utf-8") as f:
+        f.write(_DA_POLICY)
     org.log_event("devils_advocate_bootstrapped", leader.id, da.id,
-                  {"reports_to": leader.id})
+                  {"reports_to": leader.id, "policy_path": da_policy_path})
     return da
 
 

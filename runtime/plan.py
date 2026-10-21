@@ -322,6 +322,7 @@ def run_plan(
                     t_obj.get("team") or t_obj.get("manager_id", ""),
                     approver_fn,
                     direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
+                    backend=backend, phase=4,
                 )
         # (The head+manager clarification pod runs in Phase 5 (Staff), AFTER
         # the manager decomposes — see run_staff.)

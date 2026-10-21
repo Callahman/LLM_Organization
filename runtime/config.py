@@ -89,8 +89,12 @@ ENV_TO_CONFIG: Dict[str, Tuple[str, Any]] = {
     "CLARIFICATION_POD_ROUNDS": ("clarification_pod_rounds", int),
     "REPORTING_POD_ROUNDS": ("reporting_pod_rounds", int),
     "HEADCOUNT_POD_ROUNDS": ("headcount_pod_rounds", int),
-    "EXECUTION_POD_ROUNDS": ("execution_pod_rounds", int),
     "COLLABORATION_POD_ROUNDS": ("collaboration_pod_rounds", int),
+    # Story 22: the **efficiency floor** — when the efficiency score E is below
+    # this, the Leader must take a visible efficiency action. Plumbed to
+    # `efficiency_floor` (read by the Session's EfficiencyMeter; the code
+    # default is efficiency.py::EFFICIENCY_FLOOR).
+    "EFFICIENCY_FLOOR": ("efficiency_floor", float),
     # Story 7: the **headcount cap defaults** — the default department cap (as
     # a % of the total, 0.0-1.0) and the default team cap (as a % of the
     # department cap, 0.0-1.0). These inform the cap allotment (Story 3): the

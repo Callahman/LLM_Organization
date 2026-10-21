@@ -159,6 +159,7 @@ def run_staff(
                             org, manager, ic_id, "ic",
                             manager.department, manager.team, approver_fn,
                             direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
+                            backend=backend, phase=5,
                         )
                 teams.append({
                     "t_obj": t_obj,
@@ -190,6 +191,7 @@ def run_staff(
                                 head.department, team, approver_fn,
                                 direct_ic_cap=(config or {}).get(
                                     "direct_ic_cap", 3),
+                                backend=backend, phase=5,
                             )
                 teams.append({
                     "t_obj": t_obj,

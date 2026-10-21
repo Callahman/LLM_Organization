@@ -362,6 +362,16 @@ class Session:
         if dept_work:
             ctx += " DEPARTMENT WORK (what the pipeline has produced): " \
                    + dept_work
+        # The DA's own policy (in place) — the governance record of the DA's
+        # mandate (mirroring the working departments' policies).
+        try:
+            from runtime import permissions
+            da_policy = permissions.read_file(
+                da, tiers.policy_path(tiers.DEVILS_ADVOCATE_ROLE))
+        except Exception:
+            da_policy = ""
+        if (da_policy or "").strip():
+            ctx += " YOUR OWN POLICY (in place): " + da_policy.strip()
         try:
             out = self.backend.invoke(
                 da, ctx,
@@ -402,7 +412,13 @@ class Session:
             seen_depts.add(dept)
             try:
                 content = permissions.read_file(da, tiers.policy_path(dept))
-            except Exception:
+            except Exception as e:
+                # Visible: a department's policy could not be read (a
+                # permission refusal or a missing file) — the DA's gut check
+                # notes it (never silent).
+                self.org.log_event(
+                    "devils_advocate_policy_read_failed", da.id, None,
+                    {"department": dept, "error": str(e)})
                 content = ""
             content = (content or "").strip()
             if content:

@@ -595,7 +595,14 @@ def _retry_refused_edits(
         out = backend.invoke(ic, ctx,
                              reasoning=classify_complexity(phase, ic, {}),
                              phase=phase)
-    except Exception:
+    except Exception as e:
+        # Visible: the corrective re-invoke failed (a backend failure). The
+        # original refusals are already logged; this records that no retry
+        # happened (never silent).
+        if history is not None:
+            history._append("dispatch_skips.jsonl",
+                            {"role_id": ic.id, "reason": "self_edit_retry",
+                             "why": f"corrective re-invoke failed: {e}"})
         return
     edits = as_dict_list((out or {}).get("code_edits", []))
     if not edits:
@@ -632,12 +639,20 @@ def _ensure_role(
     team: str,
     approver_fn,
     direct_ic_cap: int = 3,
+    backend: Optional[LLMBackend] = None,
+    phase: int = 4,
 ) -> Optional[Role]:
     """Get a role by ID, or create + hire it (through the approval matrix) if
     it doesn't exist yet. This is how the dispatch spins up the managers/ICs it
     decomposes onto, so the full heads->managers->ICs chain is exercised.
     Returns None if it can't be hired (no approver supplied, or the hire is
-    vetoed / the 3-IC cap is hit)."""
+    vetoed / the 3-IC cap is hit).
+
+    On a hire failure the failure is **sent back to the initiator** (the
+    manager/head that requested the hire) so it can update its next steps
+    (re-decompose its IC tasks / note the failure in its upward report) —
+    visible, never silent (``backend`` is required for the re-invoke; without
+    it the failure is still logged as an org event)."""
     role = org.get(role_id)
     if role is not None:
         return role
@@ -651,6 +666,9 @@ def _ensure_role(
             f"hire {role_id} (visible note, never silent).",
             file=sys.stderr,
         )
+        _send_hire_failure_to_initiator(
+            org, initiator, role_id, architype, department, team,
+            f"org-size cap reached ({MAX_ORG_ROLES})", backend, phase)
         return None
     # Spin a functional specialty + a stable behavioral bias so a spun
     # manager/IC is never left with an empty identity (the prompt rendered
@@ -668,8 +686,60 @@ def _ensure_role(
     try:
         return hire(org, initiator, new_role, approver_fn,
                     direct_ic_cap=direct_ic_cap)
-    except Exception:
+    except Exception as e:
+        # Visible: the hire failed (vetoed / cap / approver rejection). The
+        # failure is sent back to the initiator so it can update its next
+        # steps (never silent).
+        _send_hire_failure_to_initiator(
+            org, initiator, role_id, architype, department, team,
+            f"{type(e).__name__}: {e}", backend, phase)
         return None
+
+
+def _send_hire_failure_to_initiator(
+    org: OrgState,
+    initiator: Role,
+    role_id: str,
+    architype: str,
+    department: str,
+    team: str,
+    error: str,
+    backend: Optional[LLMBackend],
+    phase: int,
+) -> None:
+    """Send a hire failure back to the initiator (the manager/head that
+    requested the hire) so it can update its next steps (re-decompose its IC
+    tasks / note the failure in its upward report). The failure is logged
+    visibly (an org event) and the initiator is re-invoked with a correction
+    context (it must not assign work to a role that does not exist).
+
+    Best-effort: a failure in the corrective re-invoke is not fatal (the hire
+    already failed; the org event records it)."""
+    # Visible: the hire failure is logged (the operator + the dashboard can see
+    # it; the initiator's report will reference it).
+    org.log_event("hire_failed", initiator.id, role_id,
+                  {"architype": architype, "department": department,
+                   "team": team, "error": error})
+    if backend is None:
+        return
+    ctx = (
+        f"YOUR HIRE FAILED: your request to hire {role_id} "
+        f"(architype={architype}, department={department}, team={team}) "
+        f"FAILED ({error}). You CANNOT assign work to a role that does not "
+        f"exist. Update your next steps: (1) do NOT reference {role_id} in "
+        f"your task assignments; (2) re-decompose your IC tasks / adjust your "
+        f"plan to account for this failure (reassign the work to an existing "
+        f"role or drop it); (3) note the failed hire in your upward report so "
+        f"the line of command knows the work is unassigned."
+    )
+    try:
+        backend.invoke(initiator, ctx,
+                       reasoning=classify_complexity(phase, initiator, {}),
+                       phase=phase)
+    except Exception:
+        # The corrective re-invoke failing is not fatal (the hire already
+        # failed; the org event records it).
+        pass
 
 
 def _fire_role(org, leader, role_id, reason, approver_fn, history=None):
@@ -734,7 +804,7 @@ def run_automation(org, leader, eff, backend, approver_fn, history=None,
     # matrix, like any other dispatch role).
     ic_id = "auto-" + _automation_slug(task)
     ic = _ensure_role(org, leader, ic_id, "ic", "automations", "automations",
-                      approver_fn)
+                      approver_fn, backend=backend, phase=4)
     if ic is None:
         if history is not None:
             history._append("efficiency_reports.jsonl",
