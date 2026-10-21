@@ -1,4 +1,4 @@
-"""Pods — bounded, 1-tier-spread working groups (Epic 5).
+"""Pods — bounded, 1-tier-spread working groups.
 
 A pod is a small group (2–6) of roles within a **1-tier spread** that
 deliberates a topic. The **starter** (the role that created the pod) manages
@@ -73,7 +73,7 @@ class Pod:
     # round in `pods/transcripts/` so the dashboard can watch the leader's
     # solo work, not just the multi-role pods.
     solo: bool = False
-    # Story 4: the pod **type** — one of "clarification", "reporting",
+    # the pod **type** — one of "clarification", "reporting",
     # "headcount", "execution", "collaboration". It drives the **default
     # capped round count** (the pod runs for a bounded number of iterations,
     # then the initiator returns a result) and is recorded in the transcript /
@@ -81,7 +81,7 @@ class Pod:
     kind: str = "execution"
 
 
-# Story 4: the **default capped round count per pod kind**. Every pod runs for
+# the **default capped round count per pod kind**. Every pod runs for
 # a bounded number of iterations, then the initiator returns a result. The
 # caller can override the round count per pod (an explicit `max_rounds`), and
 # the config can override the per-kind default (e.g. `CLARIFICATION_POD_ROUNDS`).
@@ -107,7 +107,7 @@ def form_pod(
     """Form a pod from `roles`: the starter + members, validated against the
     2–6 size and 1-tier-spread bounds (raises `PodMembershipError` if invalid).
 
-    Story 10 (A11): also checks `tiers.can_communicate` for every member pair —
+    also checks `tiers.can_communicate` for every member pair —
     a pod is a working group, so its members must be able to talk to each other
     (the communication gate). If a pair may not communicate, the pod is
     rejected (a `PodMembershipError` with the reason, never silent).
@@ -122,7 +122,7 @@ def form_pod(
                                     max_roles=max_roles)
     if not ok:
         raise PodMembershipError(reason)
-    # Story 10 (A11): the communication gate — every member pair must be able
+    # the communication gate — every member pair must be able
     # to communicate (a pod is a working group, not a set of isolated roles).
     # Cross-team pods skip the gate (they deliberately convene roles from
     # different teams for a cross-team objective).
@@ -172,7 +172,7 @@ def senior_member(pod: Pod) -> Role:
 
 
 def devils_advocate_listens(pod: Pod, roles: Dict[str, Role]) -> Optional[Role]:
-    """The devil's advocate role (Story 12) **"listens"** to any pod the
+    """The devil's advocate role **"listens"** to any pod the
     **leader** is in AND any pod the **heads** are in (it observes the
     deliberation — it does **not** participate; it is not a pod member).
     Returns the devil's advocate role if it listens to this pod (the leader or
@@ -190,7 +190,7 @@ def devils_advocate_listens(pod: Pod, roles: Dict[str, Role]) -> Optional[Role]:
 def log_devils_advocate_listening(org, pod: Pod,
                                   roles: Dict[str, Role]) -> None:
     """Log the devil's advocate role's "listening" to a pod in the audit
-    (Story 12 — visible, never silent). Called after forming a pod the leader
+    ( — visible, never silent). Called after forming a pod the leader
     or a head is in; the cross-pod read is recorded so the operator can see it.
     A no-op when the role does not listen to the pod (or when ``org`` has no
     ``log_event``)."""
@@ -213,7 +213,7 @@ def _pod_ctx(pod: Pod, kind: str, prior: str = "",
     only the transcript entries are token-bounded (via `bounded_assembly` —
     oldest dropped first when over budget)."""
     # The unbounded part (must survive): the header + agenda + input artifacts
-    # + prior. The static labels live in prompts/ (Story 11 — a pure move);
+    # + prior. The static labels live in prompts/ ( — a pure move);
     # the dynamic data (the pod id, the kind, the topic, the agenda, the
     # artifacts, the prior) is composed in here.
     header_parts = [
@@ -253,7 +253,7 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
        (conflicting recommendations) uses "thinking" (HIGH);
     3. the **starter** always closes, producing the decision.
 
-    **Story 4 (capped iterations):** the round count is **capped** — if
+    ** (capped iterations):** the round count is **capped** — if
     ``max_rounds`` is not given, it defaults to the pod's **kind**
     (``POD_KIND_DEFAULT_ROUNDS``), so every pod runs for a bounded number of
     iterations before the starter (the initiator) returns a result. An explicit
@@ -263,7 +263,7 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
     after the agenda and after each deliberation round, so the file grows
     **live** (the observability dashboard tails it for the active-pod view).
     """
-    # Story 4: the capped round count defaults to the pod's kind.
+    # the capped round count defaults to the pod's kind.
     if max_rounds is None:
         max_rounds = POD_KIND_DEFAULT_ROUNDS.get(pod.kind, 3)
     # 1. The starter sets the agenda.
@@ -403,7 +403,7 @@ def form_solo_pod(role: Role, activity: str, topic: str) -> Pod:
     and sole member. The id is stable per (role, activity) so the transcript
     file grows per round (one file per (role, activity), rewritten each round).
 
-    **Generalized (Story 21):** any role (the leader, a department head, a
+    **Generalized:** any role (the leader, a department head, a
     manager, an IC) can form a solo pod — not just the leader."""
     pod_id = f"solo_{role.id}_{activity}"
     return Pod(id=pod_id, starter=role, members=[role],
@@ -430,7 +430,7 @@ class SoloTracker:
     transcripts after each step, so the observability dashboard can watch a
     role's solo work (not just the multi-role pods).
 
-    **Generalized (Story 21):** the tracker is **role-agnostic** — any role
+    **Generalized:** the tracker is **role-agnostic** — any role
     (the leader, a department head, a manager, an IC) can have solo-pod records
     for its out-of-pod work. The `leader` argument is the **default** role
     (the leader, for backward compatibility); a different role can be named per

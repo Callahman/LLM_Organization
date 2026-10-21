@@ -1,14 +1,14 @@
-"""Story 4 + Story 5 — the pod types, capped iterations, the reporting /
+""" + — the pod types, capped iterations, the reporting /
 clarification pods, and the clarification -> policy ordering.
 
-Story 4: a pod has a **type** (``kind``: clarification / reporting / headcount /
+a pod has a **type** (``kind``: clarification / reporting / headcount /
 execution / collaboration) that drives the **default capped round count** (the
 pod runs for a bounded number of iterations, then the initiator returns a
 result). The **reporting pods** (Phase 7: ic->manager, manager->head,
 head->leader) and the **clarification pods** (leader+head, head+manager,
 manager+ic) are 2-member parent+child pods.
 
-Story 5: the department policy is authored **after** the leader+head
+the department policy is authored **after** the leader+head
 clarification pod (the policy reflects the clarified mission; the pod -> policy
 sequencing is strict).
 
@@ -90,7 +90,7 @@ def _two_member_pod_roles():
 
 
 def test_run_pod_capped_by_kind(tmp_path):
-    # Story 4 (capped iterations): a pod with no explicit max_rounds runs for
+    # (capped iterations): a pod with no explicit max_rounds runs for
     # the pod's **kind** default (the clarification pod is capped at 2 rounds).
     roles = _two_member_pod_roles()
     backend = StubBackend()
@@ -174,7 +174,7 @@ def test_headcount_pod_rounds_config(monkeypatch):
     assert config["headcount_pod_rounds"] == 5
 
 
-# --- Story 5: the clarification -> policy ordering ----------------------------
+# ---: the clarification -> policy ordering ----------------------------
 
 def test_policy_ctx_includes_clarification():
     # The head's policy context includes the clarification pod's outcome.
@@ -193,7 +193,7 @@ def test_policy_ctx_no_clarification():
 
 
 def test_generate_head_policies_passes_clarifications(tmp_path):
-    # Story 5: the policy is authored AFTER the clarification pod -- the head's
+    # the policy is authored AFTER the clarification pod -- the head's
     # context includes the clarification (the pod -> policy sequencing is strict).
     head = _head("head", "analytics")
     head.mandate = "do analytics"
@@ -216,8 +216,7 @@ def test_generate_head_policies_passes_clarifications(tmp_path):
     assert policies["head"]["policy"] == "# POLICY"
 
 
-# --- The parent+child pod formation (Story 4) --------------------------------
-#
+# --- The parent+child pod formation --------------------------------
 # The clarification pods (leader+head, head+manager, manager+ic) and the
 # reporting pods (ic->manager, manager->head, head->leader) are 2-member
 # parent+child pods. These tests use the **production code's exact call** so
@@ -226,7 +225,7 @@ def test_generate_head_policies_passes_clarifications(tmp_path):
 
 def test_leader_head_clarification_pod_forms():
     # Production code (run_plan) forms the leader+head clarification pod as:
-    #   form_pod(roles_with_leader, leader.id, [leader.id, head.id], ..., kind="clarification")
+    # form_pod(roles_with_leader, leader.id, [leader.id, head.id], ..., kind="clarification")
     leader = make_leader()
     head = _head("head_analytics", "analytics")
     roles = {"leader": leader, "head_analytics": head}
@@ -239,7 +238,7 @@ def test_leader_head_clarification_pod_forms():
 
 def test_head_manager_clarification_pod_forms():
     # Production code (run_plan) forms the head+manager clarification pod as:
-    #   form_pod(org.roles, head.id, [head.id, manager.id], ..., kind="clarification")
+    # form_pod(org.roles, head.id, [head.id, manager.id], ..., kind="clarification")
     head = _head("head_analytics", "analytics")
     mgr = _mgr("mgr1", "pipelines", "head_analytics")
     roles = {"head_analytics": head, "mgr1": mgr}
@@ -252,7 +251,7 @@ def test_head_manager_clarification_pod_forms():
 
 def test_manager_ic_clarification_pod_forms():
     # Production code (run_staff) forms the manager+ic clarification pod as:
-    #   form_pod(org.roles, manager.id, [manager.id, ic.id], ..., kind="clarification")
+    # form_pod(org.roles, manager.id, [manager.id, ic.id], ..., kind="clarification")
     mgr = _mgr("mgr1", "pipelines", "head_analytics")
     ic = _ic("ic1", "pipelines", "mgr1")
     roles = {"mgr1": mgr, "ic1": ic}
@@ -265,7 +264,7 @@ def test_manager_ic_clarification_pod_forms():
 
 def test_reporting_pod_forms():
     # Production code (session._run_reporting_pods) forms the reporting pod as:
-    #   form_pod(roles, parent.id, [parent.id, role.id], ..., kind="reporting")
+    # form_pod(roles, parent.id, [parent.id, role.id], ..., kind="reporting")
     mgr = _mgr("mgr1", "pipelines", "head_analytics")
     ic = _ic("ic1", "pipelines", "mgr1")
     roles = {"mgr1": mgr, "ic1": ic}

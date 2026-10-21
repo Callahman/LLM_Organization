@@ -1,4 +1,4 @@
-"""Story 4 — the **execution pods (A/B/C)** + the **collaboration pod**
+"""the **execution pods (A/B/C)** + the **collaboration pod**
 (IC + manager), verified end-to-end through the Phase 4-6 dispatch.
 
 - **Execution pods (A/B/C)** (``kind="execution"``): the existing
@@ -13,7 +13,7 @@
   ``collaboration_pod_rounds``; the IC then **retries** its work with the
   pod's outcome. A no-``collaborate`` IC forms no collaboration pod.
 
-These tests drive the production ``dispatch()`` (``runtime.dispatch``) with a
+These tests drive the production ``dispatch`` (``runtime.dispatch``) with a
 ``StubBackend`` so the pod formation is verified exactly as the code runs it.
 """
 
@@ -57,16 +57,16 @@ def _scripts(collaborate=False, cross_team=False):
     the last entry is reused once the script is exhausted):
 
     - leader: [decomposition, leader+head pod (starter: agenda + close)]
-    - head:   [leader+head pod (member: 2 speaks), policy,
+    - head: [leader+head pod (member: 2 speaks), policy,
                decomposition (team_objectives),
                head+manager pod (starter: agenda + close)]
-    - mgr1:   [head+manager pod (member: 2 speaks),
+    - mgr1: [head+manager pod (member: 2 speaks),
                decomposition (ic_tasks),
                manager+ic pod (starter AND member: agenda + 2 speaks + close),
                collaboration pod (starter: agenda + 3 speaks + close)
                 (only when `collaborate`),
                execution pod (starter: agenda + 3 speaks + close)]
-    - ic1:    [manager+ic pod (member: 2 speaks), work output,
+    - ic1: [manager+ic pod (member: 2 speaks), work output,
                collaboration pod (member: 3 speaks) + retry work output
                 (only when `collaborate`),
                 execution pod (member: speak, reused for later rounds)]

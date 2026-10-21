@@ -587,7 +587,7 @@ function renderHaltList() {
     '</li>').join('');
 }
 
-// Story 22: render the efficiency panel (per-role / per-department invoke
+// render the efficiency panel (per-role / per-department invoke
 // time). The snapshot's `efficiency` is a cumulative snapshot (the latest line
 // of history/efficiency.jsonl) with `per_role` and `per_department` maps
 // (role/department -> seconds). Rendered as two columns of sorted rows
@@ -626,17 +626,17 @@ function renderEfficiencyPanel() {
     '</div>';
 }
 
-// S22: render the per-iteration efficiency metrics (the Phase 3-6 loop
+// render the per-iteration efficiency metrics (the Phase 3-6 loop
 // metrics). The snapshot's `efficiency_metrics` is the latest per-iteration
 // snapshot (the last line of history/efficiency_metrics.jsonl) with T_total,
 // T_p, T_dept, T_role, H_peak, C, N_created, M_satisfaction, E,
 // EFFICIENCY_FLOOR.
-function renderS22EfficiencyPanel() {
-  const el = $('s22-efficiency-panel');
+function renderLoopMetricsPanel() {
+  const el = $('loop-metrics-panel');
   if (!el || !state) return;
   const m = state.efficiency_metrics;
   if (!m) {
-    el.textContent = 'no S22 loop metrics yet';
+    el.textContent = 'no loop metrics yet';
     el.classList.remove('busy');
     return;
   }
@@ -744,10 +744,10 @@ function render() {
   renderMonitor();
   renderPodList();
   renderHaltList();
-  // Story 22: the efficiency panel (per-role / per-department invoke time).
+  // the efficiency panel (per-role / per-department invoke time).
   renderEfficiencyPanel();
-  // S22: the per-iteration efficiency metrics (the Phase 3-6 loop metrics).
-  renderS22EfficiencyPanel();
+  // the per-iteration efficiency metrics (the Phase 3-6 loop metrics).
+  renderLoopMetricsPanel();
   renderModelStream();
 }
 

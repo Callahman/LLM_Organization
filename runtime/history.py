@@ -36,7 +36,7 @@ class HistoryStore:
         self.window_sessions = window_sessions
         self.archive_cap_mb = archive_cap_mb
         self.max_log_bytes = max_log_bytes
-        # Story 9 (B5): serialize all appends (and the rotation) so no two
+        # serialize all appends (and the rotation) so no two
         # writers interleave or double-rotate (a zombie thread or a future
         # concurrent-LLM-call refactor would otherwise create same-file races).
         self._lock = threading.Lock()
@@ -47,7 +47,7 @@ class HistoryStore:
 
     def _append(self, filename: str, record: Dict[str, Any]) -> str:
         path = os.path.join(self.history_dir, filename)
-        # Story 9 (B5): serialize the size-check + rotation + write so no two
+        # serialize the size-check + rotation + write so no two
         # writers interleave or double-rotate (the check-then-act at the size
         # check was racy).
         with self._lock:

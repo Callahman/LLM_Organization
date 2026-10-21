@@ -253,7 +253,7 @@ canvas {
   white-space: nowrap;
 }
 
-/* Story 22: the efficiency panel (per-role / per-department invoke time). */
+/* the efficiency panel (per-role / per-department invoke time). */
 .efficiency-panel {
   flex: 1 1 auto;
   min-height: 0;

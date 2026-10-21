@@ -52,14 +52,14 @@ ENV_TO_CONFIG: Dict[str, Tuple[str, Any]] = {
     "CONFIDENCE_THRESHOLD": ("confidence_threshold", float),
     "QUESTION_BUDGET_ROUNDS": ("question_budget", int),
     "MISSION_REASK_BUDGET": ("mission_reask_budget", int),
-    # Story 8 (B18/C2): the 4 pod/context knobs (POD_MAX_ROUNDS, DIRECT_IC_CAP,
+    # the 4 pod/context knobs (POD_MAX_ROUNDS, DIRECT_IC_CAP,
     # HISTORY_WINDOW_SESSIONS, ARCHIVE_CAP_MB) are consumed by their single
     # consumers.
     "POD_MAX_ROUNDS": ("pod_max_rounds", int),
     "DIRECT_IC_CAP": ("direct_ic_cap", int),
     "HISTORY_WINDOW_SESSIONS": ("history_window_sessions", int),
     "ARCHIVE_CAP_MB": ("archive_cap_mb", int),
-    # S20 (wire-in): the 4 previously-dropped pod/context knobs are now plumbed
+    # (wire-in): the 4 previously-dropped pod/context knobs are now plumbed
     # to their consumers (pod size bounds in org/tiers.py::validate_pod, the
     # context token budget in runtime/context.py::bounded_assembly, and the
     # role-memory cap in runtime/llm.py::MemoryBackend).
@@ -73,16 +73,16 @@ ENV_TO_CONFIG: Dict[str, Tuple[str, Any]] = {
     "LLM_IC_TIMEOUT_SECONDS": ("ic_timeout_seconds", float),
     # D6: the Phase 4/5 iteration cap (was hardcoded 2 in run_session.py).
     "MAX_ITERATIONS": ("max_iterations", int),
-    # Story 2 (B17): the per-session HIGH-reasoning (thinking) budget — max
+    # the per-session HIGH-reasoning (thinking) budget — max
     # HIGH invokes before the budget forces a lower level.
     "THINKING_BUDGET": ("thinking_budget", int),
-    # Story 3: the **total headcount cap** — the maximum number of roles
+    # the **total headcount cap** — the maximum number of roles
     # (ICs + managers + heads) the org may have. The leader allots department
     # caps (% of this) in Phase 3; the head allots team caps (% of the
     # department cap) in Phase 4; IC counts are bounded by the team cap in
     # Phase 5.
     "HEAD_COUNT_TOTAL": ("head_count_total", int),
-    # Story 4: the **per-kind pod round-count overrides** (capped iterations).
+    # the **per-kind pod round-count overrides** (capped iterations).
     # Each pod runs for a bounded number of iterations, then the initiator
     # returns a result. These override the per-kind defaults in
     # `runtime/pods.py::POD_KIND_DEFAULT_ROUNDS` when set.
@@ -90,19 +90,19 @@ ENV_TO_CONFIG: Dict[str, Tuple[str, Any]] = {
     "REPORTING_POD_ROUNDS": ("reporting_pod_rounds", int),
     "HEADCOUNT_POD_ROUNDS": ("headcount_pod_rounds", int),
     "COLLABORATION_POD_ROUNDS": ("collaboration_pod_rounds", int),
-    # Story 22: the **efficiency floor** — when the efficiency score E is below
+    # the **efficiency floor** — when the efficiency score E is below
     # this, the Leader must take a visible efficiency action. Plumbed to
     # `efficiency_floor` (read by the Session's EfficiencyMeter; the code
     # default is efficiency.py::EFFICIENCY_FLOOR).
     "EFFICIENCY_FLOOR": ("efficiency_floor", float),
-    # Story 7: the **headcount cap defaults** — the default department cap (as
+    # the **headcount cap defaults** — the default department cap (as
     # a % of the total, 0.0-1.0) and the default team cap (as a % of the
-    # department cap, 0.0-1.0). These inform the cap allotment (Story 3): the
+    # department cap, 0.0-1.0). These inform the cap allotment: the
     # leader / head allots the caps, and these defaults are the starting point
     # (read by the cap-allotment context as a resourcing hint).
     "DEPARTMENT_CAP_DEFAULT": ("department_cap_default", float),
     "TEAM_CAP_DEFAULT": ("team_cap_default", float),
-    # Story 7: the **execution-pod routing rules** (Trigger C) — a JSON list of
+    # the **execution-pod routing rules** (Trigger C) — a JSON list of
     # task types that always go to a pod (e.g. ["evaluation", "incident"]), or a
     # comma-separated list. Plumbed to `pod_routing_rules` — the config key the
     # Session's Execute phase reads and hands to the A/B/C trigger check

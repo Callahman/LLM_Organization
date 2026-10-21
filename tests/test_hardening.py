@@ -1,4 +1,4 @@
-"""Unit tests for Epic 9 hardening — timeouts + log rotation.
+"""Unit tests for hardening — timeouts + log rotation.
 
 A backend invoke that exceeds its timeout raises a visible `LLMTimeoutError`
 (never silent); a log that grows past its cap rotates to a numbered file and
@@ -23,7 +23,7 @@ class SlowBackend(LLMBackend):
     """A backend that sleeps — to exercise the timeout guard. Conforms to the
     `LLMBackend` interface (accepts the optional `reasoning` level, the
     `phase` the wrappers pass through, and the per-invoke `timeout` the
-    `TimeoutBackend` threads down — Story 9)."""
+    `TimeoutBackend` threads down — )."""
 
     def __init__(self, delay: float):
         self.delay = delay

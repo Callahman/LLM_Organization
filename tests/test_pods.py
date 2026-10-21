@@ -1,5 +1,5 @@
 """Unit tests for `runtime/pods.py` — the §2.8 worked example end-to-end
-(Epic 5 Definition of Done).
+( Definition of Done).
 
 The IC's pod rejects the department head (2-tier spread); the manager's second
 pod carries the first pod's **decision artifact** up; the IC (starter) manages
@@ -113,7 +113,7 @@ def test_deadlock_detection(tmp_path):
     assert "deadlock" in pod.closed_reason
 
 
-# --- Story 7 (A2/B13/B14): pod context & lifecycle bounding ----------------
+# ---: pod context & lifecycle bounding ----------------
 
 
 def test_pod_ctx_token_bounded():
@@ -188,10 +188,10 @@ def test_pod_wall_clock_budget(monkeypatch):
     assert pod.closed_reason == "pod wall-clock budget exceeded"
 
 
-# --- Solo pods track any role's out-of-pod work (Story 21) ------------------
+# --- Solo pods track any role's out-of-pod work ------------------
 
 def test_form_solo_pod_any_role():
-    # A non-leader role (a manager) can form a solo pod (Story 21) — the pod
+    # A non-leader role (a manager) can form a solo pod — the pod
     # has the role as both starter and sole member, and the id is stable per
     # (role, activity).
     mgr = _role("mgr1", "manager", "analytics", "pipelines")

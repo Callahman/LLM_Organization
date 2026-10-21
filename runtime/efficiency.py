@@ -1,4 +1,4 @@
-"""S22 — Efficiency trade-off in the Phase 3–8 loop.
+"""Efficiency trade-off in the Phase 3–8 loop.
 
 The incentive: if the mission can be completed with **LESS headcount / compute
 time**, that is **encouraged**. The key metric is **wall-clock uptime** (local
@@ -40,7 +40,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-# S22: the efficiency floor (default ~0.4). When E < EFFICIENCY_FLOOR, the
+# the efficiency floor (default ~0.4). When E < EFFICIENCY_FLOOR, the
 # Leader must take a visible efficiency action (reduce headcount / automate a
 # recurring task / stop if the mission is satisfied).
 EFFICIENCY_FLOOR = 0.4
@@ -60,7 +60,7 @@ def compute_m_satisfaction(
     dispatch_results: Optional[List[Dict[str, Any]]],
     verdict: str,
 ) -> float:
-    """S22: the mission satisfaction ``M_satisfaction`` (0-1), generalized for
+    """the mission satisfaction ``M_satisfaction`` (0-1), generalized for
     **BOTH** terminal and recurring goals.
 
     A pragmatic, deterministic estimate (no model needed):
@@ -104,7 +104,7 @@ def efficiency_score(
     t_ref: Optional[float],
     c_ref: Optional[float],
 ) -> float:
-    """S22: the efficiency score ``E``.
+    """the efficiency score ``E``.
 
     ``E = M_satisfaction / (0.5·(T_total/T_ref) + 0.5·(C/C_ref))``
 
@@ -130,7 +130,7 @@ def efficiency_score(
 # --- The per-iteration meter -------------------------------------------------
 
 class EfficiencyMeter:
-    """S22: instruments the Phase 3–8 loop **per iteration** and computes the
+    """instruments the Phase 3–8 loop **per iteration** and computes the
     efficiency score ``E``.
 
     Per iteration it records:
@@ -285,7 +285,7 @@ class EfficiencyMeter:
         if snap is None:
             return ""
         lines = [
-            "EFFICIENCY (S22) — per-iteration breakdown (wall-clock, local "
+            "EFFICIENCY — per-iteration breakdown (wall-clock, local "
             "compute):"
         ]
         lines.append(

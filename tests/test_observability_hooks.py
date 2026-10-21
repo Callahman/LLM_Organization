@@ -30,7 +30,7 @@ def _reply_to_sse_lines(reply):
 
     The backend now reads a *streaming* response, so the fake reply (in the
     non-streaming ``message`` shape) is re-shaped into a single ``delta`` chunk
-    — enough to exercise the accumulation + _parse path without a real server.
+    enough to exercise the accumulation + _parse path without a real server.
     """
     choices = reply.get("choices") or []
     if choices:

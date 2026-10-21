@@ -148,7 +148,7 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
             "required": ["department_objectives"],
         },
         "verdict": {"type": "string"},         # Phase 7/8: complete / continue / escalate
-        # Story 5 (A1): a leader-replacement proposal. A single head setting
+        # a leader-replacement proposal. A single head setting
         # `propose=True` (with reasoning) triggers the per-head unanimous vote
         # (§2.2.1). Optional at the top level (so it does not leak into the
         # other phases).
@@ -159,7 +159,7 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
                 "reasoning": {"type": "string"},
             },
         },
-        # Story 6 (R7): resourcing decisions (firing). The leader can request
+        # resourcing decisions (firing). The leader can request
         # firing roles; each `fire` entry is [role_id, reason]. Optional at the
         # top level (so it does not leak into the other phases).
         "resourcing": {
@@ -174,7 +174,7 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
                 },
             },
         },
-        # Story 22: efficiency actions. The Leader is invoked with the
+        # efficiency actions. The Leader is invoked with the
         # efficiency panel (per-role / per-department invoke time) in Phase 4
         # and can act on an inefficient role or department. Optional at the top
         # level (so it does not leak into the other phases). `action` is one of

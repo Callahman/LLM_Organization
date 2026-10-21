@@ -73,7 +73,7 @@ class PlanResult:
     departments: List[Dict[str, Any]] = field(default_factory=list)
 
 
-# --- Story 3: the headcount cap chain (Phase 4 — the head allots teams) ---
+# ---: the headcount cap chain (Phase 4 — the head allots teams) ---
 
 def _allot_team_caps_ctx(head: Role, teams: List[str], dept_cap: int,
                          team_cap_default: Optional[float] = None) -> str:
@@ -116,7 +116,7 @@ def _parse_team_caps(out: Dict[str, Any], teams: List[str],
 def _allot_team_caps(org: OrgState, backend, head: Role,
                      team_objectives: List[Dict[str, Any]],
                      config: Optional[Dict[str, Any]] = None) -> None:
-    """Story 3: the head allots the **team/IC caps** (a cap per team, bounded
+    """the head allots the **team/IC caps** (a cap per team, bounded
     by the department cap), then **Pod B** (all managers + the head) finalizes
     them — the **head has final say**. The finalized caps are stored on the
     org (``org.team_caps``). A no-op if the department has no cap allotted
@@ -126,7 +126,6 @@ def _allot_team_caps(org: OrgState, backend, head: Role,
         return
     teams = [t.get("team") or t.get("manager_id", "") for t in team_objectives]
     # The `TEAM_CAP_DEFAULT` knob (if set) is a resourcing hint in the context
-    # (Story 7).
     out = backend.invoke(
         head, _allot_team_caps_ctx(head, teams, int(dept_cap),
                                    (config or {}).get("team_cap_default")),
@@ -184,7 +183,7 @@ def run_plan(
     head_ids = [h.id for h in org.department_heads()]
     # The Leader is invoked with the efficiency panel (per-role /
     # per-department invoke time) so it can act on an inefficient role or
-    # department (Story 22).
+    # department.
     efficiency_panel = ""
     if timing is not None:
         efficiency_panel = _efficiency_panel_text(timing.snapshot())
@@ -240,10 +239,10 @@ def run_plan(
                            "Phase 4 decomposition)"},
             )
 
-    # Story 4: the **leader+head clarification pods** (per operational
+    # the **leader+head clarification pods** (per operational
     # department) — a 2-member parent+child pod that clarifies the
     # department's mission. It runs BEFORE the head authors its policy
-    # (Story 5: the policy reflects the clarified mission), and is **contained**
+    # (the policy reflects the clarified mission), and is **contained**
     # (a pod failure is logged, never takes down the phase). Required
     # governance depts get no clarification pod. The leader is not a member of
     # `org.roles` — add it so the pod can be formed (starter = the leader).
@@ -258,7 +257,7 @@ def run_plan(
             f"Clarify the department's mission (department {head.department})",
             kind="clarification",
         )
-        # Story 12: the devil's advocate "listens" to the leader+head pod
+        # the devil's advocate "listens" to the leader+head pod
         # (visible, never silent).
         log_devils_advocate_listening(org, pod, roles_with_leader)
         _run_contained_pod(backend, org, pod,
@@ -269,7 +268,7 @@ def run_plan(
             clarifications[head.id] = pod.decision
 
     # Pre-decomposition: every department head (operational AND required)
-    # authors its department POLICY + POLICY_SUMMARY. **Story 5:** the policy
+    # authors its department POLICY + POLICY_SUMMARY. **:** the policy
     # is authored AFTER the leader+head clarification pod, so it reflects the
     # clarified mission (the pod → policy sequencing is strict).
     head_policies = generate_head_policies(
@@ -298,7 +297,7 @@ def run_plan(
         team_objectives = _decomposition_list(head_out, "team_objectives")
         # Solo (P4, head): record the head's decomposition (out-of-pod work)
         # so the dashboard can watch any role's solo work, not just the
-        # leader's (Story 21).
+        # leader's.
         if solo is not None:
             solo.record(
                 "p4", "Phase 4: head decomposition", 0, "decompose",
@@ -326,7 +325,7 @@ def run_plan(
                 )
         # (The head+manager clarification pod runs in Phase 5 (Staff), AFTER
         # the manager decomposes — see run_staff.)
-        # Story 3: the head allots the **team/IC caps** (Phase 4) + Story 4:
+        # the head allots the **team/IC caps** (Phase 4) +:
         # **Pod B** (all managers + the head) finalizes them (the head has final
         # say).
         _allot_team_caps(org, backend, head, team_objectives, config)

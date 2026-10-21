@@ -1,5 +1,5 @@
 """Unit tests for `runtime/mission.py` — mission codification + permission flow
-(Epic 2 Definition of Done).
+( Definition of Done).
 
 A draft is presented, a rejection is honored (no write), an approval writes v1
 with the change log — and the runtime refuses any out-of-flow write to
@@ -125,7 +125,7 @@ def test_mission_draft_string_tolerated(tmp_path):
 
 
 def test_mission_draft_helper_tolerates_shapes():
-    """_mission_draft() handles the shapes the real LLM free-forms: a dict
+    """_mission_draft handles the shapes the real LLM free-forms: a dict
     (canonical), a string (collapsed to prose), and None/number (ignored)."""
     from runtime.mission import _mission_draft
     # Canonical: a dict.

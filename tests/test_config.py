@@ -1,4 +1,4 @@
-"""Story 8 (Config consumption) — every .env knob is consumed (or warns).
+""" (Config consumption) — every .env knob is consumed (or warns).
 
 (a) A plumb-ed knob (POD_MAX_ROUNDS) actually reaches its consumer (run_pod).
 (b) An unknown/typo'd knob (not in ENV_TO_CONFIG / LLM_BACKEND_KEYS) triggers

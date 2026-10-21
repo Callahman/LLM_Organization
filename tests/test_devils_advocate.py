@@ -1,4 +1,4 @@
-"""Unit tests for the "devil's advocate" role (Story 12) — a leader's direct
+"""Unit tests for the "devil's advocate" role — a leader's direct
 report / red-team auditor that institutes a formal "gut check" on the org's
 outcomes.
 
@@ -135,7 +135,7 @@ def test_devils_advocate_cross_department_read():
     assert tiers.can_read_code(da, "departments/analytics/pipelines/a.py")
     # The leader reads other departments' policies...
     assert tiers.can_read(leader, "departments/analytics/ANALYTICS_POLICY.md")
-    # ...but the leader still cannot read any code (it sees work only as it is
+    # but the leader still cannot read any code (it sees work only as it is
     # brought to it).
     assert not tiers.can_read_code(leader, "departments/analytics/pipelines/a.py")
     # A normal IC cannot read another department (policy or code).
@@ -161,7 +161,7 @@ def test_devils_advocate_listens_to_leader_pod():
 
 def test_devils_advocate_listens_to_head_pod():
     """The role "listens" to any pod the **heads** are in (a head+manager pod
-    — the leader is not a member)."""
+    the leader is not a member)."""
     da = _da_role()
     head = _head("head_analytics", "analytics")
     mgr = _mgr("mgr1", "analytics", "pipelines", "head_analytics")
@@ -252,7 +252,7 @@ def test_phase8_flag_blocks_stop(tmp_path):
     assert status == "continue"
     # The flag is surfaced to the evaluation...
     assert evaluation["devils_advocate_flag"] == "flag: low-quality ETL"
-    # ...and the audit (visible, never silent).
+    # and the audit (visible, never silent).
     assert any(e["kind"] == "devils_advocate_flag_consumed"
                for e in session.org.events)
 

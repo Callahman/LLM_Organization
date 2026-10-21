@@ -35,7 +35,7 @@ class MissionResult:
     version: Optional[int]
     mission_path: Optional[str]
     edits: List[Dict[str, Any]] = field(default_factory=list)
-    # Story 6: the department proposal from Phase 2 (the departments + priority
+    # the department proposal from Phase 2 (the departments + priority
     # order, as a list of {name, priority, rationale} dicts, in priority order).
     # Empty if the leader did not propose departments (bootstrap then falls back
     # to the Phase-3 org_recommendation head proposal).
@@ -66,7 +66,7 @@ def _mission_context(intake_result: IntakeResult, feedback: str,
     if feedback:
         parts.append(f"User feedback on the previous draft: {feedback}")
     parts.append(MISSION_INSTRUCTION)
-    # Story 6: also propose the departments the mission needs, in priority
+    # also propose the departments the mission needs, in priority
     # order (Phase 3 creates them).
     parts.append(MISSION_DEPARTMENT_PROPOSAL)
     return "\n".join(parts)
@@ -219,7 +219,7 @@ def run_mission(
     version: Optional[int] = None
     feedback = ""
     base_version = start_version or 0
-    proposal: List[Dict[str, Any]] = []  # Story 6
+    proposal: List[Dict[str, Any]] = [] 
 
     while attempts < reask_budget:
         attempts += 1
@@ -228,8 +228,8 @@ def run_mission(
         out = backend.invoke(leader, ctx,
                              reasoning=classify_complexity(2, leader, {}), phase=2)
         draft = _mission_draft(out)
-        proposal = _department_proposal(out)  # Story 6
-        # Story 11 (B11): guard the user-approval callback (bounded retry,
+        proposal = _department_proposal(out) 
+        # guard the user-approval callback (bounded retry,
         # visible note, escalate on final failure — never a silent crash).
         decision = guarded_call(user_permission_fn, draft)
 
@@ -250,5 +250,5 @@ def run_mission(
         version=version,
         mission_path=mission_path if approved else None,
         edits=edits,
-        department_proposal=proposal if approved else [],  # Story 6
+        department_proposal=proposal if approved else [], 
     )

@@ -48,7 +48,7 @@ def wipe_state(verbose: bool = True) -> list:
 
     Returns the list of paths that were deleted (empty if there was nothing to
     reset). Each deletion is printed when ``verbose`` (the "visible, never
-    silent" philosophy). Reused by ``run_session.py`` for a fresh run (S16) so
+    silent" philosophy). Reused by ``run_session.py`` for a fresh run so
     a run with no ``MISSION.md`` starts from a clean slate."""
     targets = _collect_targets()
     if not targets:

@@ -1,4 +1,4 @@
-"""Unit tests for `runtime/history.py` — audit trail + archives (Epic 7
+"""Unit tests for `runtime/history.py` — audit trail + archives (
 Definition of Done).
 
 From any recorded decision, the audit path to its transcripts, mission
@@ -84,7 +84,7 @@ def test_maintain_applies_window_and_cap(tmp_path):
 
 
 def test_concurrent_appends_no_corruption(tmp_path):
-    """Story 9 (B5): concurrent appends produce no interleaved/corrupted
+    """concurrent appends produce no interleaved/corrupted
     records (the lock serializes the size-check + rotation + write)."""
     import threading
     store = HistoryStore(history_dir=str(tmp_path))
@@ -107,7 +107,7 @@ def test_concurrent_appends_no_corruption(tmp_path):
 
 
 def test_coordinated_timeout_caps_httpx_read(tmp_path, monkeypatch):
-    """Story 9 (B6): a per-invoke timeout passed to OpenAIBackend.invoke
+    """a per-invoke timeout passed to OpenAIBackend.invoke
     results in an httpx.Timeout(read=...) <= the bound (the param is threaded
     through and capped at the idle_timeout)."""
     import httpx

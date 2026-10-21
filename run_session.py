@@ -28,7 +28,7 @@ from runtime.llm_api import make_backend
 from runtime.session import Session
 from roles.leader import make_leader
 
-# Story 8: the 8-phase process (phase number -> name) — used by the visible
+# the 8-phase process (phase number -> name) — used by the visible
 # run-mode / result logging so the phases are shown by name, not just number.
 PHASE_NAMES = {
     1: "Intake",
@@ -94,9 +94,9 @@ def _interactive_callbacks():
 
 
 def _decide_run_mode(args, mission_path, checkpoint_path):
-    """S15/S16: decide the run mode (fresh vs revisit) + the resume point.
+    """Decide the run mode (fresh vs revisit) + the resume point.
 
-    The default mode is **revisit** (S15: ``run_session.py`` defaults to
+    The default mode is **revisit** (``run_session.py`` defaults to
     ``--revisit`` when no mode flag is given). Returns
     ``(mode, resume_point, resume_from_phase)`` where:
 
@@ -109,7 +109,7 @@ def _decide_run_mode(args, mission_path, checkpoint_path):
 
     Precedence:
     1. ``--fresh`` (explicit) -> fresh.
-    2. ``MISSION.md`` absent -> fresh (S16: clear the environment).
+    2. ``MISSION.md`` absent -> fresh (clear the environment).
     3. ``checkpoint.json`` present -> revisit from the checkpointed phase/cycle.
     4. no checkpoint -> revisit from the last phase (re-clarify from Phase 1).
     """
@@ -153,11 +153,11 @@ def main() -> None:
              "continue the mission version (Phase 2), bootstrap additively "
              "(Phase 3), and re-save the org chart. Roles remember prior "
              "runs (their memory is loaded from / saved to disk). This is the "
-             "DEFAULT mode (S15) — it resumes the current mission from the "
+             "DEFAULT mode — it resumes the current mission from the "
              "last checkpoint / last phase.")
     parser.add_argument(
         "--fresh", action="store_true",
-        help="S15: force a FRESH run (clear the generated state first, then "
+        help="Force a FRESH run (clear the generated state first, then "
              "start from Phase 1) — overrides the default --revisit mode. Use "
              "this to start a brand-new mission.")
     parser.add_argument(
@@ -206,8 +206,8 @@ def main() -> None:
               "throwaway dir) — the pipeline's state is written to the real "
               "project")
 
-    # S15/S16: decide the run mode (fresh vs revisit) + the resume point. The
-    # default mode is revisit (S15: run_session.py defaults to --revisit when
+    # Decide the run mode (fresh vs revisit) + the resume point. The
+    # default mode is revisit (run_session.py defaults to --revisit when
     # no mode flag is given).
     mission_path = config.get("mission_path", "MISSION.md")
     checkpoint_path = config.get("checkpoint_path", "state/checkpoint.json")
@@ -216,7 +216,7 @@ def main() -> None:
     print(f"[run-mode] mode={run_mode}, resume from: {resume_point}, "
           f"resume_from_phase={_phase_label(resume_from_phase)}")
 
-    # S16: a fresh run clears the generated state first (visible, never
+    # a fresh run clears the generated state first (visible, never
     # silent) — the same wipe logic as `reset_org --yes`, so a run with no
     # MISSION.md starts from a clean slate.
     if run_mode == "fresh":
@@ -250,10 +250,10 @@ def main() -> None:
         user_permission_fn=user_permission_fn,
         approver_fn=approver_fn,
         # D6: the Phase 4/5 iteration cap is config-driven (MAX_ITERATIONS in
-        # .env, default 2) — not hardcoded.
+        # env, default 2) — not hardcoded.
         max_iterations=config.get("max_iterations", 2),
         revisit=(run_mode == "revisit"),
-        # S15: the resume-from phase (a revisit from a checkpoint at phase 3
+        # the resume-from phase (a revisit from a checkpoint at phase 3
         # or 4 skips Phases 1-3 and resumes from Phase 4).
         resume_from_phase=resume_from_phase,
     )
@@ -261,7 +261,7 @@ def main() -> None:
     print("=== Session complete ===")
     print(f"status:     {result.status}")
     # The phases dict is {1..8: count} (the 8-phase process) — show it with the
-    # phase names (Story 8).
+    # phase names.
     if result.phases:
         phase_str = ", ".join(
             f"{_phase_label(p)}: {result.phases.get(p, 0)}"

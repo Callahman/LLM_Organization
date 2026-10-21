@@ -125,7 +125,7 @@ class TimeoutBackend(LLMBackend):
 
         def worker() -> None:
             try:
-                # Story 9 (B6): thread the effective timeout down to the inner
+                # thread the effective timeout down to the inner
                 # backend so the underlying HTTP call (httpx `read` timeout) is
                 # bounded to the TimeoutBackend's bound (no long-lived zombie
                 # thread). The inner backend (RoutingBackend -> OpenAIBackend)
@@ -139,7 +139,7 @@ class TimeoutBackend(LLMBackend):
         t.start()
         t.join(effective)
         if t.is_alive():
-            # Story 9 (B6): the daemon thread will finish when the (now-
+            # the daemon thread will finish when the (now-
             # coordinated) httpx timeout trips. Add a visible note so the
             # operator knows the bound (the underlying call is bounded to the
             # TimeoutBackend's bound, not left as a long-lived zombie).
@@ -184,7 +184,7 @@ class MemoryBackend(LLMBackend):
 
     `seed_cross_team(role_id, pod_id, decision, team)` additionally seeds a
     pod's decision into a member's memory as a cross-team `pod:<id>` entry
-    (what `RoleMemory.cross_team()` filters on) — a pod's decision carries
+    (what `RoleMemory.cross_team` filters on) — a pod's decision carries
     into the members' later intra-team meetings.
     """
 
@@ -197,7 +197,7 @@ class MemoryBackend(LLMBackend):
     def _memory_for(self, role_id: str) -> RoleMemory:
         if role_id not in self.role_memories:
             lo, hi = self.max_entries_range
-            # Story 11 (B9): seed the RNG with the role id so the `max_entries`
+            # seed the RNG with the role id so the `max_entries`
             # bound is **stable per role across runs** (instead of re-randomized
             # when a disk file is absent). Each role still gets a slightly
             # different bound (within `max_entries_range`) so roles don't all
@@ -211,7 +211,7 @@ class MemoryBackend(LLMBackend):
                         team: str = "") -> None:
         """Seed a pod's decision into a member's memory as a **cross-team
         carry-over entry** — source `pod:<id>`, exactly what
-        `RoleMemory.cross_team()` filters on. This is the third carry-over
+        `RoleMemory.cross_team` filters on. This is the third carry-over
         path: a pod's decision carries into the members' later intra-team
         meetings. An empty decision is a no-op (never a visible silent
         entry)."""
@@ -224,7 +224,7 @@ class MemoryBackend(LLMBackend):
                reasoning: Optional[Reasoning] = None,
                timeout: Optional[float] = None,
                phase: Optional[int] = None) -> Dict[str, Any]:
-        # Story 2 (A7): the default is `None`, NOT a hardcoded
+        # the default is `None`, NOT a hardcoded
         # `Reasoning.LOW` — a `None` is forwarded to the inner (RoutingBackend),
         # which then CLASSIFIES the level from the phase + role. A hardcoded
         # LOW would force every non-explicit invoke to the low level and bypass
@@ -272,11 +272,11 @@ class MemoryBackend(LLMBackend):
         """Persist each role's memory to `<directory>/<role_id>.json`.
         Returns the number of roles saved. This is what a --continue /
         --revisit run loads so roles remember prior runs. Each file is written
-        **atomically** (Story 1, B7): `<role_id>.json.tmp` first, then
+        **atomically**: `<role_id>.json.tmp` first, then
         `os.replace` swaps it in — a crash mid-write leaves the previous good
         memory intact (no partial JSON).
 
-        Story 11 (B8): when ``active_role_ids`` is given (the current org's
+        when ``active_role_ids`` is given (the current org's
         role ids), the role memories are **pruned** to only those ids before
         saving — stale (fired) roles' memories are dropped, so the memory dir
         does not grow without bound across runs."""

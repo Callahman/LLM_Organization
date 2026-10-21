@@ -1,5 +1,5 @@
 """Unit tests for `runtime/intake.py` — the Phase 1 clarifying Q&A loop
-(Epic 1 Definition of Done).
+( Definition of Done).
 
 A hand-run intake on a deliberately vague prompt asks sensible questions,
 converges (or marks assumptions), and writes the audit trail; a clear prompt
@@ -118,10 +118,10 @@ def test_budget_exhaustion_marks_assumptions(tmp_path):
     assert os.path.exists(os.path.join(str(tmp_path), "intake.jsonl"))
 
 
-# --- Story 11 (B10, B11) ----------------------------------------------------
+# --- No convergence without a restated goal (intake) ---
 
 def test_b10_no_convergence_without_restated_goal(tmp_path):
-    """Story 11 (B10): intake does not converge when the leader reports high
+    """intake does not converge when the leader reports high
     confidence but an empty `restated_goal` (prevents premature convergence on
     a fuzzy goal)."""
     leader = make_leader()
@@ -155,7 +155,7 @@ def test_b10_no_convergence_without_restated_goal(tmp_path):
 
 
 def test_b11_user_answer_fn_raises_is_retried_then_escalated(tmp_path):
-    """Story 11 (B11): a `user_answer_fn` that raises is retried then
+    """a `user_answer_fn` that raises is retried then
     escalated (not a crash)."""
     from runtime.guard import UserApprovalError
     leader = make_leader()

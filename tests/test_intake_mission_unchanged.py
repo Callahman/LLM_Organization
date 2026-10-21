@@ -1,4 +1,4 @@
-"""Story 9 — **Intake (Phase 1) + Mission (Phase 2) largely unchanged**.
+"""**Intake (Phase 1) + Mission (Phase 2) largely unchanged**.
 
 The Phase 1 (intake clarifying Q&A) + Phase 2 (mission codification +
 permission) flow is preserved. The key invariant this file checks:

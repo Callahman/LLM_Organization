@@ -1,4 +1,4 @@
-"""Invoke timing (Story 22) — per-role and per-department wall-clock time.
+"""Invoke timing — per-role and per-department wall-clock time.
 
 Two pieces:
 

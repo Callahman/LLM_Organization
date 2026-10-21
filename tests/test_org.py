@@ -1,5 +1,5 @@
 """Unit tests for `runtime/org.py` — org bootstrap + resourcing
-(Epic 3 Definition of Done).
+( Definition of Done).
 
 Bootstrapping a 3-department org (HR + Safety + Morality required) creates the
 right directories/policies; a redundant hire is vetoed by HR; a firing of a
@@ -336,7 +336,7 @@ def test_ic_cannot_initiate_hire_or_fire(tmp_path):
         assert "ICs cannot initiate" in str(e)
 
 
-# --- Story 5 (A1): leader replacement --------------------------------------
+# ---: leader replacement --------------------------------------
 
 
 def _replacement_org(tmp_path, n_heads: int = 2) -> OrgState:
@@ -411,7 +411,7 @@ def test_replace_leader_no_heads_raises(tmp_path):
         replace_leader(org, new_leader, agreeing_head_ids=[])
 
 
-# --- Story 6 (R7): firing --------------------------------------------------
+# ---: firing --------------------------------------------------
 
 
 def _firing_org(tmp_path) -> OrgState:
@@ -426,7 +426,7 @@ def _firing_org(tmp_path) -> OrgState:
 
 def test_fire_ic_approved(tmp_path):
     # (a) Fire an IC: approve a fire -> the role is marked inactive (in
-    # org.roles, not in org.active_roles()), _offload ran, and a "fired"
+    # org.roles, not in org.active_roles), _offload ran, and a "fired"
     # event is logged.
     org = _firing_org(tmp_path)
     def approve(approver_type, action, target):
@@ -474,10 +474,10 @@ def test_fire_required_role_rejected(tmp_path):
     assert org.get("head_hr").status == "active"
 
 
-# --- Story 11 (B16) ---------------------------------------------------------
+# --- Org-size cap (total headcount) ---
 
 def test_b16_bootstrap_exceeds_org_size_cap(tmp_path):
-    """Story 11 (B16): a bootstrap that proposes more heads than the cap
+    """a bootstrap that proposes more heads than the cap
     refuses with a visible note (never silent)."""
     org = OrgState(history_dir=str(tmp_path))
     leader = make_leader()

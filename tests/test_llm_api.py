@@ -42,7 +42,7 @@ def _reply_to_sse_lines(reply):
 
     The backend now reads a *streaming* response, so the fake reply (in the
     non-streaming ``message`` shape) is re-shaped into a single ``delta`` chunk
-    — enough to exercise the accumulation + _parse path without a real server.
+    enough to exercise the accumulation + _parse path without a real server.
     """
     choices = reply.get("choices") or []
     if choices:
@@ -54,7 +54,7 @@ def _reply_to_sse_lines(reply):
 
 
 def _install_fake_httpx(monkeypatch, reply):
-    """Inject a fake httpx module whose stream() records the request and yields
+    """Inject a fake httpx module whose stream records the request and yields
     the reply as a single SSE chunk. Returns the recorded request."""
     seen = {}
     sse_lines = _reply_to_sse_lines(reply)
@@ -233,7 +233,7 @@ def test_role_label_composes_id_subarchitype_personality_department():
 # --- bounded timeout retries ---------------------------------------------------
 
 def _install_failing_httpx(monkeypatch, fail_times, reply):
-    """Inject a fake httpx whose stream() raises a ReadTimeout for the first
+    """Inject a fake httpx whose stream raises a ReadTimeout for the first
     `fail_times` attempts, then yields `reply` as a single SSE chunk. Returns a
     dict with the attempt count and the ReadTimeout class (for assertions)."""
     import time as _time
@@ -306,7 +306,7 @@ def test_timeout_retry_respects_max_retries_zero(monkeypatch):
 
 def _install_truncating_httpx(monkeypatch, trunc_times, good_reply,
                               finish_reason="length"):
-    """Inject a fake httpx whose stream() returns a TRUNCATED submit_output
+    """Inject a fake httpx whose stream returns a TRUNCATED submit_output
     call (the JSON cut off mid-string, an unterminated string) for the first
     `trunc_times` attempts, then `good_reply`. The truncated reply's final
     chunk carries `finish_reason` (default "length"; pass "" to exercise the

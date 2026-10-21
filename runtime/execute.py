@@ -49,7 +49,7 @@ class ExecuteResult:
     - ``reports``: one entry per department — ``{"head": str, "report":
       dict}`` (the bounded upward report: the head's bounded summary of the
       team work below it + artifact pointers). This is the same shape the old
-      ``dispatch()`` returned.
+      ``dispatch`` returned.
     """
 
     reports: List[Dict[str, Any]]
@@ -73,7 +73,7 @@ def run_execute(
     """Run Phase 6 (Execute): the per-IC work + self-edits + the A/B/C pod
     triggers + the upward report. Consumes the ``StaffResult`` from Phase 5
     (Staff) and returns an ``ExecuteResult`` (the leader's view — the same
-    shape the old ``dispatch()`` returned).
+    shape the old ``dispatch`` returned).
 
     ``pods_out`` (optional) collects the pods formed by the A/B/C triggers
     (for the leader's synthesis + the session's pod records).
@@ -98,9 +98,9 @@ def run_execute(
                     ic = org.get(task.get("ic_id", ""))
                     if ic is None:
                         continue
-                    # Story 4: the **manager+ic clarification pod** (per IC) —
+                    # the **manager+ic clarification pod** (per IC) —
                     # a 2-member parent+child pod that clarifies the IC's
-                    # task. It runs BEFORE the IC's work (Story 5: the work
+                    # task. It runs BEFORE the IC's work (the work
                     # reflects the clarified task), and is **contained** (a pod
                     # failure is logged, never takes down the phase).
                     pod = form_pod(
@@ -134,7 +134,7 @@ def run_execute(
                             "pointer": "",
                         })
                         continue
-                    # Story 4: the **collaboration pod** (IC + manager) — if the
+                    # the **collaboration pod** (IC + manager) — if the
                     # IC's work flagged a collaboration need (`collaborate`),
                     # the manager sets up the pod (kind="collaboration", capped
                     # iterations). The pod's outcome is carried into the IC's
@@ -179,7 +179,7 @@ def run_execute(
                     ic_ids.append(ic.id)
                     # Solo (P4, IC): record the IC's work (out-of-pod work) so
                     # the dashboard can watch any role's solo work, not just
-                    # the leader's (Story 21).
+                    # the leader's.
                     if solo is not None:
                         solo.record(
                             "p6", "Phase 6: IC work", 0, "work",
@@ -197,7 +197,7 @@ def run_execute(
                         "summary": ic_out.get("summary", ""),
                         "pointer": pointer,
                     })
-                    # Self-edit (Story 11): the IC's edit_code / write_file
+                    # Self-edit: the IC's edit_code / write_file
                     # outputs are applied through the edit gate (the path is
                     # validated against the role's scope + the org's artifact
                     # rules; a refusal is logged, never swallowed).
@@ -243,7 +243,7 @@ def run_execute(
                     continue
                 # Solo (P4, IC): record the IC's work (out-of-pod work) so the
                 # dashboard can watch any role's solo work, not just the
-                # leader's (Story 21).
+                # leader's.
                 if solo is not None:
                     solo.record(
                         "p6", "Phase 6: IC work", 0, "work",
@@ -252,7 +252,7 @@ def run_execute(
                              "work_path", _work_path(ic, ic_tasks[0]))},
                         role=ic,
                     )
-                # Self-edit (Story 11): the IC's edit_code / write_file outputs
+                # Self-edit: the IC's edit_code / write_file outputs
                 # are applied through the edit gate (the path is validated
                 # against the role's scope + the org's artifact rules; a
                 # refusal is logged, never swallowed).
