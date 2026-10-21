@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from roles.base import Role
-from runtime.org import OrgState, run_leader_replacement_vote
+from runtime.org import OrgState, run_leader_replacement_vote, _invoke_contained
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
 from runtime.history import HistoryStore
@@ -120,26 +120,42 @@ def _allot_team_caps(org: OrgState, backend, head: Role,
     by the department cap), then **Pod B** (all managers + the head) finalizes
     them — the **head has final say**. The finalized caps are stored on the
     org (``org.team_caps``). A no-op if the department has no cap allotted
-    (the org then falls back to the per-manager IC cap)."""
+    (the org then falls back to the per-manager IC cap).
+
+    **Error containment** (a headcount hiccup must not kill the run): the
+    head's allotment gets one corrective retry, and a final failure is
+    contained (a visible org event; the org falls back to the per-manager IC
+    cap). A Pod B failure is likewise contained (a visible org event; the
+    head's allotment stands — the head has final say, and a headcount pod
+    must not take down the phase it sizes)."""
     dept_cap = org.department_caps.get(head.department, 0)
     if not dept_cap:
         return
     teams = [t.get("team") or t.get("manager_id", "") for t in team_objectives]
-    # The `TEAM_CAP_DEFAULT` knob (if set) is a resourcing hint in the context
-    out = backend.invoke(
-        head, _allot_team_caps_ctx(head, teams, int(dept_cap),
-                                   (config or {}).get("team_cap_default")),
-        reasoning=classify_complexity(4, head, {"is_decision": True}),
-        phase=4,
-    )
+    # 1. The head allots the team caps (a resourcing decision), with one
+    # corrective retry on a failure. The `TEAM_CAP_DEFAULT` knob (if set) is a
+    # resourcing hint in the context. A final failure is contained (a visible
+    # org event; the org falls back to the per-manager IC cap).
+    ctx = _allot_team_caps_ctx(head, teams, int(dept_cap),
+                               (config or {}).get("team_cap_default"))
+    out, err = _invoke_contained(
+        backend, head, ctx,
+        classify_complexity(4, head, {"is_decision": True}), phase=4)
+    if err is not None:
+        org.log_event("headcount_allotment_failed", head.id, None,
+                      {"error": err})
+        return
     caps = _parse_team_caps(out, teams, int(dept_cap))
-    # Pod B (all managers + the head) finalizes the team caps — the head has
-    # final say (the pod deliberates; the head's allotment is the final).
+    # 2. Pod B (all managers + the head) finalizes the team caps — the head
+    # has final say (the pod deliberates; the head's allotment is the final).
+    # The head is a member (like Pod A's leader) so a single-manager
+    # department still forms a valid pod (the 2-member minimum). A pod
+    # failure is contained (a visible org event; the head's allotment stands).
     managers = [org.get(t.get("manager_id", "")) for t in team_objectives]
     managers = [m for m in managers if m is not None]
     if managers:
         pod = form_pod(
-            org.roles, head.id, [m.id for m in managers],
+            org.roles, head.id, [head.id] + [m.id for m in managers],
             f"Finalize the manager/IC headcount per team (department cap "
             f"{int(dept_cap)})",
             # Pod B is a headcount deliberation (all managers + the head) — the
@@ -150,10 +166,17 @@ def _allot_team_caps(org: OrgState, backend, head: Role,
             max_roles=12,
             kind="headcount",
         )
-        run_pod(backend, pod,
-                max_rounds=(config or {}).get("headcount_pod_rounds"),
-                phase=4)
-    # Store on the org (the head's caps are the final — the head has final
+        try:
+            run_pod(backend, pod,
+                    max_rounds=(config or {}).get("headcount_pod_rounds"),
+                    phase=4)
+        except Exception as e:
+            # A pod failure (e.g. a manager's malformed / free-form reply) is
+            # contained — a visible org event; the head's allotment stands
+            # (the head has final say).
+            org.log_event("headcount_pod_failed", head.id, None,
+                          {"pod": pod.id, "kind": pod.kind, "error": str(e)})
+    # 3. Store on the org (the head's caps are the final — the head has final
     # say).
     for team, cap in caps.items():
         org.team_caps[(head.department, team)] = cap

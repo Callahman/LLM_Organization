@@ -47,11 +47,11 @@ MISSION_INSTRUCTION = (
     "(object or string), `resource_envelope` (object or string)."
 )
 
-# Phase 2 (Mission) — the leader's department-proposal instruction.
+# Phase 2 (Mission) — the leader's department-caps instruction.
 # Used by runtime/mission.py::_mission_context (the leader also proposes the
 # departments the mission needs, in priority order).
-MISSION_DEPARTMENT_PROPOSAL = (
-    "Also set `department_proposal` to a JSON OBJECT with a `departments` "
+MISSION_DEPARTMENT_CAPS = (
+    "Also set `department_caps` to a JSON OBJECT with a `departments` "
     "array in PRIORITY order (highest first); each item is an OBJECT with "
     "`name` (string, the department), `priority` (integer), and `rationale` "
     "(string, why the mission needs it). Propose the OPERATIONAL departments "
@@ -238,9 +238,10 @@ POLICY_CTX_INSTRUCTION = (
     "to a number 0-1."
 )
 
-# Phase 6 (Execute) — the IC's one corrective-retry nudge (appended to the
-# same task's context when the first reply was malformed / missing). Used by
-# runtime/dispatch_common.py::_invoke_ic.
+# The one corrective-retry nudge (appended to the same task's context when
+# the first reply was malformed / missing). Used by
+# runtime/dispatch_common.py::_invoke_ic (Phase 6, the IC's work) and by
+# runtime/org.py::_invoke_contained (Phase 3/4, the headcount allotments).
 IC_RETRY_NUDGE = (
     "\n\n[RETRY] Your previous reply for this task was not a valid "
     "structured call (its JSON arguments were malformed or missing). "

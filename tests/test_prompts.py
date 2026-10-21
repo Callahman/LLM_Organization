@@ -31,9 +31,9 @@ import prompts
 _EXPECTED_PROMPT_NAMES = [
     # Phase 1 (intake) — the clarifying-questions rules.
     "INTAKE_RULES",
-    # Phase 2 (mission) — the mission-codification + department-proposal prompts.
+    # Phase 2 (mission) — the mission-codification + department-caps prompts.
     "MISSION_INSTRUCTION",
-    "MISSION_DEPARTMENT_PROPOSAL",
+    "MISSION_DEPARTMENT_CAPS",
     # Phase 3 (org bootstrap) — the department-head proposal + retry prompts.
     "BOOTSTRAP_INSTRUCTION",
     "BOOTSTRAP_RETRY",
@@ -142,9 +142,9 @@ def test_runtime_modules_use_prompts():
 
     # Phase 1 (intake) uses INTAKE_RULES.
     assert hasattr(intake_mod, "INTAKE_RULES")
-    # Phase 2 (mission) uses the mission-codification + department-proposal
+    # Phase 2 (mission) uses the mission-codification + department-caps
     # prompts.
-    for name in ("MISSION_INSTRUCTION", "MISSION_DEPARTMENT_PROPOSAL"):
+    for name in ("MISSION_INSTRUCTION", "MISSION_DEPARTMENT_CAPS"):
         assert hasattr(mission_mod, name), f"mission does not import {name}"
     # Phase 3 (org bootstrap) uses the bootstrap prompts.
     for name in ("BOOTSTRAP_INSTRUCTION", "BOOTSTRAP_RETRY"):

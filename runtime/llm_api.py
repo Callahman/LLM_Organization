@@ -594,7 +594,8 @@ class OpenAIBackend(LLMBackend):
             return "timeout"
         if "truncat" in e:
             return "truncation"
-        if "malformed" in e or "parse" in e or "no tool call" in e:
+        if ("malformed" in e or "parse" in e or "no tool call" in e
+                or "no submit_output tool call" in e):
             return "parse"
         if ("connect" in e or "protocol" in e or "httpstatus" in e
                 or "reset" in e or "httpx" in e):
@@ -835,9 +836,10 @@ class OpenAIBackend(LLMBackend):
                 # is truncation-shaped on a plausible, unbalanced JSON
                 # prefix), it is transient — retry the whole request (bounded,
                 # with a short backoff), sharing the attempt budget with
-                # timeouts. A malformed shape the model chose is NOT retried
-                # (the session's invoke_checked handles malformed output at a
-                # higher level).
+                # timeouts. A malformed shape the model chose is NOT retried here
+                # (the phase modules contain a malformed reply at a higher
+                # level — e.g. the headcount path's one corrective retry / pod
+                # containment — so a second identical attempt is wasted).
                 if e.truncated and attempt < max_attempts:
                     backoff = min(30.0, 5.0 * attempt)
                     self._report(role, "retry", t0,

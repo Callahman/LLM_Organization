@@ -28,7 +28,7 @@ import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from prompts import BOOTSTRAP_INSTRUCTION, BOOTSTRAP_RETRY
+from prompts import BOOTSTRAP_INSTRUCTION, BOOTSTRAP_RETRY, IC_RETRY_NUDGE
 from org.tiers import DEVILS_ADVOCATE_ROLE
 from roles.base import Role
 from roles.worker import worker_output_schema
@@ -334,14 +334,14 @@ def _extract_department_heads(out: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
-def _department_proposal_to_heads(mission_result: MissionResult) -> List[Dict[str, Any]]:
-    """convert the Phase-2 department proposal (a list of
+def _department_caps_to_heads(mission_result: MissionResult) -> List[Dict[str, Any]]:
+    """convert the Phase-2 department caps (a list of
     ``{name, priority, rationale}`` dicts, in priority order) into a list of
     department-head specs (``{id, department, sub_architype, required,
     mandate}``), in priority order. Each proposed department becomes one head
     (the Phase-2 proposal is the primary source of the departments to create)."""
     heads: List[Dict[str, Any]] = []
-    for spec in (mission_result.department_proposal if mission_result else []) or []:
+    for spec in (mission_result.department_caps if mission_result else []) or []:
         if not isinstance(spec, dict):
             continue
         name = str(spec.get("name", "")).strip()
@@ -493,10 +493,10 @@ def bootstrap(
     # to the Phase-3 head proposal (org_recommendation).
     proposed: List[Dict[str, Any]] = []
     last_out: Dict[str, Any] = {}
-    dept_proposal = (mission_result is not None
-                     and getattr(mission_result, "department_proposal", None))
-    if dept_proposal:
-        proposed = _department_proposal_to_heads(mission_result)
+    dept_caps = (mission_result is not None
+                     and getattr(mission_result, "department_caps", None))
+    if dept_caps:
+        proposed = _department_caps_to_heads(mission_result)
     if not proposed:
         # Bounded retry: the leader's head proposal must include at least one
         # operational department head (not just the required governance depts).
@@ -591,6 +591,27 @@ def bootstrap(
 
 # ---: the headcount cap chain (Phase 3 — the leader allots depts) ---
 
+def _invoke_contained(backend, role: Role, ctx: str, reasoning,
+                      phase: Optional[int]) -> Tuple[Optional[Dict[str, Any]],
+                                                     Optional[str]]:
+    """Invoke a role with **one corrective retry** on a failure (error
+    containment — the same one-retry pattern as `_invoke_ic` in
+    `runtime/dispatch_common.py`). Returns ``(output, error)``: on success
+    ``error`` is None; if the corrective retry also fails, ``output`` is None
+    and ``error`` is a visible description (the caller records it and
+    continues — one hiccup must not kill the run)."""
+    try:
+        return backend.invoke(role, ctx, reasoning=reasoning, phase=phase), None
+    except Exception as e:
+        try:
+            return backend.invoke(role, ctx + IC_RETRY_NUDGE,
+                                  reasoning=reasoning, phase=phase), None
+        except Exception as e2:
+            return None, (f"{type(e).__name__}: {e} "
+                          f"(corrective retry failed: {type(e2).__name__}: "
+                          f"{e2})")
+
+
 def _allot_caps_ctx(leader: Role, departments: List[str], total: int,
                     department_cap_default: Optional[float] = None) -> str:
     """The context for the leader's department-cap allotment (Phase 3)."""
@@ -658,46 +679,67 @@ def allot_department_caps(
     `department_head`s + the leader) finalizes them — the **leader has final
     say**. The finalized caps are stored on the org + recorded in the **mission
     addendum**. Returns the finalized `{department: cap}` mapping (empty if no
-    total cap is set — the org then falls back to the per-manager IC cap)."""
+    total cap is set — the org then falls back to the per-manager IC cap).
+
+    **Error containment** (a headcount hiccup must not kill the run): the
+    leader's allotment gets one corrective retry, and a final failure is
+    contained (a visible org event; the org falls back to the per-manager IC
+    cap). A Pod A failure is likewise contained (a visible org event; the
+    leader's allotment stands — the leader has final say, and a headcount pod
+    must not take down the phase it sizes)."""
     total = (config or {}).get("head_count_total")
     if not total:
         return {}
     heads = org.department_heads()
     departments = [h.department for h in heads]
-    # 1. The leader allots the department caps (a resourcing decision). The
-    # `DEPARTMENT_CAP_DEFAULT` knob (if set) is a resourcing hint in the
-    # context.
-    out = backend.invoke(
-        leader, _allot_caps_ctx(leader, departments, int(total),
-                                (config or {}).get("department_cap_default")),
-        reasoning=classify_complexity(3, leader, {"is_decision": True}),
-        phase=3,
-    )
-    caps = _parse_and_clamp_caps(out, departments, int(total))
+    # 1. The leader allots the department caps (a resourcing decision), with
+    # one corrective retry on a failure. The `DEPARTMENT_CAP_DEFAULT` knob (if
+    # set) is a resourcing hint in the context. A final failure is contained
+    # (a visible org event; the org falls back to the per-manager IC cap).
+    ctx = _allot_caps_ctx(leader, departments, int(total),
+                          (config or {}).get("department_cap_default"))
+    out, err = _invoke_contained(
+        backend, leader, ctx,
+        classify_complexity(3, leader, {"is_decision": True}), phase=3)
+    caps = _parse_and_clamp_caps(out, departments, int(total)) if out else {}
+    if err is not None:
+        org.log_event("headcount_allotment_failed", leader.id, None,
+                      {"error": err})
     # 2. Pod A (all heads + the leader) finalizes the department caps — the
     # leader has final say (the pod deliberates; the leader's allotment is
-    # the final).
+    # the final). The leader is a member (like Pod B's head) so a single-head
+    # org still forms a valid pod (the 2-member minimum). Any pod failure
+    # (membership or a member's malformed reply) is contained (a visible org
+    # event; the leader's allotment stands).
     if heads:
         # The leader is not a member of `org.roles` — add it so Pod A can be
         # formed (starter = the leader).
         roles_with_leader = {**org.roles, leader.id: leader}
-        pod = form_pod(
-            roles_with_leader, leader.id, [h.id for h in heads],
-            f"Finalize the headcount per department (total cap {int(total)})",
-            # Pod A is a headcount deliberation (all heads + the leader) — the
-            # heads are peers (not in one reporting line), so skip the
-            # communication gate (cross_team) and relax the size bound (it can
-            # legitimately exceed the 6-member working-group bound).
-            cross_team=True,
-            max_roles=12,
-            kind="headcount",
-        )
-        # the devil's advocate "listens" to Pod A (all heads + the
-        # leader) — visible, never silent.
-        log_devils_advocate_listening(org, pod, roles_with_leader)
-        run_pod(backend, pod,
-                max_rounds=(config or {}).get("headcount_pod_rounds"),
-                phase=3)
+        try:
+            pod = form_pod(
+                roles_with_leader, leader.id,
+                [leader.id] + [h.id for h in heads],
+                f"Finalize the headcount per department (total cap {int(total)})",
+                # Pod A is a headcount deliberation (all heads + the leader) —
+                # the heads are peers (not in one reporting line), so skip the
+                # communication gate (cross_team) and relax the size bound (it
+                # can legitimately exceed the 6-member working-group bound).
+                cross_team=True,
+                max_roles=12,
+                kind="headcount",
+            )
+            # the devil's advocate "listens" to Pod A (all heads + the
+            # leader) — visible, never silent.
+            log_devils_advocate_listening(org, pod, roles_with_leader)
+            run_pod(backend, pod,
+                    max_rounds=(config or {}).get("headcount_pod_rounds"),
+                    phase=3)
+        except Exception as e:
+            # A pod failure (a membership issue, or a head's malformed /
+            # free-form reply) is contained — a visible org event; the
+            # leader's allotment stands (the leader has final say).
+            org.log_event("headcount_pod_failed", leader.id, None,
+                          {"error": str(e)})
     # 3. Store on the org + record in the mission addendum.
     org.department_caps = caps
     _record_headcount_addendum(mission_path, int(total), caps)

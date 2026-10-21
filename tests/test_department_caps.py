@@ -1,4 +1,4 @@
-"""Tests for — the department proposal in the Mission phase (Phase 2).
+"""Tests for — the department caps in the Mission phase (Phase 2).
 
 The leader proposes the departments the mission needs (in priority order) in
 Phase 2; `MissionResult` carries them; Phase 3 (Org bootstrap) creates them.
@@ -34,14 +34,14 @@ def _draft():
     }
 
 
-def test_mission_carries_department_proposal(tmp_path):
-    """Phase 2: the leader's department_proposal is extracted and carried on
+def test_mission_carries_department_caps(tmp_path):
+    """Phase 2: the leader's department_caps is extracted and carried on
     MissionResult (in priority order, normalized)."""
     leader = make_leader()
     backend = StubBackend()
     backend.set_script("leader", [
         {"summary": "draft", "mission_draft": _draft(),
-         "department_proposal": {"departments": [
+         "department_caps": {"departments": [
              {"name": "Data Engineering", "priority": 1,
               "rationale": "owns the ETL pipelines"},
              {"name": "Analytics", "priority": 2,
@@ -56,9 +56,9 @@ def test_mission_carries_department_proposal(tmp_path):
         reask_budget=1,
     )
     assert result.approved
-    assert [d["name"] for d in result.department_proposal] == [
+    assert [d["name"] for d in result.department_caps] == [
         "Data Engineering", "Analytics"]
-    assert [d["priority"] for d in result.department_proposal] == [1, 2]
+    assert [d["priority"] for d in result.department_caps] == [1, 2]
 
 
 def test_bootstrap_creates_proposed_departments(tmp_path):
@@ -71,7 +71,7 @@ def test_bootstrap_creates_proposed_departments(tmp_path):
     backend = StubBackend()
     mission = MissionResult(
         approved=True, attempts=1, version=1, mission_path="MISSION.md",
-        department_proposal=[
+        department_caps=[
             {"name": "Data Engineering", "priority": 1, "rationale": "owns ETL"},
             {"name": "Analytics", "priority": 2, "rationale": "owns reporting"},
         ],
@@ -101,7 +101,7 @@ def test_bootstrap_falls_back_to_org_recommendation(tmp_path):
               "mandate": "Head of finance."},
          ]}},
     ])
-    # No department_proposal (the MissionResult).
+    # No department_caps (the MissionResult).
     mission = MissionResult(approved=True, attempts=1, version=1,
                             mission_path="MISSION.md")
     bootstrap(org, backend, leader, mission, _approve_all,
@@ -110,27 +110,27 @@ def test_bootstrap_falls_back_to_org_recommendation(tmp_path):
     assert org.get("head_finance") is not None
 
 
-def test_department_proposal_helper_tolerates_shapes():
-    """_department_proposal handles the shapes the real LLM free-forms: a
+def test_department_caps_helper_tolerates_shapes():
+    """_department_caps handles the shapes the real LLM free-forms: a
     dict with a `departments` list, a bare list, a `department` key, and
     missing/empty (degrades to [])."""
-    from runtime.mission import _department_proposal
+    from runtime.mission import _department_caps
     # Canonical: a dict with a departments list.
-    assert _department_proposal({"department_proposal": {"departments": [
+    assert _department_caps({"department_caps": {"departments": [
         {"name": "a"}, {"name": "b", "priority": 2}]}}) == [
         {"name": "a", "priority": 1, "rationale": ""},
         {"name": "b", "priority": 2, "rationale": ""}]
     # Bare list.
-    assert _department_proposal({"department_proposal": ["a", "b"]}) == [
+    assert _department_caps({"department_caps": ["a", "b"]}) == [
         {"name": "a", "priority": 1, "rationale": ""},
         {"name": "b", "priority": 2, "rationale": ""}]
     # `department` key (the leader's free-text key).
-    assert _department_proposal({"department_proposal": {"departments": [
+    assert _department_caps({"department_caps": {"departments": [
         {"department": "finance"}]}}) == [
         {"name": "finance", "priority": 1, "rationale": ""}]
-    # Missing: no department_proposal key.
-    assert _department_proposal({}) == []
+    # Missing: no department_caps key.
+    assert _department_caps({}) == []
     # Empty list.
-    assert _department_proposal({"department_proposal": {"departments": []}}) == []
+    assert _department_caps({"department_caps": {"departments": []}}) == []
     # Number: degrades to [].
-    assert _department_proposal({"department_proposal": 5}) == []
+    assert _department_caps({"department_caps": 5}) == []
