@@ -1,9 +1,9 @@
-"""Tests for Story 6 — the department proposal in the Mission phase (Phase 2).
+"""Tests for — the department proposal in the Mission phase (Phase 2).
 
 The leader proposes the departments the mission needs (in priority order) in
 Phase 2; `MissionResult` carries them; Phase 3 (Org bootstrap) creates them.
 If the proposal is absent, bootstrap falls back to the Phase-3
-`org_recommendation` head proposal (the pre-Story-6 behavior)."""
+`org_recommendation` head proposal (the behavior)."""
 
 import os
 
@@ -89,7 +89,7 @@ def test_bootstrap_creates_proposed_departments(tmp_path):
 
 def test_bootstrap_falls_back_to_org_recommendation(tmp_path):
     """Phase 3: when the Phase-2 proposal is absent, bootstrap falls back to
-    the Phase-3 org_recommendation head proposal (the pre-Story-6 behavior)."""
+    the Phase-3 org_recommendation head proposal (the behavior)."""
     org = OrgState(history_dir=str(tmp_path))
     leader = make_leader()
     backend = StubBackend()
@@ -101,7 +101,7 @@ def test_bootstrap_falls_back_to_org_recommendation(tmp_path):
               "mandate": "Head of finance."},
          ]}},
     ])
-    # No department_proposal (the pre-Story-6 MissionResult).
+    # No department_proposal (the MissionResult).
     mission = MissionResult(approved=True, attempts=1, version=1,
                             mission_path="MISSION.md")
     bootstrap(org, backend, leader, mission, _approve_all,
@@ -111,7 +111,7 @@ def test_bootstrap_falls_back_to_org_recommendation(tmp_path):
 
 
 def test_department_proposal_helper_tolerates_shapes():
-    """_department_proposal() handles the shapes the real LLM free-forms: a
+    """_department_proposal handles the shapes the real LLM free-forms: a
     dict with a `departments` list, a bare list, a `department` key, and
     missing/empty (degrades to [])."""
     from runtime.mission import _department_proposal

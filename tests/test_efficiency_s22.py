@@ -1,4 +1,4 @@
-"""Unit tests for Story 22 (S22) — the efficiency trade-off in the Phase 3-6
+"""Unit tests for — the efficiency trade-off in the Phase 3-6
 loop.
 
 - **``EfficiencyMeter``**: instruments the Phase 3-6 loop per iteration

@@ -7,13 +7,13 @@ grant itself more access (e.g. mission-edit) or to escape the workspace.
 
 Invariants (enforced by construction, not by prompt):
 
-- SANDBOX  : every path a role writes must resolve inside ``ROOT``
+- SANDBOX: every path a role writes must resolve inside ``ROOT``
              (LLM_Organization). A path that escapes (``..`` or a symlink) is
              refused. This is the "keep them in LLM_Org" rule, now in code.
-- MISSION  : ``MISSION.md`` is read-only for every role except the leader, and
+- MISSION: ``MISSION.md`` is read-only for every role except the leader, and
              the leader may only write it through the existing user-approval
              path. No role may edit this rule.
-- META     : this module (plus the org invariants and the role contract) is
+- META: this module (plus the org invariants and the role contract) is
              read-only. No role may edit the rules that keep it confined.
 
 Only ``write_file`` is the sanctioned write path for agent self-mod. The
@@ -92,13 +92,13 @@ def edit_reason(role, path: str) -> tuple:
     rel = _rel(path)
     parts = rel.split(os.sep)
     # 1. Observability: operator-owned analytics — read-only for every role.
-    #    Agents can never write into observability/; the dashboard process
-    #    is an operator tool, not an agent.
+    # Agents can never write into observability/; the dashboard process
+    # is an operator tool, not an agent.
     if parts and parts[0] == "observability":
         return False, ("observability: operator-owned analytics is read-only "
                        "for every role")
     # 2. Mission: only the leader may write it (and only via the user-approval
-    #    path, a separate check). No role may edit this rule.
+    # path, a separate check). No role may edit this rule.
     if rel == "MISSION.md":
         if role.architype == "leader":
             return True, "mission: the leader may edit MISSION.md"
@@ -107,7 +107,7 @@ def edit_reason(role, path: str) -> tuple:
     if rel in PROTECTED:
         return False, f"meta_rule: {rel} is a protected invariant"
     # 4. Department policy: only the owning department head.
-    #    e.g. departments/engineering/ENGINEERING_POLICY.md
+    # e.g. departments/engineering/ENGINEERING_POLICY.md
     if parts and parts[0] == "departments" and len(parts) >= 3:
         dept = parts[1]
         if parts[2].endswith("_POLICY.md"):
@@ -154,12 +154,12 @@ def read_reason(role, path: str) -> tuple:
     enforces the org's read invariants (audit §2.4) — the ones that were
     previously advisory (documented but not enforced):
 
-    - CODE_READ  : department heads and the leader cannot read any code
+    - CODE_READ: department heads and the leader cannot read any code
                    (work products) — only what is brought up as a bounded
                    summary + pointer.
-    - READ_SCOPE : a role may only read its own team's department directory
+    - READ_SCOPE: a role may only read its own team's department directory
                    (another department is refused).
-    - CROSS_TEAM : a role reading a sibling team directory in the same
+    - CROSS_TEAM: a role reading a sibling team directory in the same
                    department is the duplication-check read — it is ALLOWED
                    but flagged (the dashboard shows it).
 
@@ -169,7 +169,7 @@ def read_reason(role, path: str) -> tuple:
     """
     from org import tiers
     # 0. SANDBOX: a read that escapes the workspace is refused (the "keep them
-    #    in LLM_Org" rule) — the same boundary the write gate enforces.
+    # in LLM_Org" rule) — the same boundary the write gate enforces.
     try:
         resolve(path)
     except PermissionError as e:
@@ -178,19 +178,19 @@ def read_reason(role, path: str) -> tuple:
     if not rel:
         return False, "read: the workspace root is not a readable path"
     # 1. MISSION: MISSION.md is read-only for every role (the mission lock —
-    #    the same lock the write gate enforces).
+    # the same lock the write gate enforces).
     if rel == "MISSION.md":
         return False, "mission: MISSION.md is read-only for every role " \
                       "(the mission lock)"
     # 2. META: the meta-rule files are read-only for every role (the rules
-    #    themselves — the same lock the write gate enforces).
+    # themselves — the same lock the write gate enforces).
     if rel.replace("/", os.sep) in PROTECTED:
         return False, f"meta_rule: {rel} is a protected invariant " \
                       f"(read-only)"
     # 3. CODE_READ: department heads and the leader cannot read code.
-    #    **Exception (Story 12):** the devil's advocate role **can** read other
-    #    departments' code — it doubts the org's outcomes by checking the
-    #    claims against what the pipeline has actually produced.
+    # **Exception:** the devil's advocate role **can** read other
+    # departments' code — it doubts the org's outcomes by checking the
+    # claims against what the pipeline has actually produced.
     if tiers.is_code_path(rel) and not tiers.can_read_code(role, rel):
         return False, ("code_read: department heads and the leader cannot "
                        "read code (work products) — only what is brought "
@@ -200,16 +200,11 @@ def read_reason(role, path: str) -> tuple:
         return False, (f"read_scope: {role.id} may only read its own team's "
                        f"department directory")
     # 5. CROSS_TEAM: a sibling-team read is allowed but flagged (the
-    #    duplication-check read).
+    # duplication-check read).
     if tiers.cross_team_read(role, rel):
         return True, ("cross_team: allowed (the duplication-check read) — "
                       "flagged for the dashboard")
     return True, f"read: {role.id} may read {rel}"
-
-
-def can_read_path(role, path: str) -> bool:
-    """True if *role* may read *path* (see `read_reason` for the why)."""
-    return read_reason(role, path)[0]
 
 
 def write_file(role, path: str, content: str) -> str:

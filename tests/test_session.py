@@ -1,4 +1,4 @@
-"""Unit tests for `runtime/session.py` — the full Phase 1-8 pipeline (Epic 10).
+"""Unit tests for `runtime/session.py` — the full Phase 1-8 pipeline.
 
 The pipeline: intake -> mission (permission) -> org bootstrap -> plan ->
 staff -> execute -> evaluate -> decide, with the **bounded** self-improving
@@ -120,7 +120,7 @@ def test_full_chain_hires_managers_and_ics(tmp_path):
 
 
 def test_bau_halt_during_phase4(tmp_path):
-    # Story 3 (A10/B12): a GLOBAL Safety/Morality halt during the work
+    # a GLOBAL Safety/Morality halt during the work
     # (Phases 4-6) stops the run before Phase 7 (evaluate) — the halt is
     # CONSUMED, not just recorded (previously the cycle "still completed":
     # the halt was set but never consumed).
@@ -153,7 +153,7 @@ def test_bau_halt_during_phase4(tmp_path):
 
 
 def test_scoped_bau_halt_during_phase4_continues(tmp_path):
-    # Story 3: a SCOPED halt during the work does not stop the run (Phase 7 +
+    # a SCOPED halt during the work does not stop the run (Phase 7 +
     # 8 run) and the halt is recorded (observable).
     backend = StubBackend()
     backend.set_script("leader", _leader_script_full())
@@ -182,11 +182,11 @@ def test_scoped_bau_halt_during_phase4_continues(tmp_path):
     assert session.bau_active() is True
 
 
-# --- Story 1: persistence & crash recovery ---------------------------------
+# ---: persistence & crash recovery ---------------------------------
 
 
 def test_phase4_crash_leaves_recoverable_checkpoint(tmp_path, monkeypatch):
-    # Story 1 (B1/B4): a crash during Phase 4 (plan) must leave the pre-crash
+    # a crash during Phase 4 (plan) must leave the pre-crash
     # state recoverable — the checkpoint written after Phase 3 (phase <= 4)
     # plus the persisted org chart + role memory.
     backend = StubBackend()
@@ -234,7 +234,7 @@ def test_phase4_crash_leaves_recoverable_checkpoint(tmp_path, monkeypatch):
 
 
 def test_org_state_save_is_atomic(tmp_path):
-    # Story 1 (B3): OrgState.save writes to `path + ".tmp"` then
+    # OrgState.save writes to `path + ".tmp"` then
     # `os.replace`s — a mid-write crash (garbage left in the temp) must not
     # corrupt the live chart, and a subsequent save consumes the temp.
     org = OrgState(history_dir=str(tmp_path))
@@ -257,7 +257,7 @@ def test_org_state_save_is_atomic(tmp_path):
 
 
 def test_memory_backend_save_state_is_atomic(tmp_path):
-    # Story 1 (B7): MemoryBackend.save_state writes `<role_id>.json.tmp` then
+    # MemoryBackend.save_state writes `<role_id>.json.tmp` then
     # `os.replace`s — a mid-write crash must not corrupt the live memory, and
     # a subsequent save consumes the temp.
     backend = MemoryBackend(StubBackend())

@@ -1,9 +1,9 @@
 """Tests for the permission layer (runtime/permissions.py).
 
 Covers the invariants the user cares about:
-- SANDBOX : a path that escapes the workspace is refused.
-- MISSION : only the leader may write MISSION.md.
-- META    : the permission module (and the org invariants / role contract) is
+- SANDBOX: a path that escapes the workspace is refused.
+- MISSION: only the leader may write MISSION.md.
+- META: the permission module (and the org invariants / role contract) is
             read-only for every role, including the leader.
 Plus the normal scoping (department policy, team dirs) and the write path.
 """
@@ -81,7 +81,7 @@ def test_org_invariants_and_contract_read_only():
     assert not P.can_edit(leader, os.path.join("roles", "base.py"))
 
 
-# --- READ GATE (Story 14) ----------------------------------------------------
+# --- READ GATE ----------------------------------------------------
 
 def test_read_gate_blocks_sandbox_escape():
     # A read that escapes the workspace is refused (the sandbox invariant) —

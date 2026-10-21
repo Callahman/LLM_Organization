@@ -116,7 +116,7 @@ def test_routing_backend_uses_explicit_level():
 
 
 def test_live_path_high_reaches_router(tmp_path):
-    # Story 2 (A7): the live path (MemoryBackend -> RoutingBackend) routes
+    # the live path (MemoryBackend -> RoutingBackend) routes
     # `reasoning` — a `classify_complexity` HIGH reaches the router, and the
     # default (`reasoning=None`) is CLASSIFIED by the router (no hardcoded LOW
     # bypass).
@@ -138,7 +138,7 @@ def test_live_path_high_reaches_router(tmp_path):
 
 
 def test_live_path_budget_exhaustion_downgrades(tmp_path):
-    # Story 2: once the thinking budget is exhausted, a HIGH is downgraded to a
+    # once the thinking budget is exhausted, a HIGH is downgraded to a
     # lower level (the visible fallback).
     inner = StubBackend()
     routing = RoutingBackend(inner, ThinkingBudget(max_high=1))

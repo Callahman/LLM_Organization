@@ -6,10 +6,10 @@ and the reporting-line fields the rule checks in `org/tiers.py` operate on.
 
 The **shared output envelope** every role produces (and extends):
 
-- `summary`          — one-line extractive summary (the truncation-safe digest)
-- `findings`         — list of {claim, evidence} (evidence must cite a source)
-- `recommendation`   — the role's recommended next action
-- `confidence`       — 0-1 self-assessed confidence in the output
+- `summary` — one-line extractive summary (the truncation-safe digest)
+- `findings` — list of {claim, evidence} (evidence must cite a source)
+- `recommendation` — the role's recommended next action
+- `confidence` — 0-1 self-assessed confidence in the output
 """
 
 from __future__ import annotations
@@ -37,37 +37,37 @@ class Role:
 
     Identity fields
     ---------------
-    architype : str
+    architype: str
         `leader` / `department_head` / `manager` / `ic` (determines the tier
         and all visibility/communication/pod rules).
-    sub_architype : str
+    sub_architype: str
         The functional specialty within the architype
         (e.g. `manager_of_analytics`, `head_of_hr`).
-    personality : str
+    personality: str
         The behavioral bias spun into the system prompt (e.g. `Pragmatist`).
         A personality biases *perspective*, never capability or effort.
 
     Structured contract
     -------------------
-    mandate : str
+    mandate: str
         The role's job, boundaries, and work discipline (system-level
         instruction).
-    input_spec : str
+    input_spec: str
         One line describing what the role's context contains.
-    output_schema : dict
+    output_schema: dict
         The JSON schema the role's structured output must satisfy (validated
         by the session runtime; bounded retries on malformed output).
 
     Reporting line
     --------------
-    department : str
+    department: str
         The department this role's team belongs to (drives the read scope).
-    team : str
+    team: str
         The team directory within the department (drives team-mate +
         cross-team-read checks).
-    reports_to : Optional[str]
+    reports_to: Optional[str]
         The id of this role's direct boss.
-    direct_reports : List[str]
+    direct_reports: List[str]
         The ids of this role's direct reports.
     """
 

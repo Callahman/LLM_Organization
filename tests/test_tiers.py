@@ -1,5 +1,5 @@
 """Unit tests for `org/tiers.py` — the visibility/communication/pod invariants
-(Epic 0 Definition of Done).
+( Definition of Done).
 
 Worked examples (Organization_Outline.md §2.4, §2.8):
 - a role can only read its team's department directory;
@@ -57,7 +57,7 @@ def test_head_cannot_read_any_code():
 def test_leader_cannot_read_any_code():
     leader = _role("leader", "leader")
     assert tiers.can_read(leader, "MISSION.md")
-    # Story 12: the leader has **cross-department read access** — it can read
+    # the leader has **cross-department read access** — it can read
     # the department policies (the governance records of the work), but NOT the
     # code (work products) — it sees work only as it is brought to it.
     assert tiers.can_read(leader, "departments/analytics/ANALYTICS_POLICY.md")
@@ -143,10 +143,10 @@ def test_pod_size_bounds():
     assert tiers.validate_pod([ic1, ic2])[0]
 
 
-# --- Story 10 (A11): safety invariants enforced / documented ---------------
+# ---: safety invariants enforced / documented ---------------
 
 def test_can_communicate_enforced_in_form_pod():
-    """Story 10 (A11): a pod with a member pair that may not communicate is
+    """a pod with a member pair that may not communicate is
     rejected (the communication gate is wired into form_pod)."""
     from runtime.pods import form_pod, PodMembershipError
     # Two ICs on different teams that cannot communicate (no boss/report
@@ -166,8 +166,8 @@ def test_can_communicate_enforced_in_form_pod():
 
 
 def test_can_read_code_enforced_note_present():
-    """Story 14: can_read_code is documented as **enforced** (the gap is filled
-    — the read gate wires the invariant into the live path), no longer
+    """can_read_code is documented as **enforced** (the gap is filled
+    the read gate wires the invariant into the live path), no longer
     advisory."""
     import inspect
     doc = inspect.getdoc(tiers.can_read_code) or ""
@@ -177,7 +177,7 @@ def test_can_read_code_enforced_note_present():
 
 
 def test_cross_team_read_enforced_note_present():
-    """Story 14: cross_team_read is documented as **enforced** (the gap is
+    """cross_team_read is documented as **enforced** (the gap is
     filled — the read gate logs cross-team reads, visible not silent), no
     longer advisory."""
     import inspect

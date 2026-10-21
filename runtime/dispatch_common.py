@@ -1,7 +1,7 @@
 """Shared dispatch helpers (a pure move out of the old monolithic
 ``runtime/dispatch.py``).
 
-The old Phase 4 (Dispatch) was a single ``dispatch()`` that did the leader
+The old Phase 4 (Dispatch) was a single ``dispatch`` that did the leader
 decomposition -> per-department head workflow -> per-team manager workflow ->
 per-IC work -> pod triggers -> upward report. It is now split into three
 phase modules that import the shared helpers from here:
@@ -119,7 +119,7 @@ def mission_digest(mission: Dict[str, Any]) -> str:
 def _run_contained_pod(backend: LLMBackend, org: OrgState, pod: Pod,
                        max_rounds: Optional[int] = None,
                        phase: int = 4) -> None:
-    """Run a clarification pod with **containment** (Story 4): a backend
+    """Run a clarification pod with **containment**: a backend
     failure inside the pod is logged (visible, never silent) and the phase
     continues (the pod's decision stays empty). A clarification pod must not
     take down the phase it clarifies. The pod's kind drives the default capped
@@ -144,7 +144,7 @@ def _leader_ctx(digest: str, head_ids: List[str],
         LEADER_CTX_INSTRUCTION + str(head_ids) +
         LEADER_CTX_NO_INVENT
     )
-    # Story 22: the Leader is invoked with the efficiency panel (per-role /
+    # the Leader is invoked with the efficiency panel (per-role /
     # per-department invoke time) so it can act on an inefficient role or
     # department.
     if efficiency_panel:
@@ -154,7 +154,7 @@ def _leader_ctx(digest: str, head_ids: List[str],
 
 def _efficiency_panel_text(snap: Dict[str, Any]) -> str:
     """Render the efficiency panel (per-role + per-department invoke time,
-    cumulative) as text for the Leader's Phase 4 context (Story 22)."""
+    cumulative) as text for the Leader's Phase 4 context."""
     per_role = snap.get("per_role", {})
     per_dept = snap.get("per_department", {})
     lines = [
@@ -182,7 +182,7 @@ def _efficiency_panel_text(snap: Dict[str, Any]) -> str:
 
 
 def _reassign_role(org, leader, target_id, new_team, reasoning, history) -> None:
-    """Reassign a role to a different team (Story 22). The role's `team` (its
+    """Reassign a role to a different team. The role's `team` (its
     work-directory slug) is changed; the move is logged visibly (never
     silent)."""
     role = org.get(target_id)
@@ -214,7 +214,7 @@ def _reassign_role(org, leader, target_id, new_team, reasoning, history) -> None
 
 def _process_efficiency(org, leader, eff: Dict[str, Any], approver_fn,
                         history) -> None:
-    """Process the Leader's efficiency action (Story 22): fire / reassign /
+    """Process the Leader's efficiency action: fire / reassign /
     report an inefficient role or department. All actions are logged visibly
     (never silent)."""
     action = eff.get("action")
@@ -279,11 +279,11 @@ def _manager_ctx(manager: Role, objective: str, policy: str = "",
     # is its operating constraint (managers get the FULL policy). The role's
     # memory (its past [content] outputs) is auto-folded by the
     # MemoryBackend.
-    # **Story 5:** the context also includes the **head+manager clarification
+    # **:** the context also includes the **head+manager clarification
     # pod's outcome** (``clarification``) — the manager decomposes **after**
     # the pod, so its IC tasks reflect the clarified team mission (the pod →
     # decomposition sequencing is strict).
-    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # The static prompt parts live in prompts/ ( — a pure move); the
     # dynamic data (the manager id, the objective, the policy, the digest, the
     # clarification) is composed in here.
     clarification_line = (
@@ -307,7 +307,7 @@ def _ic_ctx(ic: Role, task: str, policy_summary: str = "",
     # goal) is the IC's north star; the department policy summary (NOT the
     # full policy) is its operating constraint. The role's memory (its past
     # [content] outputs) is auto-folded by the MemoryBackend.
-    # **Story 5:** the context also includes the **manager+ic clarification
+    # **:** the context also includes the **manager+ic clarification
     # pod's outcome** (``clarification``) — the IC does its work **after** the
     # pod, so the work reflects the clarified task (the pod → work sequencing
     # is strict).
@@ -316,7 +316,7 @@ def _ic_ctx(ic: Role, task: str, policy_summary: str = "",
     # out_of_scope, so the prompt names the real root, shows a correct/wrong
     # pair, and forbids the role's own id as a directory (the default the
     # model falls into when no concrete root is given).
-    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # The static prompt parts live in prompts/ ( — a pure move); the
     # dynamic data (the ic id, the team root, the path rules, the task, the
     # policy summary, the clarification) is composed in here.
     if ic.department and ic.team:
@@ -359,11 +359,11 @@ def _policy_ctx(head: Role, mission_digest: str, existing_policy: str,
     the head's mandate for a required dept) + the role's memory (auto-folded by
     the MemoryBackend).
 
-    **Story 5:** the context also includes the **leader+head clarification
+    **:** the context also includes the **leader+head clarification
     pod's outcome** (``clarification``) — the policy is authored **after** the
     pod, so it reflects the clarified mission (the pod → policy sequencing is
     strict)."""
-    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # The static prompt parts live in prompts/ ( — a pure move); the
     # dynamic data (the head id, the mission digest, the directive, the
     # existing policy, the clarification) is composed in here.
     clarification_line = (
@@ -437,7 +437,7 @@ def _invoke_ic(backend: LLMBackend, ic: Role, ctx: str, reasoning,
     complete submit_output call) — the same one-retry-on-refusal pattern the
     self-edit path already uses.
     """
-    # The nudge text lives in prompts/ (Story 11 — a pure move).
+    # The nudge text lives in prompts/ ( — a pure move).
     nudge = IC_RETRY_NUDGE
     try:
         return backend.invoke(
@@ -522,7 +522,7 @@ def _ic_pre_read(
     history: Optional[HistoryStore],
 ) -> None:
     """The IC reads the code it is about to change (gated by the **read gate**
-    — the read invariants: the sandbox, the mission lock, the meta-rule lock,
+    the read invariants: the sandbox, the mission lock, the meta-rule lock,
     the department scope, the code-read invariants). This is the concrete
     "a role reads a file" in the dispatch that the read gate wires into.
 
@@ -583,7 +583,7 @@ def _retry_refused_edits(
     reasons = "\n".join(
         "- %s — %s" % (r.get("path", ""), r.get("error", "")) for r in refused
     )
-    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # The static prompt parts live in prompts/ ( — a pure move); the
     # dynamic data (the ic id, the refusal reasons) is composed in here.
     ctx = (
         SELF_EDIT_CORRECTION_PREFIX + ic.id +
@@ -595,7 +595,14 @@ def _retry_refused_edits(
         out = backend.invoke(ic, ctx,
                              reasoning=classify_complexity(phase, ic, {}),
                              phase=phase)
-    except Exception:
+    except Exception as e:
+        # Visible: the corrective re-invoke failed (a backend failure). The
+        # original refusals are already logged; this records that no retry
+        # happened (never silent).
+        if history is not None:
+            history._append("dispatch_skips.jsonl",
+                            {"role_id": ic.id, "reason": "self_edit_retry",
+                             "why": f"corrective re-invoke failed: {e}"})
         return
     edits = as_dict_list((out or {}).get("code_edits", []))
     if not edits:
@@ -632,18 +639,26 @@ def _ensure_role(
     team: str,
     approver_fn,
     direct_ic_cap: int = 3,
+    backend: Optional[LLMBackend] = None,
+    phase: int = 4,
 ) -> Optional[Role]:
     """Get a role by ID, or create + hire it (through the approval matrix) if
     it doesn't exist yet. This is how the dispatch spins up the managers/ICs it
     decomposes onto, so the full heads->managers->ICs chain is exercised.
     Returns None if it can't be hired (no approver supplied, or the hire is
-    vetoed / the 3-IC cap is hit)."""
+    vetoed / the 3-IC cap is hit).
+
+    On a hire failure the failure is **sent back to the initiator** (the
+    manager/head that requested the hire) so it can update its next steps
+    (re-decompose its IC tasks / note the failure in its upward report) —
+    visible, never silent (``backend`` is required for the re-invoke; without
+    it the failure is still logged as an org event)."""
     role = org.get(role_id)
     if role is not None:
         return role
     if approver_fn is None:
         return None
-    # Story 11 (B16): total org-size cap — refuse a hire that would exceed the
+    # total org-size cap — refuse a hire that would exceed the
     # cap (visible note, never silent).
     if len(org.roles) >= MAX_ORG_ROLES:
         print(
@@ -651,6 +666,9 @@ def _ensure_role(
             f"hire {role_id} (visible note, never silent).",
             file=sys.stderr,
         )
+        _send_hire_failure_to_initiator(
+            org, initiator, role_id, architype, department, team,
+            f"org-size cap reached ({MAX_ORG_ROLES})", backend, phase)
         return None
     # Spin a functional specialty + a stable behavioral bias so a spun
     # manager/IC is never left with an empty identity (the prompt rendered
@@ -668,8 +686,60 @@ def _ensure_role(
     try:
         return hire(org, initiator, new_role, approver_fn,
                     direct_ic_cap=direct_ic_cap)
-    except Exception:
+    except Exception as e:
+        # Visible: the hire failed (vetoed / cap / approver rejection). The
+        # failure is sent back to the initiator so it can update its next
+        # steps (never silent).
+        _send_hire_failure_to_initiator(
+            org, initiator, role_id, architype, department, team,
+            f"{type(e).__name__}: {e}", backend, phase)
         return None
+
+
+def _send_hire_failure_to_initiator(
+    org: OrgState,
+    initiator: Role,
+    role_id: str,
+    architype: str,
+    department: str,
+    team: str,
+    error: str,
+    backend: Optional[LLMBackend],
+    phase: int,
+) -> None:
+    """Send a hire failure back to the initiator (the manager/head that
+    requested the hire) so it can update its next steps (re-decompose its IC
+    tasks / note the failure in its upward report). The failure is logged
+    visibly (an org event) and the initiator is re-invoked with a correction
+    context (it must not assign work to a role that does not exist).
+
+    Best-effort: a failure in the corrective re-invoke is not fatal (the hire
+    already failed; the org event records it)."""
+    # Visible: the hire failure is logged (the operator + the dashboard can see
+    # it; the initiator's report will reference it).
+    org.log_event("hire_failed", initiator.id, role_id,
+                  {"architype": architype, "department": department,
+                   "team": team, "error": error})
+    if backend is None:
+        return
+    ctx = (
+        f"YOUR HIRE FAILED: your request to hire {role_id} "
+        f"(architype={architype}, department={department}, team={team}) "
+        f"FAILED ({error}). You CANNOT assign work to a role that does not "
+        f"exist. Update your next steps: (1) do NOT reference {role_id} in "
+        f"your task assignments; (2) re-decompose your IC tasks / adjust your "
+        f"plan to account for this failure (reassign the work to an existing "
+        f"role or drop it); (3) note the failed hire in your upward report so "
+        f"the line of command knows the work is unassigned."
+    )
+    try:
+        backend.invoke(initiator, ctx,
+                       reasoning=classify_complexity(phase, initiator, {}),
+                       phase=phase)
+    except Exception:
+        # The corrective re-invoke failing is not fatal (the hire already
+        # failed; the org event records it).
+        pass
 
 
 def _fire_role(org, leader, role_id, reason, approver_fn, history=None):
@@ -700,7 +770,7 @@ def _fire_role(org, leader, role_id, reason, approver_fn, history=None):
         return None
 
 
-# --- S22: automation over headcount ----------------------------------------
+# ---: automation over headcount ----------------------------------------
 
 def _automation_slug(task: str) -> str:
     """A short directory slug for an automation task (the script filename)."""
@@ -715,7 +785,7 @@ def _automation_slug(task: str) -> str:
 
 def run_automation(org, leader, eff, backend, approver_fn, history=None,
                    script_dir="automations"):
-    """S22: the **automation over headcount** flow — for a recurring task, spin
+    """the **automation over headcount** flow — for a recurring task, spin
     up an IC to **write a Python script**, the script is **created** (written to
     ``<script_dir>/<slug>.py``), the IC is **fired** (if not needed for other
     work), and the recurring task is then done by **executing the script**
@@ -734,7 +804,7 @@ def run_automation(org, leader, eff, backend, approver_fn, history=None,
     # matrix, like any other dispatch role).
     ic_id = "auto-" + _automation_slug(task)
     ic = _ensure_role(org, leader, ic_id, "ic", "automations", "automations",
-                      approver_fn)
+                      approver_fn, backend=backend, phase=4)
     if ic is None:
         if history is not None:
             history._append("efficiency_reports.jsonl",
@@ -744,7 +814,7 @@ def run_automation(org, leader, eff, backend, approver_fn, history=None,
         return {"task": task, "script_path": script_path, "ic_fired": None,
                 "error": "could not hire the automation IC"}
     # Step 2: the IC writes the Python script for the recurring task.
-    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # The static prompt parts live in prompts/ ( — a pure move); the
     # dynamic data (the ic id, the task) is composed in here.
     ctx = (
         AUTOMATION_CTX_PREFIX + ic.id +
@@ -882,7 +952,7 @@ def _check_pod_triggers(
         pods_out.append(pod)
     # The most senior member shares the outcome up the line.
     senior = senior_member(pod)
-    # The static prompt parts live in prompts/ (Story 11 — a pure move); the
+    # The static prompt parts live in prompts/ ( — a pure move); the
     # dynamic data (the pod id, the decision) is composed in here.
     backend.invoke(
         senior,
@@ -922,7 +992,7 @@ def _check_pod_triggers(
             print("[pod] skipped chained pod (empty first decision)",
                   file=sys.stderr)
     # Seed the members' memory with the cross-team `pod:<id>` entry (what
-    # `RoleMemory.cross_team()` filters on). A no-op for a plain stub.
+    # `RoleMemory.cross_team` filters on). A no-op for a plain stub.
     seed = getattr(backend, "seed_cross_team", None)
     if callable(seed):
         for member in pod.members:
@@ -966,7 +1036,7 @@ def generate_head_policies(
     any head decomposes into managers, so managers/ICs have a clear instruction
     on how their work fulfils the org's goal.
 
-    **Story 5:** ``clarifications`` is an optional ``{head_id: clarified_mission}``
+    **:** ``clarifications`` is an optional ``{head_id: clarified_mission}``
     mapping (the **leader+head clarification pod's** outcome). The policy is
     authored **after** the pod, so the policy context includes the clarification
     (the pod → policy sequencing is strict). Required governance depts get no
@@ -974,7 +1044,7 @@ def generate_head_policies(
 
     The head's context = Mission + its existing policy (Department
     Instructions) + its directive (the leader's department objective if the
-    leader assigned one, else the head's mandate) + the clarification (Story 5)
+    leader assigned one, else the head's mandate) + the clarification
     + its memory (auto-folded by the MemoryBackend).
 
     Returns ``{head_id: {"policy": <full text>, "policy_summary": <summary>}}``.

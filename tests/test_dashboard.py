@@ -86,7 +86,7 @@ def test_solo_pod_closes_on_close_entry():
 
 
 def test_dashboard_views_non_leader_solo_pod():
-    # Story 21: the dashboard can view any role's solo pods (not only the
+    # the dashboard can view any role's solo pods (not only the
     # leader's) — the Watcher ingests a non-leader solo pod transcript (no
     # role filter) so the active pane / historical list can show it.
     w = Watcher(root="/nonexistent")

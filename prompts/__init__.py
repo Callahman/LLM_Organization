@@ -1,4 +1,4 @@
-"""The pipeline's prompts (Story 11).
+"""The pipeline's prompts.
 
 Every static prompt string the pipeline sends to the LLM lives here, each with
 a **usage comment** above it (the phase / the role / the pod). The text is a
@@ -47,7 +47,7 @@ MISSION_INSTRUCTION = (
     "(object or string), `resource_envelope` (object or string)."
 )
 
-# Phase 2 (Mission) — the leader's department-proposal instruction (Story 6).
+# Phase 2 (Mission) — the leader's department-proposal instruction.
 # Used by runtime/mission.py::_mission_context (the leader also proposes the
 # departments the mission needs, in priority order).
 MISSION_DEPARTMENT_PROPOSAL = (
@@ -82,7 +82,7 @@ BOOTSTRAP_INSTRUCTION = (
     "operational heads, Phase 4 cannot dispatch any work."
 )
 
-# Phase 3 (Org bootstrap) — the bootstrap retry hint (Story 11 / B15). Used
+# Phase 3 (Org bootstrap) — the bootstrap retry hint ( / ). Used
 # by runtime/org.py::_bootstrap_context on a retry (the previous attempt's
 # failure reason is appended so the leader can adjust).
 BOOTSTRAP_RETRY = (
@@ -268,7 +268,7 @@ SELF_EDIT_CORRECTION_SUFFIX = (
     "placed in an allowed scope, omit it."
 )
 
-# Phase 4 (Plan) — the automation IC's script-writing context (S22: the
+# Phase 4 (Plan) — the automation IC's script-writing context (the
 # automation-over-headcount flow spins up an IC to write a Python script for
 # a recurring task). Used by runtime/dispatch_common.py::run_automation.
 AUTOMATION_CTX_PREFIX = (
@@ -324,7 +324,7 @@ EVALUATE_INSTRUCTION = (
 )
 
 # Phase 7 (Evaluate) — the "devil's advocate" role's gut-check instruction
-# (Story 12). Used by runtime/session.py::_devils_advocate_verdict (the
+# Used by runtime/session.py::_devils_advocate_verdict (the
 # red-team auditor doubts the org's outcomes — it checks the claims against
 # what the pipeline has actually produced, flags immoral/improper actions,
 # and returns a verdict: clean / flag).

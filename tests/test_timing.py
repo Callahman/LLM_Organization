@@ -1,4 +1,4 @@
-"""Unit tests for Story 22 (invoke timing + efficiency panel).
+"""Unit tests for (invoke timing + efficiency panel).
 
 - **``TimingTracker``**: accumulates per-role / per-department invoke time and
   appends the running snapshot to ``history/efficiency.jsonl``.

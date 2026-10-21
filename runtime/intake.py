@@ -216,7 +216,7 @@ def run_intake(
                     "questions": questions,
                 }
             )
-            # Story 11 (B11): guard the user-approval callback (bounded retry,
+            # guard the user-approval callback (bounded retry,
             # visible note, escalate on final failure — never a silent crash).
             answer = guarded_call(user_answer_fn, questions)
             transcript.append({"role": "user", "round": r, "answer": answer})
@@ -232,7 +232,7 @@ def run_intake(
         out = backend.invoke(leader, ctx, reasoning=level, phase=1)
         confidence = as_float(out.get("confidence", 0.0))
         questions = as_str_list(out.get("questions", []))
-        # Story 11 (B10): the leader must restate the goal in the same output —
+        # the leader must restate the goal in the same output —
         # convergence is gated on a non-empty `restated_goal` (prevents
         # premature convergence on a fuzzy goal).
         restated_goal = str(out.get("restated_goal", "")).strip()
@@ -247,8 +247,8 @@ def run_intake(
         )
 
         # Converged: confident enough AND the leader restated the goal (a clear
-        # prompt short-circuits here at round 1 with no questions). Story 11
-        # (B10): the `restated_goal` gate prevents premature convergence on a
+        # prompt short-circuits here at round 1 with no questions).
+        # the `restated_goal` gate prevents premature convergence on a
         # fuzzy goal.
         if confidence >= confidence_threshold and restated_goal:
             converged = True
@@ -261,7 +261,7 @@ def run_intake(
             break
 
         # Ask the user and continue.
-        # Story 11 (B11): guard the user-approval callback (bounded retry,
+        # guard the user-approval callback (bounded retry,
         # visible note, escalate on final failure — never a silent crash).
         answer = guarded_call(user_answer_fn, questions)
         transcript.append({"role": "user", "round": r, "answer": answer})

@@ -1,5 +1,5 @@
 """Unit tests for `runtime/context.py` — memory + bounded prompt construction
-(Epic 6 Definition of Done).
+( Definition of Done).
 
 A 10-round fixture exchange stays within the context budget; truncation drops
 the oldest summaries first and never the agenda; a manager's cross-team pod

@@ -38,7 +38,7 @@ def test_memory_isolation_between_roles():
     mem.invoke(role_b, "objective B")
     assert "A built the extractor" not in _prompt_for(stub, "role_b")
     # B's own memory IS folded into B's own prompt (on the next invoke).
-    mem.invoke(role_b, "objective B2")
+    mem.invoke(role_b, "objective ")
     assert "B built the loader" in _prompt_for(stub, "role_b")
     # A's memory still does not leak into B.
     assert "A built the extractor" not in _prompt_for(stub, "role_b")
@@ -100,7 +100,7 @@ def test_seed_cross_team_entry():
     mem.invoke(ic, "obj")
     mem.seed_cross_team("ic1", "pod_mgr1_1", "approve schema v2", team="pipelines")
     memory = mem.role_memories["ic1"]
-    # The entry carries the `pod:<id>` source (what cross_team() filters on).
+    # The entry carries the `pod:<id>` source (what cross_team filters on).
     assert any(
         e.source == "pod:pod_mgr1_1" and e.summary == "approve schema v2"
         for e in memory.entries
@@ -112,10 +112,10 @@ def test_seed_cross_team_entry():
     assert len(memory.entries) == before
 
 
-# --- Story 11 (B8, B9) ------------------------------------------------------
+# --- Deterministic memory bound (per role) ---
 
 def test_b9_deterministic_memory_bound():
-    """Story 11 (B9): the same role id gets the same `max_entries` bound across
+    """the same role id gets the same `max_entries` bound across
     two fresh `MemoryBackend` instances (deterministic per role)."""
     stub = StubBackend()
     mem1 = MemoryBackend(stub, max_entries_range=(5, 20))
@@ -126,7 +126,7 @@ def test_b9_deterministic_memory_bound():
 
 
 def test_b8_prune_stale_role_memories(tmp_path):
-    """Story 11 (B8): a `save_state` after a run with fired roles does not
+    """a `save_state` after a run with fired roles does not
     re-persist the fired roles' memory files (stale memories are pruned)."""
     stub = StubBackend()
     mem = MemoryBackend(stub, max_entries_range=(5, 20))

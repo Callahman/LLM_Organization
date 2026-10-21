@@ -1,4 +1,4 @@
-"""Tests for Story 4 — live-path envelope validation + tool_call quarantine.
+"""Tests for — live-path envelope validation + tool_call quarantine.
 
 `validate_and_quarantine` (in `runtime/llm_api.py`) is the function
 `OpenAIBackend.invoke` calls on every live output: it envelope-validates the

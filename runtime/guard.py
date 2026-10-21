@@ -1,4 +1,4 @@
-"""Bounded-retry guard for user-approval callbacks (Story 11, B11).
+"""Bounded-retry guard for user-approval callbacks.
 
 The user-approval functions (`user_answer_fn`, `user_permission_fn`) are
 operator-supplied callbacks that the session invokes to get the user's answer

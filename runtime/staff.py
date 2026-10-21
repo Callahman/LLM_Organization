@@ -53,10 +53,10 @@ class StaffResult:
     departments: List[Dict[str, Any]] = field(default_factory=list)
 
 
-# --- Story 3: the headcount cap chain (Phase 5 — enforce the team/IC cap) ---
+# ---: the headcount cap chain (Phase 5 — enforce the team/IC cap) ---
 
 def _team_cap_ok(org: OrgState, department: str, team: str) -> bool:
-    """Story 3: whether a hire into the team is allowed (the current active IC
+    """whether a hire into the team is allowed (the current active IC
     count + 1 ≤ the team cap). If the team has no cap allotted, the hire is
     allowed (the org then falls back to the per-manager IC cap, ``DIRECT_IC_CAP``)."""
     cap = org.team_caps.get((department, team))
@@ -96,9 +96,9 @@ def run_staff(
         for t_obj in dept["team_objectives"]:
             manager = org.get(t_obj.get("manager_id", ""))
             if manager is not None:
-                # Story 4: the **head+manager clarification pod** (per team) —
+                # the **head+manager clarification pod** (per team) —
                 # a 2-member parent+child pod that clarifies the team's
-                # mission. It runs BEFORE the manager decomposes (Story 5: the
+                # mission. It runs BEFORE the manager decomposes (the
                 # IC tasks reflect the clarified team mission), and is
                 # **contained** (a pod failure is logged, never takes down the
                 # phase).
@@ -115,7 +115,7 @@ def run_staff(
                 # Manager branch: the manager decomposes its team objective
                 # into IC tasks (invoked with the department POLICY + the
                 # bounded mission digest + the clarification pod's outcome
-                # (Story 5)).
+                # ).
                 mgr_out = backend.invoke(
                     manager,
                     _manager_ctx(
@@ -127,7 +127,7 @@ def run_staff(
                 ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
                 # Solo (P4, manager): record the manager's decomposition
                 # (out-of-pod work) so the dashboard can watch any role's solo
-                # work, not just the leader's (Story 21).
+                # work, not just the leader's.
                 if solo is not None:
                     solo.record(
                         "p5", "Phase 5: manager decomposition", 0, "decompose",
@@ -138,7 +138,7 @@ def run_staff(
                     )
                 # Hire the ICs the tasks name (the managers->ICs chain, through
                 # the HR approver). Phase 6 (Execute) invokes them.
-                # Story 3: enforce the **team/IC cap** (a hire that would
+                # enforce the **team/IC cap** (a hire that would
                 # exceed the team cap is blocked — a visible note, never
                 # silent). (The manager+ic clarification pod runs in Phase 6
                 # (Execute), AFTER the IC's work — see run_execute.)
@@ -159,6 +159,7 @@ def run_staff(
                             org, manager, ic_id, "ic",
                             manager.department, manager.team, approver_fn,
                             direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
+                            backend=backend, phase=5,
                         )
                 teams.append({
                     "t_obj": t_obj,
@@ -177,7 +178,7 @@ def run_staff(
                         # so it is NEVER empty — an empty team leaves the IC
                         # with no concrete work root.
                         team = t_obj.get("team") or ic_id
-                        # Story 3: enforce the team/IC cap (a hire that would
+                        # enforce the team/IC cap (a hire that would
                         # exceed the team cap is blocked — a visible note).
                         if not _team_cap_ok(org, head.department, team):
                             org.log_event(
@@ -190,6 +191,7 @@ def run_staff(
                                 head.department, team, approver_fn,
                                 direct_ic_cap=(config or {}).get(
                                     "direct_ic_cap", 3),
+                                backend=backend, phase=5,
                             )
                 teams.append({
                     "t_obj": t_obj,

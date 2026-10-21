@@ -1,4 +1,4 @@
-"""Story 9 — the **department policy** is authored by the **department head**
+"""the **department policy** is authored by the **department head**
 (NOT the IC), **after** the leader+head clarification pod.
 
 The department policy is a **department-level artifact** owned by the
@@ -142,7 +142,7 @@ def test_policy_missing_is_visible(tmp_path):
 # --- The policy is authored AFTER the leader+head pod ------------------------
 
 def test_policy_authored_after_leader_head_pod(tmp_path):
-    # Story 5: the policy is authored AFTER the leader+head clarification pod —
+    # the policy is authored AFTER the leader+head clarification pod —
     # the pod's clarification is passed to the policy context (the pod → policy
     # sequencing is strict). When the caller passes the pod's clarification,
     # the head's policy context includes it.

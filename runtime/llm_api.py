@@ -2,7 +2,7 @@
 (KoboldCpp, llama.cpp server, vLLM, LM Studio, ...).
 
 This is the "later task" from ``SETUP.md``: it implements the ``LLMBackend``
-interface so the org pipeline can run against a live model. ``make_backend()``
+interface so the org pipeline can run against a live model. ``make_backend``
 selects the backend from the environment (``.env``): ``LLM_BACKEND=stub``
 (default) -> the offline ``StubBackend``; ``LLM_BACKEND=api`` -> ``OpenAIBackend``
 built from ``LLM_MODEL`` / ``LLM_BASE_URL`` / ``LLM_API_KEY``.
@@ -63,7 +63,7 @@ _NESTED_OBJECT_KEYS = ("mission_draft", "decomposition", "org_recommendation")
 
 
 def _tool_call_problem(tc: Any) -> str:
-    """Story 4 (A9/R10): return a reason if a `tool_call` is malformed (not a
+    """return a reason if a `tool_call` is malformed (not a
     dict, missing `name`, or `args` not parseable), else '' (well-formed)."""
     if not isinstance(tc, dict):
         return f"tool_call is not a dict ({type(tc).__name__})"
@@ -82,7 +82,7 @@ def _tool_call_problem(tc: Any) -> str:
 
 
 def validate_and_quarantine(role, out: Any) -> Tuple[Dict[str, Any], List[str]]:
-    """Story 4 (A8/A9/R10): envelope-validate an LLM output and quarantine a
+    """envelope-validate an LLM output and quarantine a
     malformed `tool_call`. Returns ``(output, events)`` where ``output`` is the
     (possibly safe-fallback) envelope and ``events`` is a list of visible log
     lines (the caller prints them + records them in the history log). Never
@@ -365,7 +365,7 @@ class OpenAIBackend(LLMBackend):
         """Parse a string that may hold MULTIPLE concatenated top-level JSON
         documents (a model quirk: two submit_output calls whose argument
         strings get merged — by the server, or by an index-blind accumulation
-        — into one "Extra data" string). Returns the list of parsed values.
+        into one "Extra data" string). Returns the list of parsed values.
         Raises the JSONDecodeError of the first document that fails to parse
         (a mid-value failure on a trailing document is a truncation signal —
         the caller classifies it)."""
@@ -588,7 +588,7 @@ class OpenAIBackend(LLMBackend):
         if outcome in ("tool_call", "content_fallback"):
             return None
         if outcome == "quarantined":
-            return "quarantined"  # Story 4: a dropped malformed tool_call
+            return "quarantined"  # a dropped malformed tool_call
         e = (error or "").lower()
         if "timeout" in e or "timed out" in e:
             return "timeout"
@@ -657,9 +657,9 @@ class OpenAIBackend(LLMBackend):
         # model emits no chunks, so it trips after idle_timeout seconds. This
         # replaces the old flat wall-clock (which false-timed-out long-but-
         # active thinks). We accumulate three buffers from the stream:
-        #   - reasoning_content: the model's chain-of-thought (streamed first);
-        #   - content:           the plain reply (the content-fallback path);
-        #   - tool_calls args:   the forced submit_output call (the tool path).
+        # - reasoning_content: the model's chain-of-thought (streamed first);
+        # - content: the plain reply (the content-fallback path);
+        # - tool_calls args: the forced submit_output call (the tool path).
         import uuid
         stream_id = uuid.uuid4().hex[:8]
         role_id = getattr(role, "id", "")
@@ -698,7 +698,7 @@ class OpenAIBackend(LLMBackend):
                     f"{self.base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     json=payload,
-                    # Story 9 (B6): the per-invoke `timeout` (threaded down from
+                    # the per-invoke `timeout` (threaded down from
                     # the TimeoutBackend) caps the httpx `read` timeout so the
                     # underlying HTTP call is bounded to the TimeoutBackend's
                     # bound (no long-lived zombie thread). If no per-invoke
@@ -771,7 +771,7 @@ class OpenAIBackend(LLMBackend):
                     message["tool_calls"] = tool_calls
                 out, outcome = self._parse(
                     {"choices": [{"message": message}]}, finish_reason)
-                # Story 4 (A8/A9/R10): envelope-validate the output and
+                # envelope-validate the output and
                 # quarantine a malformed tool_call (a visible note + a safe
                 # fallback / a dropped call — never a crash).
                 out, events = validate_and_quarantine(role, out)

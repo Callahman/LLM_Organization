@@ -1,4 +1,4 @@
-﻿"""Story 3 — the headcount cap chain (top to bottom).
+﻿"""the headcount cap chain (top to bottom).
 
 The total cap is in the config (``head_count_total``); the **department caps**
 (allotted by the leader in Phase 3, summing to <= the total) and the **team

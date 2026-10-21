@@ -42,7 +42,7 @@ REQUIRED_DEPARTMENTS = ("hr", "safety", "morality")
 # 3-IC direct-report cap for a non-manager (department head without a manager).
 DIRECT_IC_CAP = 3
 
-# Story 11 (B16): total org-size cap (default 60 roles). Enforced in the
+# total org-size cap (default 60 roles). Enforced in the
 # bootstrap (head count) and Phase 4 (hires); on exceed, refuse with a visible
 # note (never silent).
 MAX_ORG_ROLES = 60
@@ -72,7 +72,7 @@ class OrgState:
         self.role_definitions: Dict[str, Dict[str, Any]] = {}
         self.events: List[Dict[str, Any]] = []
         self.history_dir = history_dir
-        # Story 3: the **headcount cap chain** (top → bottom). The total cap is
+        # the **headcount cap chain** (top → bottom). The total cap is
         # in the config (`head_count_total`); the **department caps** (a cap per
         # department, allotted by the leader in Phase 3, summing to ≤ the total)
         # and the **team caps** (a cap per team, allotted by the head in Phase 4,
@@ -120,7 +120,7 @@ class OrgState:
     def save(self, path: str = "state/org_chart.json") -> str:
         """Persist the org chart (every role + the role-definition catalog) to
         `path`. The event log is **not** persisted (it is already appended to
-        `history/org_events.jsonl`). The write is **atomic** (Story 1, B3):
+        `history/org_events.jsonl`). The write is **atomic**:
         the JSON goes to `path + ".tmp"` first, then `os.replace` swaps it in —
         a crash mid-write leaves the previous good chart intact (no partial
         JSON). Returns the path written."""
@@ -246,7 +246,7 @@ def _create_team_dir(role: Role, departments_dir: str) -> None:
 def _bootstrap_context(mission_result: MissionResult,
                        retry_hint: str = "") -> str:
     ctx = BOOTSTRAP_INSTRUCTION
-    # Story 11 (B15): on a retry, append the previous attempt's failure reason
+    # on a retry, append the previous attempt's failure reason
     # so the leader can adjust (instead of re-sending the same context).
     if retry_hint:
         ctx += BOOTSTRAP_RETRY + retry_hint
@@ -323,8 +323,8 @@ def _extract_department_heads(out: Dict[str, Any]) -> List[Dict[str, Any]]:
     if norm:
         return norm
     # 3. Fallback: any other list-of-objects under org_recommendation (the
-    #    leader free-forms the key name). Scan the remaining keys and return
-    #    the first that yields at least one usable head.
+    # leader free-forms the key name). Scan the remaining keys and return
+    # the first that yields at least one usable head.
     for key, val in rec.items():
         if key in ("department_heads", "departments"):
             continue
@@ -335,7 +335,7 @@ def _extract_department_heads(out: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _department_proposal_to_heads(mission_result: MissionResult) -> List[Dict[str, Any]]:
-    """Story 6: convert the Phase-2 department proposal (a list of
+    """convert the Phase-2 department proposal (a list of
     ``{name, priority, rationale}`` dicts, in priority order) into a list of
     department-head specs (``{id, department, sub_architype, required,
     mandate}``), in priority order. Each proposed department becomes one head
@@ -387,13 +387,45 @@ def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
     return created
 
 
+# The devil's advocate's own policy (in place) — the governance record of the
+# DA's mandate, mirroring the working departments' policies. Written to
+# departments/devils_advocate/DEVILS_ADVOCATE_POLICY.md at bootstrap.
+_DA_POLICY = (
+    "# DEVILS_ADVOCATE POLICY\n\n"
+    "_(the devil's advocate — red-team auditor, reporting directly to the "
+    "leader; the governance record of its mandate)_\n\n"
+    "## Mandate\n"
+    "Institute a formal 'gut check' on the org's outcomes: primed to doubt "
+    "(checks claims against what the pipeline has actually produced), heavy "
+    "on moral decision-making (flags immoral/improper actions), and raises "
+    "concerns (fabrication, hallucination, low-quality outcomes).\n\n"
+    "## Operating Rules\n"
+    "1. Doubt by default: do not accept claims as true — check them against "
+    "the department work (the policies the pipeline has actually produced).\n"
+    "2. Moral scrutiny: flag immoral/improper actions (not just low-quality "
+    "ones).\n"
+    "3. Concerns: raise fabrication, hallucination, and low-quality outcomes.\n"
+    "4. Verdict: in Phase 7 (Evaluate) return `clean` (no concerns) or "
+    "`flag: <findings>` (concerns raised).\n\n"
+    "## Cross-Department Read\n"
+    "The devil's advocate reads other departments' policies (the governance "
+    "record of their work) to check the claims against what the pipeline has "
+    "produced.\n"
+)
+
+
 def _ensure_devils_advocate(org: OrgState, leader: Role) -> Optional[Role]:
-    """Ensure the devil's advocate role (Story 12) is always created (even if
+    """Ensure the devil's advocate role is always created (even if
     the leader omits it from the proposal). It reports **directly** to the
     leader (a red-team auditor, not a `department_head` of a working
     department). The mandate: institute a formal "gut check" on the org's
     outcomes — primed to doubt, heavy on moral decision-making, and to raise
-    concerns (fabrication, hallucination, low-quality outcomes)."""
+    concerns (fabrication, hallucination, low-quality outcomes).
+
+    The DA has its **own policy in place** (a red-team auditor policy, written
+    to ``departments/devils_advocate/DEVILS_ADVOCATE_POLICY.md``) and can
+    **read other departments' policies** (the cross-department read access,
+    )."""
     existing = org.get(DEVILS_ADVOCATE_ROLE)
     if existing is not None:
         return existing
@@ -402,6 +434,7 @@ def _ensure_devils_advocate(org: OrgState, leader: Role) -> Optional[Role]:
         architype="ic",
         sub_architype="red_team_auditor",
         personality="Guardian",
+        department=DEVILS_ADVOCATE_ROLE,
         mandate=(
             "Devil's advocate (red-team auditor, reporting directly to the "
             "leader). Institute a formal 'gut check' on the org's outcomes: "
@@ -417,8 +450,16 @@ def _ensure_devils_advocate(org: OrgState, leader: Role) -> Optional[Role]:
         output_schema=worker_output_schema("ic"),
     )
     org.add_role(da)
+    # The DA has its own policy in place (a red-team auditor policy) — written
+    # to departments/devils_advocate/DEVILS_ADVOCATE_POLICY.md (the governance
+    # record of the DA's mandate, mirroring the working departments' policies).
+    da_policy_dir = os.path.join("departments", DEVILS_ADVOCATE_ROLE)
+    os.makedirs(da_policy_dir, exist_ok=True)
+    da_policy_path = os.path.join(da_policy_dir, "DEVILS_ADVOCATE_POLICY.md")
+    with open(da_policy_path, "w", encoding="utf-8") as f:
+        f.write(_DA_POLICY)
     org.log_event("devils_advocate_bootstrapped", leader.id, da.id,
-                  {"reports_to": leader.id})
+                  {"reports_to": leader.id, "policy_path": da_policy_path})
     return da
 
 
@@ -446,7 +487,7 @@ def bootstrap(
     In `additive` mode (a revisit), the bootstrap only **adds** roles — a
     proposed role whose id already exists in the org is skipped (never
     dropped / overwritten)."""
-    # Story 6: if the leader proposed the departments in Phase 2 (Mission),
+    # if the leader proposed the departments in Phase 2 (Mission),
     # create them directly (one head per proposed department, in priority
     # order) — the Phase-2 proposal is the primary source. Otherwise fall back
     # to the Phase-3 head proposal (org_recommendation).
@@ -459,7 +500,7 @@ def bootstrap(
     if not proposed:
         # Bounded retry: the leader's head proposal must include at least one
         # operational department head (not just the required governance depts).
-        # Story 11 (B15): on a retry, append the previous attempt's failure
+        # on a retry, append the previous attempt's failure
         # reason to the context so the leader can adjust (instead of
         # re-sending the same context).
         retry_hint = ""
@@ -479,7 +520,7 @@ def bootstrap(
             if _has_operational_head(candidate):
                 proposed = candidate
                 break
-            # Story 11 (B15): build the retry hint from the previous attempt's
+            # build the retry hint from the previous attempt's
             # failure reason (the top-level / `org_recommendation` keys).
             rec = last_out.get("org_recommendation")
             rec_keys = (list(rec.keys()) if isinstance(rec, dict)
@@ -501,7 +542,7 @@ def bootstrap(
                 f"  leader reply top-level keys: {top_keys}\n"
                 f"  leader reply org_recommendation: {rec_keys}"
             )
-    # Story 11 (B16): total org-size cap — refuse a bootstrap that proposes
+    # total org-size cap — refuse a bootstrap that proposes
     # more heads than the cap (visible note, never silent).
     current_roles = len(org.roles)
     if current_roles + len(proposed) > MAX_ORG_ROLES:
@@ -540,7 +581,7 @@ def bootstrap(
 
     # Required departments are always spun up (and cannot be fired).
     created.extend(_ensure_required(org, departments_dir))
-    # Story 12: the devil's advocate role is always created (even if the
+    # the devil's advocate role is always created (even if the
     # leader omits it) — it reports directly to the leader.
     da = _ensure_devils_advocate(org, leader)
     if da is not None:
@@ -548,7 +589,7 @@ def bootstrap(
     return created
 
 
-# --- Story 3: the headcount cap chain (Phase 3 — the leader allots depts) ---
+# ---: the headcount cap chain (Phase 3 — the leader allots depts) ---
 
 def _allot_caps_ctx(leader: Role, departments: List[str], total: int,
                     department_cap_default: Optional[float] = None) -> str:
@@ -624,8 +665,8 @@ def allot_department_caps(
     heads = org.department_heads()
     departments = [h.department for h in heads]
     # 1. The leader allots the department caps (a resourcing decision). The
-    #    `DEPARTMENT_CAP_DEFAULT` knob (if set) is a resourcing hint in the
-    #    context (Story 7).
+    # `DEPARTMENT_CAP_DEFAULT` knob (if set) is a resourcing hint in the
+    # context.
     out = backend.invoke(
         leader, _allot_caps_ctx(leader, departments, int(total),
                                 (config or {}).get("department_cap_default")),
@@ -634,8 +675,8 @@ def allot_department_caps(
     )
     caps = _parse_and_clamp_caps(out, departments, int(total))
     # 2. Pod A (all heads + the leader) finalizes the department caps — the
-    #    leader has final say (the pod deliberates; the leader's allotment is
-    #    the final).
+    # leader has final say (the pod deliberates; the leader's allotment is
+    # the final).
     if heads:
         # The leader is not a member of `org.roles` — add it so Pod A can be
         # formed (starter = the leader).
@@ -651,7 +692,7 @@ def allot_department_caps(
             max_roles=12,
             kind="headcount",
         )
-        # Story 12: the devil's advocate "listens" to Pod A (all heads + the
+        # the devil's advocate "listens" to Pod A (all heads + the
         # leader) — visible, never silent.
         log_devils_advocate_listening(org, pod, roles_with_leader)
         run_pod(backend, pod,
@@ -723,7 +764,7 @@ def _offload(org: OrgState, target: Role, departments_dir: str) -> Dict[str, Any
 
 def _subtree(org: OrgState, root_id: str) -> List[str]:
     """The ``root`` + all of its **transitive reports** (the firing cascade,
-    Story 22). Computed over the active roles via their ``reports_to`` links:
+    ). Computed over the active roles via their ``reports_to`` links:
     firing a role that has its own reports fires the entire subtree, not just
     the top. Returns a list of role ids (the root first)."""
     children: Dict[str, List[str]] = {}
@@ -744,7 +785,7 @@ def _subtree(org: OrgState, root_id: str) -> List[str]:
 def _call_approver(approver_fn, approver_type: str, action: str, target: Role,
                    detail: Optional[Dict[str, Any]] = None):
     """Call the HR approver, passing the ``detail`` (e.g. the firing cascade
-    size, Story 22) as a 4th argument **when the approver accepts it**.
+    size, ) as a 4th argument **when the approver accepts it**.
     Backward compatible with 3-arg approvers (``detail`` is omitted) — so a
     user-supplied ``approver_fn(approver_type, action, target)`` keeps working.
 
@@ -777,7 +818,7 @@ def fire(
     determines whether the firing is needed) + offloading. Required
     departments cannot be fired.
 
-    **Cascading** (Story 22): when ``cascade`` is True (the default), firing a
+    **Cascading**: when ``cascade`` is True (the default), firing a
     role that has its own reports fires the **entire report subtree** (the
     target + all transitive reports), not just the top. The **cascade size**
     (the number of roles that will be fired) is included in the **single** HR

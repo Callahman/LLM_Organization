@@ -1,6 +1,6 @@
 """The Phase 4-6 (Plan/Staff/Execute) sequence — a thin re-export shim.
 
-The old monolithic ``dispatch()`` (a single Phase 4 that did the leader
+The old monolithic ``dispatch`` (a single Phase 4 that did the leader
 decomposition -> per-department head workflow -> per-team manager workflow ->
 per-IC work -> pod triggers -> upward report) is now split into three phase
 modules:
@@ -13,7 +13,7 @@ The shared helpers live in ``runtime/dispatch_common.py``.
 
 This shim keeps ``from runtime.dispatch import ...`` working for the external
 importers (the tests, the dashboard): it re-exports the shared helpers + the
-phase modules, and defines ``dispatch()`` as the three-phase sequence (the
+phase modules, and defines ``dispatch`` as the three-phase sequence (the
 same return shape as the old monolith).
 """
 
@@ -88,7 +88,7 @@ def dispatch(
     """Run the Phase 4-6 (Plan/Staff/Execute) sequence top-down.
 
     A thin wrapper over the three phase modules (the same behavior + return
-    shape as the old monolithic ``dispatch()``):
+    shape as the old monolithic ``dispatch``):
 
     1. **Phase 4 (Plan)** (``run_plan``): the leader decomposes the mission
        into department objectives; the heads author their policies and

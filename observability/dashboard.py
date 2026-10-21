@@ -58,7 +58,7 @@ SNAPSHOT_CAP = 500  # max records per series in a snapshot
 
 class Watcher:
     """Tails the org's JSONL logs + pod transcripts and maintains in-memory
-    state. ``poll()`` runs on the watcher thread; ``snapshot()`` is read by
+    state. ``poll`` runs on the watcher thread; ``snapshot`` is read by
     the HTTP server. All state access is guarded by a lock.
 
     The ingestion methods (``ingest_*``) are pure state mutations so the
@@ -76,7 +76,7 @@ class Watcher:
             "stream": os.path.join(h, "stream.jsonl"),
             "halt_events": os.path.join(h, "halt_events.jsonl"),
             "efficiency": os.path.join(h, "efficiency.jsonl"),
-            # S22: the per-iteration efficiency metrics (the Phase 3-8 loop
+            # the per-iteration efficiency metrics (the Phase 3-8 loop
             # metrics: T_total, T_p, T_dept, T_role, H_peak, C, N_created,
             # M_satisfaction, E, EFFICIENCY_FLOOR).
             "efficiency_metrics": os.path.join(h, "efficiency_metrics.jsonl"),
@@ -101,14 +101,14 @@ class Watcher:
         self.cycles: List[Dict[str, Any]] = []
         self.halt_events: List[Dict[str, Any]] = []
         self.pods: Dict[str, Dict[str, Any]] = {}
-        # Story 22: the efficiency panel (per-role / per-department invoke
+        # the efficiency panel (per-role / per-department invoke
         # time). The efficiency log appends a *cumulative* snapshot after each
         # invoke, so the dashboard renders the LATEST line as the current
         # panel (not an accumulation).
         self.efficiency: Optional[Dict[str, Any]] = None
-        # S22: the per-iteration efficiency metrics (the Phase 3-8 loop
+        # the per-iteration efficiency metrics (the Phase 3-8 loop
         # metrics). The log appends one snapshot per iteration, so the
-        # dashboard keeps the LATEST line as the current S22 panel.
+        # dashboard keeps the LATEST line as the current panel.
         self.efficiency_metrics: Optional[Dict[str, Any]] = None
         # Live "model stream" window: a 2-slot ring (current + previous
         # segment). Each segment = one model call (one stream_id), with its
@@ -164,10 +164,10 @@ class Watcher:
         self.efficiency = e
 
     def ingest_s22_efficiency(self, e: Dict[str, Any]) -> None:
-        """Ingest one S22 per-iteration efficiency snapshot (from
+        """Ingest one per-iteration efficiency snapshot (from
         history/efficiency_metrics.jsonl). The log appends one snapshot per
         loop iteration, so the dashboard keeps the LATEST line as the current
-        S22 panel (the Phase 3-8 loop metrics: T_total, T_p, T_dept, T_role,
+         panel (the Phase 3-8 loop metrics: T_total, T_p, T_dept, T_role,
         H_peak, C, N_created, M_satisfaction, E, EFFICIENCY_FLOOR)."""
         self.efficiency_metrics = e
 
@@ -433,10 +433,10 @@ class Watcher:
                 "tool_calls": self.tool_calls[-SNAPSHOT_CAP:],
                 "cycles": self.cycles[-SNAPSHOT_CAP:],
                 "halt_events": self.halt_events[-SNAPSHOT_CAP:],
-                # Story 22: the efficiency panel (per-role / per-department
+                # the efficiency panel (per-role / per-department
                 # invoke time) — the latest cumulative snapshot.
                 "efficiency": self.efficiency,
-                # S22: the per-iteration efficiency metrics (the Phase 3-6
+                # the per-iteration efficiency metrics (the Phase 3-6
                 # loop metrics) — the latest per-iteration snapshot.
                 "efficiency_metrics": self.efficiency_metrics,
                 "pods": pods,

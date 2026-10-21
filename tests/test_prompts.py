@@ -1,7 +1,7 @@
-"""Story 9 — the pipeline's **prompts live in the ``prompts/`` location** with
+"""the pipeline's **prompts live in the ``prompts/`` location** with
 **usage comments**.
 
-Story 11 extracted every static prompt string the pipeline sends to the LLM
+ extracted every static prompt string the pipeline sends to the LLM
 into a single ``prompts`` module (a pure move — the text is unchanged, so
 behavior is preserved). This file verifies:
 

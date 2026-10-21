@@ -1,4 +1,4 @@
-"""Unit tests for `runtime/dispatch.py` — Phase 4 top-down dispatch (Epic 4).
+"""Unit tests for `runtime/dispatch.py` — Phase 4 top-down dispatch.
 
 The leader decomposes the mission into department objectives -> department
 heads into team objectives -> managers into IC tasks -> ICs do the work in
@@ -200,7 +200,7 @@ def test_dispatch_tolerates_leader_string_decomposition(tmp_path):
 
 
 def test_decomposition_list_tolerates_shapes():
-    """_decomposition_list() handles the shapes the real LLM free-forms: a dict
+    """_decomposition_list handles the shapes the real LLM free-forms: a dict
     (canonical), a bare list (collapsed), and a string/None (ignored)."""
     from runtime.dispatch import _decomposition_list
     # Canonical: a dict with the key.

@@ -1,4 +1,4 @@
-"""Story 9 — the **8-phase structure** + the **bounded self-improving loop**.
+"""the **8-phase structure** + the **bounded self-improving loop**.
 
 The pipeline is 8 phases: 1 (intake) + 2 (mission) + 3 (org bootstrap) run
 **once**, then 4 (plan) + 5 (staff) + 6 (execute) + 7 (evaluate) + 8 (decide)

@@ -271,7 +271,7 @@ def test_pod_carry_over_three_ways(tmp_path):
     assert "POD DECISIONS" in phase7
     assert "approve schema v2" in phase7
     # (3) The decision is seeded into the members' memory with a `pod:<id>`
-    #     source (the cross-team carry-over).
+    # source (the cross-team carry-over).
     memories = session.backend.role_memories
     for rid in ("mgr1", "ic1", "ic2"):
         assert any(
