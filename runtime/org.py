@@ -334,14 +334,16 @@ def _extract_department_heads(out: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
-def _department_caps_to_heads(mission_result: MissionResult) -> List[Dict[str, Any]]:
-    """convert the Phase-2 department caps (a list of
+def _mission_departments_to_heads(mission_result: MissionResult) -> List[Dict[str, Any]]:
+    """Convert the Phase-2 department LIST (``mission_departments`` — a list of
     ``{name, priority, rationale}`` dicts, in priority order) into a list of
     department-head specs (``{id, department, sub_architype, required,
     mandate}``), in priority order. Each proposed department becomes one head
-    (the Phase-2 proposal is the primary source of the departments to create)."""
+    (the Phase-2 proposal is the primary source of the departments to create).
+    This consumes the Phase-2 department LIST — it is NOT the Phase-3
+    ``department_caps`` (a {department: integer cap} mapping)."""
     heads: List[Dict[str, Any]] = []
-    for spec in (mission_result.department_caps if mission_result else []) or []:
+    for spec in (mission_result.mission_departments if mission_result else []) or []:
         if not isinstance(spec, dict):
             continue
         name = str(spec.get("name", "")).strip()
@@ -493,10 +495,10 @@ def bootstrap(
     # to the Phase-3 head proposal (org_recommendation).
     proposed: List[Dict[str, Any]] = []
     last_out: Dict[str, Any] = {}
-    dept_caps = (mission_result is not None
-                     and getattr(mission_result, "department_caps", None))
-    if dept_caps:
-        proposed = _department_caps_to_heads(mission_result)
+    dept_list = (mission_result is not None
+                     and getattr(mission_result, "mission_departments", None))
+    if dept_list:
+        proposed = _mission_departments_to_heads(mission_result)
     if not proposed:
         # Bounded retry: the leader's head proposal must include at least one
         # operational department head (not just the required governance depts).
@@ -622,13 +624,19 @@ def _allot_caps_ctx(leader: Role, departments: List[str], total: int,
             f"the total (a resourcing hint — adjust per department as needed)."
         )
     return (
-        f"ORG {leader.id}: Phase 3 — allot the department headcount caps. The "
-        f"total cap is {total} (the max number of roles the org may have). "
-        f"Allot a cap to each department (a % of the total, or an absolute "
-        f"count); the sum of the department caps must be ≤ {total}."
+        f"ORG {leader.id}: PHASE 3 (Org bootstrap) — NUMERIC CAP ALLOTMENT. "
+        f"This is the Phase-3 numeric cap allotment: a {{department name -> "
+        f"integer cap}} mapping. It is NOT the Phase-2 `mission_departments` "
+        f"(the department LIST — which departments the mission needs, in "
+        f"priority order). Do not re-propose the department list here; only "
+        f"allot a numeric headcount cap to each department that already "
+        f"exists. The total cap is {total} (the max number of roles the org "
+        f"may have). Allot a cap to each department (a % of the total, or an "
+        f"absolute count); the sum of the department caps must be ≤ {total}."
         f"{default_hint} "
-        f"Departments: {', '.join(departments) or '(none)'}. Return "
-        f"`department_caps` as a {{department: cap}} mapping."
+        f"Departments (already created in Phase 3): {', '.join(departments) or '(none)'}. "
+        f"Return `department_caps` as a {{department: integer cap}} mapping "
+        f"(e.g. {{\"analytics\": 10, \"data\": 5}})."
     )
 
 
@@ -733,6 +741,8 @@ def allot_department_caps(
             log_devils_advocate_listening(org, pod, roles_with_leader)
             run_pod(backend, pod,
                     max_rounds=(config or {}).get("headcount_pod_rounds"),
+                    transcripts_dir=(config or {}).get(
+                        "pod_transcripts_dir", "pods/transcripts"),
                     phase=3)
         except Exception as e:
             # A pod failure (a membership issue, or a head's malformed /
@@ -956,7 +966,14 @@ def run_leader_replacement_vote(
             "Vote {\"vote\": \"yes\"} to approve the replacement, or "
             "{\"vote\": \"no\"} to reject it."
         )
-        out = backend.invoke(h, prompt, phase=phase)
+        # A leader-replacement vote is a decision (a vote) -> HIGH (tagged
+        # `is_decision` so it routes to HIGH regardless of the phase, which is
+        # often None here). The phase logged defaults to 8 (decide).
+        out = backend.invoke(
+            h, prompt,
+            reasoning=classify_complexity(8, h, {"is_decision": True}),
+            phase=phase or 8,
+        )
         vote = str((out or {}).get("vote", "no")).lower()
         if vote == "yes":
             yes += 1

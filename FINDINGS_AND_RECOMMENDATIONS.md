@@ -8,6 +8,49 @@
 
 ---
 
+## User Answers (from user)
+
+1. **Intake** — Keep clarification, but the leader must **NOT re-prompt the user for a goal** once one is supplied. Thread the supplied goal into Phase 2.
+2. **Routing** — Make it **task-based**. Move **code development into MEDIUM** (not HIGH).
+3. **`department_caps`** — Correct. Make the naming **distinct**, change both **code AND prompts**, and convey a **clear indication of which step/phase the leader is on** so the two similar processes don't confuse the leader.
+4. **Agents chart** — **Option b: current active headcount per department.** The metric should answer: how large is the org, and which departments make up a majority of the headcount?
+5. **Transcripts** — Implement the rec as-is.
+6. **Flowchart** — Use the **pod agenda / decomposition objective** for the task text.
+7. **Tooltips** — Implement the rec as-is; make sure it's included in the flow-chart from item 6.
+8. **Roles by hierarchy** — Check the conversation logs: were managers engaging in conversations/thinking? If so, the org is broken. (Active managers were seen in the dashboard, so some are expected.)
+9. **Agents total** — Likely cumulative, but given item 8 this may be a **data-collection issue letting the org exceed the headcount cap.** Update the chart to show **total headcount** (not net events). Confirm the cap is enforced.
+10. **Code volume** — **Option a** (file-write log). Total all role code (includes policies), focus on code generated in `departments/`. **Physical lines** are fine (all lines OK).
+11. **Bug** — Add a **sanitization step for reading/writing** transcripts.
+
+---
+
+## To-Do List
+
+| # | Item | Status |
+|---|------|--------|
+| 11 | Bug: sanitize pod id for transcript read/write | ✅ done |
+| 5 | Transcripts: pass `transcripts_dir` to the 4 `run_pod` sites | ✅ done |
+| 3 | `department_caps`: rename Phase 2 key → `mission_departments` + distinct naming + phase indicator (code + prompts) | ✅ done |
+| 1 | Intake: keep clarification, never re-ask goal; thread goal to Phase 2 | ✅ done |
+| 2 | Routing: task-based classifier (task signal drives; code development = MEDIUM) | 🔄 partial — task-first done; code-dev=MEDIUM still open |
+| F1 | Frontend: sub-renderer per panel + memoization per data change + data-bound Event/Efficiency panels | ✅ done |
+| F2 | History: `invocations.jsonl` records `role` + `department` | ✅ done |
+| 4 | Agents chart: current active headcount per department | ⬜ pending |
+| 7 | Tooltips: generic hover tooltip on `drawTimeSeries` (+ flowchart) | ⬜ pending |
+| 10 | Code volume: file-write log, all role code incl. policies, `departments/` | ⬜ pending |
+| 8 | Roles by hierarchy: investigate manager activity in logs + dashboard-side fix | ⬜ pending |
+| 9 | Agents total: show total headcount (not net events) + confirm cap enforced | ⬜ pending |
+| 6 | Flowchart module: org flow panel (stepper + current phase + roles + task from pod agenda) | ⬜ pending |
+
+> Status legend: ⬜ pending · 🔄 in progress / partial · ✅ done
+>
+> **Rolled out this pass:** items 1, 3 (pipeline), 11 + 5 (transcripts, prior pass), and the two
+> new items **F1** (frontend sub-renderers/memoization/data-binding) and **F2** (invocations log
+> `role`+`department`). Item 2 is **partial** (task-first routing is in; the "code development =
+> MEDIUM" tier change is still open — see A.2).
+
+---
+
 ## A. Pipeline
 
 ### 1. Intake — remove the LOW-reasoning leader loop; keep the `INPUT("what's the org goal")` prompt
@@ -42,6 +85,19 @@ feeds the (higher-level) clarification/mission development and causes further co
 redundant goal question, and at a higher reasoning level), or go fully straight from the
 `INPUT` goal to Phase 2 mission development?
 
+**Rolled out (per your answer 1 — keep clarification, never re-ask the goal, thread it to Phase 2).**
+The goal question is now **conditional**, not hard-coded:
+
+- `INTAKE_RULES` (`prompts/__init__.py`) and `LEADER_MANDATE` (`roles/leader.py`): the goal
+  question is asked **only when there is no INITIAL PROMPT and no CURRENT MISSION** (i.e. no goal
+  has been supplied yet). When a goal IS supplied, the Leader clarifies scope/success-criteria
+  from it without re-asking the goal.
+- `runtime/intake.py`: the hard-coded goal round fires only when `mission_path` is absent **and**
+  `initial_prompt` is blank; `_assemble_context` tells the Leader the goal is already stated (see
+  INITIAL PROMPT) when one was supplied; and `_informal_draft` **seeds the Goal with the supplied
+  goal** when the Leader never restated it — so Phase 2 (`run_mission`) is threaded with the
+  actual goal (the `informal_draft` / `current_goal` path from the recommendation).
+
 ---
 
 ### 2. Complexity / thinking routing — make it task-based (or role-based, but the level chosen by the hiring manager)
@@ -74,6 +130,20 @@ the leader/head when it hires). Simpler, but coarser.
 **Question.** Which do you want — the task-based classifier (finer, more call-site changes) or
 the role-based-with-manager-chosen-level (coarser, fewer changes)? And should code
 *discussion/review* be MEDIUM (per your list) even when done by an IC?
+
+**Rolled out (partial — per your answer 2: task-based).** The classifier is now **task-first**:
+`classify_complexity` reads the **task signal** (what the task IS) before the phase number — a
+decision task (`is_decision`) is always HIGH regardless of phase, and the phase number is a
+fallback for tasks that carry no signal. The dispatch sites and the Phase 8 decide /
+efficiency-floor sites now pass the same `(task, phase, role)` shape (the decide / efficiency
+sites pass `{"is_decision": True}`).
+
+> **Still open (your answer 2: "Move code development into MEDIUM (not HIGH)").** The HIGH/MEDIUM/LOW
+> **tier rework is NOT done** — the classifier keeps its existing levels, so a code-writing IC in
+> Phase 6 still runs at **LOW** (routine IC work), not MEDIUM. To finish item 2, the tiers need
+> the task-kind tagging the recommendation describes (code development → MEDIUM, `MISSION.md` /
+> `POLICY.md` authoring → HIGH, etc.) threaded through each call site's `signal`. This is the
+> larger call-site rework and was left open.
 
 ---
 
@@ -111,6 +181,20 @@ degrades to the per-manager IC cap. This is the confusion visible in the Leader'
 **Question.** Confirm: Phase 2 should propose *which* departments (name/priority/rationale) and
 Phase 3 should allot *how many* (dept→cap) — i.e. two different fields, not one? If so, the
 rename above is the fix.
+
+**Rolled out (per your answer 3 — distinct naming, code AND prompts, clear phase indicator).**
+Confirmed: Phase 2 = *which* departments, Phase 3 = *how many* — two different fields.
+
+- The Phase 2 key is renamed **`mission_departments`** (a list of `{name, priority, rationale}`):
+  `MissionResult.mission_departments` + `_mission_departments()` in `runtime/mission.py`,
+  `_mission_departments_to_heads()` in `runtime/org.py`, the `LEADER_OUTPUT_SCHEMA` key
+  (`roles/leader.py`), and `MISSION_DEPARTMENTS` (`prompts/__init__.py`).
+- `_mission_departments` reads the **new key first, with a fallback to the legacy
+  `department_caps` key** — so a model that still emits the old key is not silently dropped.
+- The prompts now carry a **clear phase indicator**: `MISSION_DEPARTMENTS` says it is the
+  **Phase 2** department LIST (not a numeric cap), and the Phase 3 `_allot_caps_ctx` says it is
+  the **Phase 3** `{department: integer cap}` mapping, explicitly distinct from `mission_departments`.
+- The Phase 3 `department_caps` (the numeric caps) is unchanged.
 
 ---
 
@@ -319,27 +403,63 @@ latent issue for multi-role pod ids that contain a `/`.
 
 ---
 
+## E. Rolled out this pass (new items F1 + F2)
+
+> These two items came from the follow-up finding list (not the original A–D review) and are
+> recorded here so the file reflects everything that has shipped.
+
+### F1. Frontend — sub-renderer per panel, memoization per data change, data-bound panels
+
+**Rolled out.** `observability/web/app.js` was refactored from a single monolithic `render()`
+into a **sub-renderer per panel**, each **memoized per data change**:
+
+- A `renderPanel(name, data, renderFn)` helper serializes the panel's input data and **skips the
+  render when the data is unchanged** since the last render — so the 1-second SSE tick only
+  redraws the panels whose data actually changed (no redundant re-render of every panel).
+- Each chart (agents / levels / edits / tools / cycles / errors) is now its own sub-renderer
+  (`renderAgentsChart`, …) rather than inline `drawTimeSeries` calls in `render()`.
+- The **EventPanel** (halt events) and **EfficiencyPanel** (per-role / per-department invoke
+  time) are **data-bound**: `render()` passes each the exact snapshot slice it renders from
+  (`state.halt_events`, `state.efficiency`), so a panel re-renders exactly when the data it
+  displays changes.
+
+> Note: this is a **structure** refactor (sub-renderers + memoization + data binding). It does
+> **not** change the metrics — the agents-chart "current active headcount per department" (item 4),
+> the generic hover tooltips (item 7), and the code-volume chart (item 10) are still pending.
+
+### F2. History — `invocations.jsonl` records `role` + `department`
+
+**Rolled out.** `runtime/history.py::log_invocation` now records a **`department`** field (the
+`role` field — the role id — was already present). `runtime/complexity.py::RoutingBackend.invoke`
+passes the role's department through, so the dashboard can segment invocations by team without
+re-deriving it.
+
+---
+
 ## Suggested ordering
 
-1. **Item 11** (bug) — small, unblocks transcript writing.
+1. **Item 11** (bug) — small, unblocks transcript writing. ✅ done
 2. **Items 3 + 5** — fix the headcount schema + wire transcripts for all pods (these are why the
-   dashboard looks empty/confused).
-3. **Items 1 + 2** — the intake + routing rework (bigger pipeline changes).
-4. **Items 4, 7, 10** — frontend chart fixes (tooltips, combine, code volume).
-5. **Items 8, 9** — investigate the org growth + headcount metric (may surface a pipeline bug).
-6. **Item 6** — the new flowchart module (largest frontend addition).
+   dashboard looks empty/confused). ✅ done
+3. **Items 1 + 2** — the intake + routing rework (bigger pipeline changes). ✅ item 1 done; 🔄 item 2
+   partial (task-first in, code-dev=MEDIUM open).
+4. **Items 4, 7, 10** — frontend chart fixes (tooltips, combine, code volume). ⬜ pending
+   (the F1 structure refactor — sub-renderers/memoization/data-binding — is ✅ done, so these
+   chart fixes now slot into the sub-renderers).
+5. **Items 8, 9** — investigate the org growth + headcount metric (may surface a pipeline bug). ⬜ pending
+6. **Item 6** — the new flowchart module (largest frontend addition). ⬜ pending
 
 ---
 
 ## Open questions (summary)
 
-| # | Item | Question |
-|---|------|----------|
-| 1 | Intake | Keep any Leader clarifying questions (not the goal, at a higher level), or go straight from the `INPUT` goal to Phase 2? |
-| 2 | Routing | Task-based classifier (finer) or role-based with manager-chosen level (coarser)? Is IC code discussion/review MEDIUM? |
-| 3 | `department_caps` | Confirm Phase 2 = *which* departments, Phase 3 = *how many* (two fields, not one)? |
-| 4 | Agents chart | Combined activity per department, or current headcount per department as the primary series? |
-| 8 | Roles by hierarchy | Should the org have grown past 8 heads + 1 IC (pipeline bug), or is the file stale (dashboard bug)? |
-| 9 | Agents total | Current headcount (capped at 50) with churn separate, or a true cumulative-hires counter? |
-| 10 | Code volume | Only `departments/` or the whole repo? Physical lines or non-blank lines? |
-| 6 | Flowchart | Task text from the role's latest invoke context, or from the pod agenda / decomposition objective? |
+| # | Item | Question | Status |
+|---|------|----------|--------|
+| 1 | Intake | Keep any Leader clarifying questions (not the goal, at a higher level), or go straight from the `INPUT` goal to Phase 2? | ✅ answered — keep clarification, never re-ask the goal; rolled out |
+| 2 | Routing | Task-based classifier (finer) or role-based with manager-chosen level (coarser)? Is IC code discussion/review MEDIUM? | 🔄 answered — task-based; rolled out **partially** (task-first in; code-dev=MEDIUM tier still open) |
+| 3 | `department_caps` | Confirm Phase 2 = *which* departments, Phase 3 = *how many* (two fields, not one)? | ✅ answered — two fields; renamed to `mission_departments`; rolled out |
+| 4 | Agents chart | Combined activity per department, or current headcount per department as the primary series? | ⬜ open — current headcount per dept (your answer 4, option b) |
+| 8 | Roles by hierarchy | Should the org have grown past 8 heads + 1 IC (pipeline bug), or is the file stale (dashboard bug)? | ⬜ open — check the logs (your answer 8) |
+| 9 | Agents total | Current headcount (capped at 50) with churn separate, or a true cumulative-hires counter? | ⬜ open — total headcount + confirm cap (your answer 9) |
+| 10 | Code volume | Only `departments/` or the whole repo? Physical lines or non-blank lines? | ⬜ open — file-write log, `departments/`, physical lines (your answer 10, option a) |
+| 6 | Flowchart | Task text from the role's latest invoke context, or from the pod agenda / decomposition objective? | ⬜ open — pod agenda / decomposition objective (your answer 6) |

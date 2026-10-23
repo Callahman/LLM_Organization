@@ -21,10 +21,14 @@ the leader's clarifying questions).
 # org's goal before any other clarifying question).
 INTAKE_RULES = (
     "INTAKE RULES:\n"
-    "- Your FIRST question to the user must be \"What is the organization's "
-    "goal?\" — establish the goal before any other clarifying question "
-    "(scope, size, ownership, success criteria). Do not jump into scope or "
-    "org-size clarifications until you understand the goal.\n"
+    "- If the goal is NOT yet established (no INITIAL PROMPT, no CURRENT "
+    "MISSION), your FIRST question to the user must be \"What is the "
+    "organization's goal?\" — establish the goal before any other clarifying "
+    "question (scope, size, ownership, success criteria). Do not jump into "
+    "scope or org-size clarifications until you understand the goal.\n"
+    "- If the goal IS already stated (see INITIAL PROMPT or CURRENT MISSION), "
+    "do NOT re-ask the goal — clarify scope, size, ownership, and success "
+    "criteria from it.\n"
     "- Only ask clarifying questions you genuinely need; when confident, "
     "stop.\n"
     "- When you report confidence >= threshold, you MUST also restate the "
@@ -47,16 +51,24 @@ MISSION_INSTRUCTION = (
     "(object or string), `resource_envelope` (object or string)."
 )
 
-# Phase 2 (Mission) — the leader's department-caps instruction.
-# Used by runtime/mission.py::_mission_context (the leader also proposes the
-# departments the mission needs, in priority order).
-MISSION_DEPARTMENT_CAPS = (
-    "Also set `department_caps` to a JSON OBJECT with a `departments` "
-    "array in PRIORITY order (highest first); each item is an OBJECT with "
-    "`name` (string, the department), `priority` (integer), and `rationale` "
-    "(string, why the mission needs it). Propose the OPERATIONAL departments "
-    "that will do the mission's work (derived from the purpose/scope), in "
-    "ADDITION to the governance departments (hr, safety, morality)."
+# Phase 2 (Mission) — the leader's department-LIST instruction.
+# Used by runtime/mission.py::_mission_context (the leader proposes the
+# departments the mission needs, in priority order). NOTE: this is the
+# department LIST (which departments, in priority order) — it is NOT the
+# Phase 3 `department_caps` (a {department: integer cap} mapping). The key
+# name is deliberately distinct so the leader is never confused between the
+# two processes.
+MISSION_DEPARTMENTS = (
+    "PHASE 2 (mission design — propose the departments). Also set "
+    "`mission_departments` to a JSON OBJECT with a `departments` array in "
+    "PRIORITY order (highest first); each item is an OBJECT with `name` "
+    "(string, the department), `priority` (integer), and `rationale` "
+    "(string, why the mission needs it). This is the department LIST (which "
+    "departments the mission needs) — it is NOT a headcount cap: the numeric "
+    "per-department caps are allotted later, in PHASE 3, under a different "
+    "key, `department_caps`. Propose the OPERATIONAL departments that will "
+    "do the mission's work (derived from the purpose/scope), in ADDITION to "
+    "the governance departments (hr, safety, morality)."
 )
 
 # ---------------------------------------------------------------------------

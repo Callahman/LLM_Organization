@@ -27,7 +27,11 @@ from runtime.org import OrgState
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
 from runtime.history import HistoryStore
-from runtime.pods import SoloTracker, form_pod
+from runtime.pods import (
+    SoloTracker,
+    form_pod,
+    log_devils_advocate_listening,
+)
 from runtime.plan import PlanResult
 from runtime.dispatch_common import (
     _manager_ctx,
@@ -108,9 +112,16 @@ def run_staff(
                     f"{t_obj.get('team') or manager.team})",
                     kind="clarification",
                 )
+                # the devil's advocate "listens" to the head+manager
+                # clarification pod (the head is a member — visible, never
+                # silent).
+                log_devils_advocate_listening(org, pod, org.roles)
                 _run_contained_pod(backend, org, pod,
                                    max_rounds=(config or {}).get(
                                        "clarification_pod_rounds"),
+                                   transcripts_dir=(config or {}).get(
+                                       "pod_transcripts_dir",
+                                       "pods/transcripts"),
                                    phase=5)
                 # Manager branch: the manager decomposes its team objective
                 # into IC tasks (invoked with the department POLICY + the

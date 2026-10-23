@@ -531,6 +531,86 @@ function renderModelStream() {
 
 // ---------- render -------------------------------------------------------------
 
+/* Sub-renderer + memoization per panel.
+
+   Every panel is a sub-renderer (a function that draws ONE panel from the
+   snapshot data). `renderPanel` memoizes each panel per data change: a panel
+   re-renders only when its input data changes (the "data key" is a stable
+   serialization of the panel's input). A panel whose data key is unchanged
+   since the last render is SKIPPED — so the 1-second SSE tick does not trigger
+   a redundant re-render of every panel (only the panels whose data actually
+   changed are redrawn). This is the "sub-renderer per panel, memoized per
+   data change" structure (the panels are data-bound: each renders from the
+   snapshot data, never from hard-coded values). */
+const _panelKeys = {};
+function renderPanel(name, data, renderFn) {
+  const key = JSON.stringify(data);
+  if (_panelKeys[name] === key) return;  // unchanged since last render: skip
+  _panelKeys[name] = key;
+  renderFn();
+}
+
+/* Chart sub-renderers — each draws ONE chart from the snapshot data (the chart
+ * drawing was previously inlined in render(); it is now a sub-renderer per
+ * panel so each chart is independently memoized). */
+function renderAgentsChart() {
+  // A5: the agents chart shows the cumulative hire/fire series (by department)
+  // AND the activity-over-time series (model calls per dept from tool_calls).
+  drawTimeSeries(
+    $('chart-agents'),
+    buildCumulativeSeries(state.agents.events, (e) => e.department, (e) => e.ts)
+      .concat(buildCumulativeSeries(
+        state.tool_calls, (e) => e.department || 'unknown', (e) => e.ts)),
+    true);
+}
+
+function renderLevelsChart() {
+  // Role hierarchy levels: the cumulative hire/fire series (by level).
+  drawTimeSeries(
+    $('chart-levels'),
+    buildCumulativeSeries(
+      state.agents.level_events, (e) => e.level, (e) => e.ts),
+    true, 'no hires yet');
+}
+
+function renderEditsChart() {
+  // A4: segment the code-edits chart by department, applied/refused within
+  // each department (applied solid, refused striped).
+  drawTimeSeries(
+    $('chart-edits'),
+    buildCumulativeSeries(
+      state.code_edits,
+      (e) => (e.department || 'unknown') + ' ' + (e.ok ? 'applied' : 'refused'),
+      (e) => e.ts),
+    false, 'no edit attempts yet', state.code_edits);
+}
+
+function renderToolsChart() {
+  // A3: keep the outcome segmentation AND add a department split (who is
+  // calling) — the tool-calls chart shows both series.
+  drawTimeSeries(
+    $('chart-tools'),
+    buildCumulativeSeries(
+      state.tool_calls, (e) => e.outcome || 'unknown', (e) => e.ts).concat(
+      buildCumulativeSeries(
+        state.tool_calls, (e) => e.department || 'unknown', (e) => e.ts)),
+    true);
+}
+
+function renderCyclesChart() {
+  drawBars($('chart-cycles'), buildCycleGroups(state.cycles));
+}
+
+function renderErrorsChart() {
+  // A6: error mix over time — the tool-call error_type breakdown.
+  drawTimeSeries(
+    $('chart-errors'),
+    buildCumulativeSeries(
+      state.tool_calls.filter((e) => e.error_type),
+      (e) => e.error_type, (e) => e.ts),
+    true, 'no errors yet');
+}
+
 // Role hierarchy levels (Leader/Head/Manager/IC): the current counts per
 // level (the snapshot's agents.by_level) as chips + the roster
 // (agents.roles) with a level badge per role (fired roles are marked).
@@ -684,71 +764,39 @@ function render() {
   if (!state) return;
   // A6: staleness gauge — seconds since the last stream chunk, warning past
   // a threshold (the model has been silent for a while).
-  renderStaleness();
-  // A5: current headcount per department (number chips) — the snapshot's
-  // agents.by_department is never rendered elsewhere, so it goes here.
-  renderHeadcountChips();
-  // A5: the agents chart shows the cumulative hire/fire series (by
-  // department) AND the activity-over-time series (model calls per dept from
-  // tool_calls) — so the current headcount, the activity, and the hires are
-  // all visible.
-  drawTimeSeries(
-    $('chart-agents'),
-    buildCumulativeSeries(state.agents.events, (e) => e.department, (e) => e.ts)
-      .concat(buildCumulativeSeries(
-        state.tool_calls, (e) => e.department || 'unknown', (e) => e.ts)),
-    true);
-  // Role hierarchy levels (Leader/Head/Manager/IC): the current counts per
-  // level (chips + roster) AND the cumulative hire/fire series (by level —
-  // "Unresolved" levels are re-resolved from the org chart, so the series
-  // keys are the real levels).
-  renderLevelChips();
-  drawTimeSeries(
-    $('chart-levels'),
-    buildCumulativeSeries(
-      state.agents.level_events, (e) => e.level, (e) => e.ts),
-    true, 'no hires yet');
-  // A4: segment the code-edits chart by department (like agents-over-time),
-// with applied/refused within each department (applied solid, refused
-// striped). The keyFn combines department + outcome so each department's
-// applied/refused are distinct series. The empty state reads "no edit
-// attempts yet" (a missing file is not "all refused"), and hovering shows the
-// latest edit's path + refusal reason.
-  drawTimeSeries(
-    $('chart-edits'),
-    buildCumulativeSeries(
-      state.code_edits,
-      (e) => (e.department || 'unknown') + ' ' + (e.ok ? 'applied' : 'refused'),
-      (e) => e.ts),
-    false, 'no edit attempts yet', state.code_edits);
-  // A3: keep the outcome segmentation AND add a department split (who is
-// calling) — the tool-calls chart shows both series (outcome first, then
-// department) so failures are legible (type + red fill) and the caller is
-// visible.
-  drawTimeSeries(
-    $('chart-tools'),
-    buildCumulativeSeries(
-      state.tool_calls, (e) => e.outcome || 'unknown', (e) => e.ts).concat(
-      buildCumulativeSeries(
-        state.tool_calls, (e) => e.department || 'unknown', (e) => e.ts)),
-    true);
-  drawBars($('chart-cycles'), buildCycleGroups(state.cycles));
-  // A6: error mix over time — the tool-call error_type breakdown (timeout,
-  // truncation, parse, transport, other) as a stacked series.
-  drawTimeSeries(
-    $('chart-errors'),
-    buildCumulativeSeries(
-      state.tool_calls.filter((e) => e.error_type),
-      (e) => e.error_type, (e) => e.ts),
-    true, 'no errors yet');
-  renderMonitor();
-  renderPodList();
-  renderHaltList();
-  // the efficiency panel (per-role / per-department invoke time).
-  renderEfficiencyPanel();
-  // the per-iteration efficiency metrics (the Phase 3-6 loop metrics).
-  renderLoopMetricsPanel();
-  renderModelStream();
+  renderPanel('staleness', [state.last_stream_ts, state.ts], renderStaleness);
+  // A5: current headcount per department (number chips).
+  renderPanel('headcount', state.agents.by_department, renderHeadcountChips);
+  // The agents chart (cumulative hire/fire by department + activity).
+  renderPanel('agents-chart',
+    [state.agents.events, state.tool_calls], renderAgentsChart);
+  // Role hierarchy levels: the current counts per level (chips + roster).
+  renderPanel('level-chips',
+    [state.agents.by_level, state.agents.roles], renderLevelChips);
+  // Role hierarchy levels: the cumulative hire/fire series (by level).
+  renderPanel('levels-chart', state.agents.level_events, renderLevelsChart);
+  // The code-edits chart (applied/refused by department).
+  renderPanel('edits-chart', state.code_edits, renderEditsChart);
+  // The tool-calls chart (by outcome + by department).
+  renderPanel('tools-chart', state.tool_calls, renderToolsChart);
+  // The cycle-duration bars (phase durations per iteration).
+  renderPanel('cycles-chart', state.cycles, renderCyclesChart);
+  // The error-mix chart (tool-call error_type breakdown).
+  renderPanel('errors-chart', state.tool_calls, renderErrorsChart);
+  renderPanel('monitor', state.pods, renderMonitor);
+  // The historical pod list (last-N closed pods, expandable).
+  renderPanel('pod-list', state.pods, renderPodList);
+  // A6: the halt events (Safety / Morality) — the EventPanel (data-bound to
+  // state.halt_events).
+  renderPanel('halt-list', state.halt_events, renderHaltList);
+  // The efficiency panel (per-role / per-department invoke time) — the
+  // EfficiencyPanel (data-bound to state.efficiency).
+  renderPanel('efficiency-panel', state.efficiency, renderEfficiencyPanel);
+  // The per-iteration efficiency metrics (the Phase 3-6 loop metrics).
+  renderPanel('loop-metrics-panel', state.efficiency_metrics,
+    renderLoopMetricsPanel);
+  // The live "model stream" window (current + previous model call).
+  renderPanel('model-stream', state.stream, renderModelStream);
 }
 
 connect();

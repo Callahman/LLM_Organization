@@ -214,8 +214,10 @@ def test_solo_tracker_records_non_leader_role(tmp_path):
                    {"summary": "did the work"}, role=ic)
     pod = tracker.pod_for("p4", "Phase 4: IC work", role=ic)
     assert pod.id == f"solo_{ic.id}_p4"
-    # The transcript file is written (like the leader's).
-    path = os.path.join(str(tmp_path), f"{pod.id}.jsonl")
+    # The transcript file is written (like the leader's) — the file name is the
+    # sanitized pod id (a pod id can contain path-unsafe characters).
+    path = os.path.join(str(tmp_path),
+                        f"{pods._safe_pod_filename(pod.id)}.jsonl")
     assert os.path.exists(path)
     with open(path, "r", encoding="utf-8") as f:
         entries = [json.loads(ln) for ln in f if ln.strip()]
@@ -237,7 +239,9 @@ def test_solo_tracker_leader_behavior_preserved(tmp_path):
     pod = tracker.pod_for("p1", "Phase 1: intake")
     assert pod.id == f"solo_{leader.id}_p1"
     assert pod.starter is leader
-    path = os.path.join(str(tmp_path), f"{pod.id}.jsonl")
+    # The transcript file is written (the file name is the sanitized pod id).
+    path = os.path.join(str(tmp_path),
+                        f"{pods._safe_pod_filename(pod.id)}.jsonl")
     assert os.path.exists(path)
 
 

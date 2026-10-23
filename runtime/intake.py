@@ -58,6 +58,14 @@ def _assemble_context(
     parts: List[str] = []
     if initial_prompt and initial_prompt.strip():
         parts.append(f"INITIAL PROMPT:\n{initial_prompt}")
+        # The goal is already stated (in the initial prompt) — the leader must
+        # NOT re-ask it; clarify scope / size / ownership / success criteria
+        # from it.
+        parts.append(
+            "THE GOAL IS ALREADY STATED (see INITIAL PROMPT) — do NOT re-ask "
+            "the goal; clarify scope, size, ownership, and success criteria "
+            "from it."
+        )
     if current_mission and current_mission.strip():
         parts.append(
             "CURRENT MISSION (the goal may have changed — re-clarify it):\n"
@@ -125,8 +133,15 @@ def _informal_draft(
     """The **INFORMAL** mission draft from Phase 1 (Intake) — the Leader's
     understanding of the goal (restated goal + assumptions + status). This is
     NOT the formal, version-controlled MISSION.md (Phase 2 refines it into
-    that); it is a scratch draft saved to `state/mission_draft.md`."""
+    that); it is a scratch draft saved to `state/mission_draft.md`.
+
+    The Goal is the leader's restated goal; when the leader never restated it
+    (e.g. budget exhausted) but a goal WAS given (the initial prompt), the
+    given goal is used so Phase 2 is seeded with the goal (the leader must not
+    re-ask it)."""
     goal = _restated_goal(transcript)
+    if not goal and initial_prompt and initial_prompt.strip():
+        goal = initial_prompt.strip()
     lines = [
         "# MISSION DRAFT (informal — Phase 1 intake)",
         "",

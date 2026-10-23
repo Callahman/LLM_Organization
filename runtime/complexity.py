@@ -41,30 +41,78 @@ def parse_phase(context: str) -> int:
 
 
 def classify_complexity(phase: int, role, signal: Dict[str, Any]) -> Reasoning:
-    """A pure router: map (phase, role, task-signal) to a `Reasoning` level.
+    """A pure router: map (task-signal, phase, role) to a `Reasoning` level.
+
+    Routing is **TASK-FIRST**: the task signal (what the task IS — a decision,
+    a disagreement, a decomposition) drives the level; the phase number is a
+    fallback for tasks that carry no signal. This keeps routing consistent at
+    every call site (the dispatch sites and the Phase 2/3/7/8 / efficiency /
+    pod sites all pass the same (task, phase, role) shape).
 
     `signal` keys: `disagreement`, `deadlock`, `converging`, `confidence`,
-    `budget_left`, `is_decision`. Complex tasks -> thinking on (HIGH); simple
-    tasks -> off (LOW). This is a pure function so the routing logic is
-    unit-testable offline, like the other invariants.
+    `budget_left`, `is_decision`, `gut_check`. Complex tasks -> thinking on
+    (HIGH); simple tasks -> off (LOW). This is a pure function so the routing
+    logic is unit-testable offline, like the other invariants.
     """
-    if phase in (2, 7, 8):                      # mission, evaluate, decide
-        return Reasoning.HIGH
+    # Task signals drive when present (a decision task is always HIGH,
+    # regardless of phase).
     if signal.get("is_decision"):               # hire/fire/offload, leader vote
+        return Reasoning.HIGH
+    if signal.get("gut_check"):                  # the devil's advocate red-team verdict
         return Reasoning.HIGH
     if phase in (4, 5, 6):                      # plan / staff / execute
         if signal.get("disagreement") or signal.get("deadlock"):
             return Reasoning.HIGH
-        # Structuring work (leader/head/manager decomposition) -> MEDIUM;
-        # routine IC work -> LOW.
-        if role.architype in ("leader", "department_head", "manager"):
-            return Reasoning.MEDIUM
-        return Reasoning.LOW
+        # Executing / planning work -> MEDIUM: the leader/head/manager
+        # structuring AND the IC executing/planning its task. (Reporting /
+        # evaluation steps run in Phase 7/8 and are routed separately — not
+        # here — so an IC's post-execution report stays at its Phase 7/8 level.)
+        return Reasoning.MEDIUM
     if phase == 1:                              # intake
         if (not signal.get("converging")) and signal.get("budget_left", 99) <= 1:
             return Reasoning.HIGH
         return Reasoning.LOW
+    # Phase fallback (no task signal): mission / evaluate / decide are heavy
+    # leader tasks -> HIGH.
+    if phase in (2, 7, 8):                      # mission, evaluate, decide
+        return Reasoning.HIGH
     return Reasoning.LOW
+
+
+def _level_rank(level: Reasoning) -> int:
+    """The ordering rank of a reasoning level (LOW < MEDIUM < HIGH)."""
+    return {Reasoning.LOW: 0, Reasoning.MEDIUM: 1, Reasoning.HIGH: 2}[level]
+
+
+def _one_level_higher(level: Reasoning) -> Reasoning:
+    """The reasoning level one step higher (LOW->MEDIUM->HIGH; HIGH stays HIGH)."""
+    return {Reasoning.LOW: Reasoning.MEDIUM,
+            Reasoning.MEDIUM: Reasoning.HIGH,
+            Reasoning.HIGH: Reasoning.HIGH}[level]
+
+
+def pod_levels(phase: int, starter, members) -> tuple:
+    """A pod's reasoning levels: the **originator** (the starter — the role that
+    ultimately makes the decision) runs **one level higher** than the other
+    members (who are there only to justify / share info).
+
+    The members' base level is the max of their phase-based levels **capped at
+    MEDIUM** (they don't make the decision, so they never run HIGH just to share
+    info); the originator is base + 1 (HIGH if the members are MEDIUM, MEDIUM if
+    the members are LOW). Returns ``(originator_level, member_level)``.
+
+    A pure function so the pod routing is unit-testable offline, like the other
+    invariants.
+    """
+    base = Reasoning.LOW
+    for m in members:
+        lvl = classify_complexity(phase, m, {})
+        if _level_rank(lvl) > _level_rank(base):
+            base = lvl
+    # Cap the members' base at MEDIUM (they share info, they don't decide).
+    if base is Reasoning.HIGH:
+        base = Reasoning.MEDIUM
+    return _one_level_higher(base), base
 
 
 def detect_disagreement(outputs: List[Dict[str, Any]]) -> bool:
@@ -145,8 +193,12 @@ class RoutingBackend(LLMBackend):
         )
         granted = self.budget.allow(level)
         if self.history is not None:
+            # Log the role's FULL identity (name, level in hierarchy, architype,
+            # sub-architype, department, team, personality) — not just the role
+            # id — so the dashboard can segment invocations by the role's full
+            # identity.
             self.history.log_invocation(
-                role.id, log_phase, level.value, granted.value
+                role.id, log_phase, level.value, granted.value, role=role,
             )
         # A per-invoke timeout override is only honored when the inner is a
         # TimeoutBackend (a raw backend like the StubBackend has no timeout

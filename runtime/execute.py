@@ -112,6 +112,9 @@ def run_execute(
                     _run_contained_pod(backend, org, pod,
                                        max_rounds=(config or {}).get(
                                            "clarification_pod_rounds"),
+                                       transcripts_dir=(config or {}).get(
+                                           "pod_transcripts_dir",
+                                           "pods/transcripts"),
                                        phase=6)
                     ic_out, ic_err = _invoke_ic(
                         backend, ic,
