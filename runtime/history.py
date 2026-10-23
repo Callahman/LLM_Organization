@@ -19,6 +19,34 @@ import time
 from typing import Any, Dict, List, Optional
 
 
+# The role-hierarchy level derived from the architype (Leader/Head/Manager/IC)
+# — the "level in hierarchy" the invocations log records alongside the architype.
+HIERARCHY_LEVEL = {
+    "leader": "Leader",
+    "department_head": "Head",
+    "manager": "Manager",
+    "ic": "IC",
+}
+
+
+def _role_identity(role: Any) -> Dict[str, Any]:
+    """The FULL role identity for the invocations log: the role name (id), its
+    level in the hierarchy (Leader/Head/Manager/IC), its architype, its
+    sub-architype, its department, its team, and its personality — so the
+    dashboard can segment invocations by the role's full identity, not just the
+    role id. Every field is read defensively (a role may be a partial object)."""
+    architype = getattr(role, "architype", "") or ""
+    return {
+        "name": getattr(role, "id", "") or "",
+        "level": HIERARCHY_LEVEL.get(architype, architype or "unknown"),
+        "architype": architype or "unknown",
+        "sub_architype": getattr(role, "sub_architype", "") or "",
+        "department": getattr(role, "department", "") or "",
+        "team": getattr(role, "team", "") or "",
+        "personality": getattr(role, "personality", "") or "",
+    }
+
+
 class HistoryStore:
     """The organization's audit trail. All writes are append-only JSONL so the
     audit path is resolvable from any recorded decision."""
@@ -77,16 +105,27 @@ class HistoryStore:
         phase: int,
         requested: str,
         granted: str,
+        department: str = "",
+        role: Optional[Any] = None,
     ) -> str:
         """Record a role invocation and the reasoning level requested vs
-        granted (the audit trail for where "thinking" was used). Carries a `ts`
-        so the dashboard can chart granted-level distribution over time (A0)."""
-        return self._append(
-            "invocations.jsonl",
-            {"role": role_id, "phase": phase,
-             "requested": requested, "granted": granted,
-             "ts": time.time()},
-        )
+        granted (the audit trail for where "thinking" was used). Carries the
+        role's **full identity** (when `role` is the `Role` object): the role
+        name (id), its level in the hierarchy (Leader/Head/Manager/IC), its
+        architype, its sub-architype, its department, its team, and its
+        personality — so the dashboard can segment invocations by the role's
+        full identity, not just the role id. Also carries a `ts` so the
+        dashboard can chart granted-level distribution over time (A0). When
+        `role` is None only the role id (+ the explicit `department`) is
+        recorded (backward compatibility)."""
+        rec = {"role": role_id, "phase": phase,
+               "requested": requested, "granted": granted,
+               "ts": time.time()}
+        if role is not None:
+            rec.update(_role_identity(role))
+        elif department:
+            rec["department"] = department
+        return self._append("invocations.jsonl", rec)
 
     # --- decision journal --------------------------------------------------
 

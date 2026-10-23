@@ -263,7 +263,9 @@ class Session:
             # the devil's advocate "listens" to a reporting pod when
             # the parent is a head (visible, never silent).
             log_devils_advocate_listening(self.org, pod, roles)
-            run_pod(self.backend, pod, max_rounds=max_rounds, phase=7)
+            run_pod(self.backend, pod, max_rounds=max_rounds, phase=7,
+                    transcripts_dir=self.config.get(
+                        "pod_transcripts_dir", "pods/transcripts"))
         # head→leader: each (operational) department head reports to the
         # leader. The required governance heads (hr / safety / morality) are
         # skipped — like the Phase 4 clarification pod, the leader+head working
@@ -281,7 +283,9 @@ class Session:
             # the devil's advocate "listens" to the head→leader pod
             # (the leader is a member — visible, never silent).
             log_devils_advocate_listening(self.org, pod, roles)
-            run_pod(self.backend, pod, max_rounds=max_rounds, phase=7)
+            run_pod(self.backend, pod, max_rounds=max_rounds, phase=7,
+                    transcripts_dir=self.config.get(
+                        "pod_transcripts_dir", "pods/transcripts"))
 
     def _evaluate_progress(self) -> str:
         # the **reporting pods** (ic→manager, manager→head,
@@ -476,7 +480,9 @@ class Session:
         out = self.backend.invoke(
             self.leader,
             p8_ctx,
-            reasoning=classify_complexity(8, self.leader, {}),
+            # The continue/complete decision is a DECISION task (task-first
+            # routing — the `is_decision` signal drives HIGH).
+            reasoning=classify_complexity(8, self.leader, {"is_decision": True}),
             phase=8,
         )
         decision = out.get("verdict", "complete")
@@ -563,7 +569,10 @@ class Session:
         )
         out = self.backend.invoke(
             self.leader, ctx,
-            reasoning=classify_complexity(8, self.leader, {}),
+            # The efficiency-floor action (fire / reassign / report / automate)
+            # is a DECISION task (task-first routing — the `is_decision` signal
+            # drives HIGH).
+            reasoning=classify_complexity(8, self.leader, {"is_decision": True}),
             phase=8,
         )
         eff = out.get("efficiency")

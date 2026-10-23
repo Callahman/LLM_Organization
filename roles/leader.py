@@ -32,9 +32,13 @@ LEADER_MANDATE = (
     "You are the only active personality at startup and the only agent that "
     "interacts with the user during intake and mission codification. "
     "Your duties: (1) understand the task by asking clarifying questions until "
-    "you are confident — your FIRST question to the user must be "
+    "you are confident — if the goal is NOT yet established (no initial "
+    "prompt, no current mission), your FIRST question to the user must be "
     "'What is the organization's goal?' (establish the goal before any other "
-    "clarifying question: scope, size, ownership, success criteria); "
+    "clarifying question: scope, size, ownership, success criteria); if the "
+    "goal IS already stated (in the initial prompt or the current mission), do "
+    "NOT re-ask the goal — clarify scope, size, ownership, and success "
+    "criteria from it; "
     "(2) codify and guard the global mission (you are the "
     "only editor of MISSION.md and must seek the user's permission before every "
     "edit); (3) decompose and delegate top-down (leader -> department heads -> "
@@ -75,14 +79,16 @@ LEADER_OUTPUT_SCHEMA: Dict[str, Any] = {
                 "resource_envelope": {},
             },
         },
-        # Phase 2: the department caps (the departments + priority order).
-        # The leader proposes which departments the mission needs, in priority
-        # order; Phase 3 (Org bootstrap) creates them. Optional at the top level
-        # (so it does not leak into the other phases) but, when present, the
-        # `departments` array is REQUIRED — the exact shape
-        # `runtime/org.py::bootstrap` reads, so the forced submit_output tool
-        # constrains the model to emit it.
-        "department_caps": {
+        # Phase 2: the department LIST (the departments + priority order).
+        # This is the Phase-2 department LIST (which departments the mission
+        # needs, in priority order) — it is NOT the Phase-3 `department_caps`
+        # (a {department: integer cap} mapping). The leader proposes which
+        # departments the mission needs; Phase 3 (Org bootstrap) creates them.
+        # Optional at the top level (so it does not leak into the other phases)
+        # but, when present, the `departments` array is REQUIRED — the exact
+        # shape `runtime/org.py::bootstrap` reads, so the forced submit_output
+        # tool constrains the model to emit it.
+        "mission_departments": {
             "type": "object",
             "properties": {
                 "departments": {

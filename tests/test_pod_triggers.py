@@ -23,6 +23,7 @@ from runtime.llm import StubBackend
 from runtime.org import OrgState
 from runtime.dispatch import dispatch
 from runtime.session import Session
+from runtime.pods import _safe_pod_filename
 
 
 def _role(rid, architype, department="", team="", reports_to=None):
@@ -162,9 +163,11 @@ def test_trigger_a_disagreement_forms_pod(tmp_path):
     assert {m.id for m in pod.members} == {"mgr1", "ic1", "ic2"}
     assert pod.rounds >= 1
     assert pod.decision == "approve schema v2"
-    # The decision artifact is written to pods/artifacts/.
-    assert os.path.exists(os.path.join(artifacts_dir, pod.id + ".json"))
-    assert os.path.exists(os.path.join(artifacts_dir, pod.id + ".md"))
+    # The decision artifact is written to pods/artifacts/ (the file name is the
+    # sanitized pod id — a pod id can contain path-unsafe characters).
+    safe = _safe_pod_filename(pod.id)
+    assert os.path.exists(os.path.join(artifacts_dir, safe + ".json"))
+    assert os.path.exists(os.path.join(artifacts_dir, safe + ".md"))
 
 
 def test_trigger_b_cross_team_forms_pod(tmp_path):
@@ -262,9 +265,11 @@ def test_pod_carry_over_three_ways(tmp_path):
     assert len(result.pods) == 1
     pod = result.pods[0]
     assert pod.decision == "approve schema v2"
-    # (1) The decision artifact is in pods/artifacts/.
-    assert os.path.exists(os.path.join(artifacts_dir, pod.id + ".json"))
-    assert os.path.exists(os.path.join(artifacts_dir, pod.id + ".md"))
+    # (1) The decision artifact is in pods/artifacts/ (the file name is the
+    # sanitized pod id).
+    safe = _safe_pod_filename(pod.id)
+    assert os.path.exists(os.path.join(artifacts_dir, safe + ".json"))
+    assert os.path.exists(os.path.join(artifacts_dir, safe + ".md"))
     # (2) The decision is in the leader's Phase 7 evaluate prompt.
     phase7 = [ctx for rid, ctx in backend.calls
               if rid == "leader" and "PHASE 7" in _objective(ctx)][-1]

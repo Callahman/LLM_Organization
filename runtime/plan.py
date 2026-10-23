@@ -168,8 +168,13 @@ def _allot_team_caps(org: OrgState, backend, head: Role,
                 max_roles=12,
                 kind="headcount",
             )
+            # the devil's advocate "listens" to Pod B (all managers + the
+            # head) — the head is a member (visible, never silent).
+            log_devils_advocate_listening(org, pod, org.roles)
             run_pod(backend, pod,
                     max_rounds=(config or {}).get("headcount_pod_rounds"),
+                    transcripts_dir=(config or {}).get(
+                        "pod_transcripts_dir", "pods/transcripts"),
                     phase=4)
         except Exception as e:
             # A pod failure (a membership issue, or a manager's malformed /
@@ -287,6 +292,8 @@ def run_plan(
         _run_contained_pod(backend, org, pod,
                            max_rounds=(config or {}).get(
                                "clarification_pod_rounds"),
+                           transcripts_dir=(config or {}).get(
+                               "pod_transcripts_dir", "pods/transcripts"),
                            phase=4)
         if pod.decision:
             clarifications[head.id] = pod.decision

@@ -34,7 +34,7 @@ from prompts import (
 )
 from roles.base import Role
 from runtime.llm import LLMBackend
-from runtime.complexity import classify_complexity, detect_disagreement
+from runtime.complexity import pod_levels
 from runtime.coerce import as_str_list
 from runtime.context import bounded_assembly
 
@@ -266,10 +266,17 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
     # the capped round count defaults to the pod's kind.
     if max_rounds is None:
         max_rounds = POD_KIND_DEFAULT_ROUNDS.get(pod.kind, 3)
-    # 1. The starter sets the agenda.
+    # The pod's reasoning levels: the originator (the starter — the role that
+    # ultimately makes the decision) runs one level higher than the other
+    # members (who are there only to justify / share info). The members are
+    # capped at MEDIUM (they don't make the decision, so they never run HIGH
+    # just to share info — a disagreement is decided by the originator, not
+    # bumped into a member).
+    originator_level, member_level = pod_levels(phase, pod.starter, pod.members)
+    # 1. The starter (originator) sets the agenda.
     out = backend.invoke(pod.starter,
                          _pod_ctx(pod, "agenda", budget_tokens=budget_tokens),
-                         reasoning=classify_complexity(phase, pod.starter, {}), phase=phase)
+                         reasoning=originator_level, phase=phase)
     pod.agenda = str(out.get("agenda", ""))
     pod.transcript.append({
         "kind": "agenda", "role": pod.starter.id,
@@ -278,9 +285,11 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
     if transcripts_dir:
         write_transcripts(pod, transcripts_dir)
 
-    # 2. Deliberation rounds (deadlock detection + disagreement routing).
+    # 2. Deliberation rounds (deadlock detection). The members run at
+    # `member_level` (capped at MEDIUM — they share info, they don't decide);
+    # a disagreement is decided by the originator (the starter), not bumped
+    # into a member.
     prev: List[tuple] | None = None
-    prev_outputs: List[Dict[str, Any]] = []
     start = time.monotonic()
     for round in range(1, max_rounds + 1):
         # Wall-clock budget: if the elapsed time exceeds the per-pod budget,
@@ -289,16 +298,12 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
             pod.closed_reason = "pod wall-clock budget exceeded"
             break
         this_round: List[tuple] = []
-        this_outputs: List[Dict[str, Any]] = []
-        disagreement = detect_disagreement(prev_outputs)
         for member in pod.members:
-            level = classify_complexity(phase, member, {"disagreement": disagreement})
             out = backend.invoke(member,
                                  _pod_ctx(pod, "speak", budget_tokens=budget_tokens),
-                                 reasoning=level, phase=phase)
+                                 reasoning=member_level, phase=phase)
             summary = str(out.get("summary", ""))
             this_round.append((member.id, summary))
-            this_outputs.append(out)
             pod.transcript.append({
                 "kind": "speak", "role": member.id, "round": round,
                 "summary": summary, "output": out,
@@ -310,12 +315,12 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
             pod.closed_reason = "deadlock: no progress between rounds"
             break
         prev = this_round
-        prev_outputs = this_outputs
 
-    # 3. The starter always closes, producing the decision.
+    # 3. The starter (originator) always closes, producing the decision — at
+    # `originator_level` (one level higher than the members).
     out = backend.invoke(pod.starter,
                          _pod_ctx(pod, "close", budget_tokens=budget_tokens),
-                         reasoning=classify_complexity(phase, pod.starter, {}), phase=phase)
+                         reasoning=originator_level, phase=phase)
     pod.decision = str(out.get("decision", ""))
     pod.rationale = str(out.get("rationale", ""))
     pod.open_items = as_str_list(out.get("open_items", []))
@@ -328,11 +333,42 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
     return pod
 
 
+def _safe_pod_filename(pod_id: str) -> str:
+    """Sanitize a pod id for use as a **file name** (never as a path).
+
+    A pod id is built from role labels and can contain path-unsafe characters
+    (a `/` from a sub_architype like "data product / bundle engineer", spaces,
+    an em-dash, …). Using it directly in ``os.path.join`` treats the `/` as a
+    separator and writes into a non-existent subdirectory (a
+    ``FileNotFoundError``). Replace every non-alphanumeric character with a
+    single ``-`` (collapsing runs) so the id maps to one flat file name. The
+    display ``pod.id`` is left unchanged — only the file name is sanitized.
+    Applied to both the write (transcripts / artifacts) and any read by id.
+    """
+    out = []
+    prev_dash = False
+    for ch in pod_id:
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        else:
+            if not prev_dash:
+                out.append("-")
+            prev_dash = True
+    while out and out[0] == "-":
+        out.pop(0)
+    while out and out[-1] == "-":
+        out.pop()
+    return "".join(out) or "pod"
+
+
 def write_transcripts(pod: Pod, transcripts_dir: str = "pods/transcripts") -> str:
     """Write the pod's transcript to `<base>.jsonl` (machine) and `<base>.md`
-    (human). Returns `base` (the path without extension)."""
+    (human). Returns `base` (the path without extension). The file name is
+    sanitized (``_safe_pod_filename``) so a pod id containing a `/` does not
+    create a subdirectory."""
     os.makedirs(transcripts_dir, exist_ok=True)
-    base = os.path.join(transcripts_dir, pod.id)
+    base = os.path.join(transcripts_dir, _safe_pod_filename(pod.id))
     with open(base + ".jsonl", "w", encoding="utf-8") as f:
         for entry in pod.transcript:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -372,7 +408,7 @@ def write_decision_artifact(pod: Pod, artifacts_dir: str = "pods/artifacts") -> 
     `<base>.md` (human). This is what a chained pod carries up the line.
     Returns `base` (the path without extension)."""
     os.makedirs(artifacts_dir, exist_ok=True)
-    base = os.path.join(artifacts_dir, pod.id)
+    base = os.path.join(artifacts_dir, _safe_pod_filename(pod.id))
     artifact = {
         "pod": pod.id,
         "topic": pod.topic,

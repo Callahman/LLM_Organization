@@ -11,7 +11,7 @@ from roles.base import Role
 from roles.leader import make_leader
 from runtime.llm import MemoryBackend, StubBackend, Reasoning
 from runtime.complexity import (
-    classify_complexity, detect_disagreement, parse_phase,
+    classify_complexity, detect_disagreement, parse_phase, pod_levels,
     ThinkingBudget, RoutingBackend,
 )
 from runtime.history import HistoryStore
@@ -33,9 +33,29 @@ def test_decisions_route_high():
     assert classify_complexity(3, leader, {"is_decision": True}) is Reasoning.HIGH
 
 
-def test_simple_ic_work_routes_low():
+def test_ic_executing_planning_routes_medium():
     ic = _role("ic", "analytics", "pipelines")
-    assert classify_complexity(6, ic, {}) is Reasoning.LOW
+    # IC executing / planning its task (Phase 6) -> MEDIUM (raised from LOW).
+    assert classify_complexity(6, ic, {}) is Reasoning.MEDIUM
+
+
+def test_gut_check_routes_high():
+    da = _role("department_head", "devils_advocate")
+    # The devil's advocate red-team verdict (gut check) -> HIGH.
+    assert classify_complexity(7, da, {"gut_check": True}) is Reasoning.HIGH
+
+
+def test_pod_levels_originator_one_higher():
+    # The originator (the decision-maker) runs one level higher than the
+    # members (who share info); the members are capped at MEDIUM. In Phase 6
+    # the members' base is MEDIUM (executing/planning), so the originator is
+    # HIGH.
+    starter = _role("department_head", "analytics")
+    members = [_role("ic", "analytics", "pipelines"),
+               _role("manager", "analytics", "pipelines")]
+    originator, member = pod_levels(6, starter, members)
+    assert member is Reasoning.MEDIUM
+    assert originator is Reasoning.HIGH
 
 
 def test_structuring_routes_medium():
@@ -99,10 +119,10 @@ def test_routing_backend_routes_and_logs(tmp_path):
     ic = _role("ic", "analytics", "pipelines")
 
     backend.invoke(leader, "PHASE 2: draft the mission")     # HIGH (in budget)
-    backend.invoke(ic, "PHASE 6 (IC ic): do the work")       # LOW
+    backend.invoke(ic, "PHASE 6 (IC ic): do the work")       # MEDIUM (IC executing)
     backend.invoke(leader, "PHASE 8: decide")                # HIGH -> LOW (budget)
 
-    assert inner.reasoning_log == [Reasoning.HIGH, Reasoning.LOW, Reasoning.LOW]
+    assert inner.reasoning_log == [Reasoning.HIGH, Reasoning.MEDIUM, Reasoning.LOW]
     assert os.path.exists(os.path.join(str(tmp_path), "invocations.jsonl"))
 
 

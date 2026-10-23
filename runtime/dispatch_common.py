@@ -99,6 +99,7 @@ from runtime.pods import (
     write_transcripts,
     senior_member,
     chained_pod,
+    log_devils_advocate_listening,
     SoloTracker,
 )
 
@@ -118,7 +119,8 @@ def mission_digest(mission: Dict[str, Any]) -> str:
 
 def _run_contained_pod(backend: LLMBackend, org: OrgState, pod: Pod,
                        max_rounds: Optional[int] = None,
-                       phase: int = 4) -> None:
+                       phase: int = 4,
+                       transcripts_dir: Optional[str] = None) -> None:
     """Run a clarification pod with **containment**: a backend
     failure inside the pod is logged (visible, never silent) and the phase
     continues (the pod's decision stays empty). A clarification pod must not
@@ -129,7 +131,8 @@ def _run_contained_pod(backend: LLMBackend, org: OrgState, pod: Pod,
     + recorded); only its **run** is contained here.
     """
     try:
-        run_pod(backend, pod, max_rounds=max_rounds, phase=phase)
+        run_pod(backend, pod, max_rounds=max_rounds, phase=phase,
+                transcripts_dir=transcripts_dir)
     except Exception as e:
         org.log_event(
             "pod_failed", pod.starter.id, None,
@@ -981,6 +984,10 @@ def _check_pod_triggers(
             except PodMembershipError:
                 chained = None
             if chained is not None:
+                # the devil's advocate "listens" to the chained (escalation)
+                # pod when the boss (a head or the leader) is a member
+                # (visible, never silent).
+                log_devils_advocate_listening(org, chained, roles)
                 run_pod(backend, chained,
                         max_rounds=(config or {}).get("pod_max_rounds", 3),
                         transcripts_dir=transcripts_dir,
