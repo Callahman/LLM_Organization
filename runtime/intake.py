@@ -59,12 +59,16 @@ def _assemble_context(
     if initial_prompt and initial_prompt.strip():
         parts.append(f"INITIAL PROMPT:\n{initial_prompt}")
         # The goal is already stated (in the initial prompt) — the leader must
-        # NOT re-ask it; clarify scope / size / ownership / success criteria
-        # from it.
+        # NOT re-ask it; before asking anything, it must assess whether
+        # clarification is even needed (only ask about what the prompt does
+        # not already answer; if it is comprehensive, stop).
         parts.append(
             "THE GOAL IS ALREADY STATED (see INITIAL PROMPT) — do NOT re-ask "
-            "the goal; clarify scope, size, ownership, and success criteria "
-            "from it."
+            "the goal. Before asking anything, assess whether clarification "
+            "is even needed: only ask about scope/size/ownership/success "
+            "criteria/etc. the prompt does not already answer; if it is "
+            "comprehensive, stop (empty questions, record defaults in "
+            "assumptions)."
         )
     if current_mission and current_mission.strip():
         parts.append(
