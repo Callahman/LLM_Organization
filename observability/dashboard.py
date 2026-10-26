@@ -25,6 +25,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import threading
@@ -71,6 +72,9 @@ class Watcher:
         self.paths = {
             "org_events": os.path.join(h, "org_events.jsonl"),
             "code_edits": os.path.join(h, "code_edits.jsonl"),
+            # item 10: the code-volume log (applied writes' line counts,
+            # segmented by file type) — the source for "code volume over time".
+            "code_volume": os.path.join(h, "code_volume.jsonl"),
             "tool_calls": os.path.join(h, "tool_calls.jsonl"),
             "cycles": os.path.join(h, "cycles.jsonl"),
             "stream": os.path.join(h, "stream.jsonl"),
@@ -80,6 +84,10 @@ class Watcher:
             # metrics: T_total, T_p, T_dept, T_role, H_peak, C, N_created,
             # M_satisfaction, E, EFFICIENCY_FLOOR).
             "efficiency_metrics": os.path.join(h, "efficiency_metrics.jsonl"),
+            # item 6: the invocations log (role + phase per model call) — the
+            # source for the org-flow panel's "current phase" + the active
+            # roles in that phase.
+            "invocations": os.path.join(h, "invocations.jsonl"),
         }
         self.transcripts_dir = os.path.join(root, "pods", "transcripts")
         # The org's roles (state/org_chart.json — written atomically by
@@ -87,6 +95,11 @@ class Watcher:
         # the role hierarchy levels (Leader/Head/Manager/IC).
         self.org_chart_path = os.path.join(root, "state", "org_chart.json")
         self._offsets: Dict[str, int] = {}
+        # item 8: the content hash of state/org_chart.json (md5 of the bytes).
+        # Re-reading on the hash (not just the size) means a same-size update
+        # (a status flip active->fired, an equal-length rename, ...) is not
+        # missed.
+        self._org_chart_sig: str = ""
         self._lock = threading.Lock()
         # state
         self.agents_by_dept: Dict[str, int] = {}
@@ -97,6 +110,9 @@ class Watcher:
         self.roles_by_id: Dict[str, Dict[str, Any]] = {}
         self.level_events: List[Dict[str, Any]] = []
         self.code_edits: List[Dict[str, Any]] = []
+        # item 10: the code-volume log (applied writes' line counts, segmented
+        # by file type) — the source for "code volume over time".
+        self.code_volume: List[Dict[str, Any]] = []
         self.tool_calls: List[Dict[str, Any]] = []
         self.cycles: List[Dict[str, Any]] = []
         self.halt_events: List[Dict[str, Any]] = []
@@ -117,6 +133,11 @@ class Watcher:
         # A6: the ts of the last streamed chunk (for the staleness gauge —
         # seconds since the model last produced output).
         self.last_stream_ts: float = 0.0
+        # item 6: the org-flow panel's state. The current phase (from the
+        # latest invocation's phase) + the active roles in that phase (the
+        # distinct roles invoked in the current phase, with their latest ts).
+        self.current_phase: int = 0
+        self._active_roles: Dict[str, Dict[str, Any]] = {}
 
     # --- ingestion (pure state mutations) -----------------------------------
 
@@ -146,6 +167,31 @@ class Watcher:
 
     def ingest_code_edit(self, e: Dict[str, Any]) -> None:
         self.code_edits.append(e)
+
+    def ingest_code_volume(self, e: Dict[str, Any]) -> None:
+        # item 10: one applied write's volume (ts, path, file_type, lines,
+        # department) — the source for "code volume over time".
+        self.code_volume.append(e)
+
+    def ingest_invocation(self, e: Dict[str, Any]) -> None:
+        # item 6: one model call (role + phase + ts) — the source for the
+        # org-flow panel's "current phase" + the active roles in that phase.
+        # A new phase resets the active-roles set (the roles active in the
+        # current phase are the ones invoked since the phase changed).
+        phase = int(e.get("phase", 0) or 0)
+        if not phase:
+            return
+        if phase != self.current_phase:
+            self.current_phase = phase
+            self._active_roles = {}
+        role = e.get("role", "") or e.get("name", "")
+        if role:
+            self._active_roles[role] = {
+                "role": role,
+                "phase": phase,
+                "department": e.get("department", ""),
+                "ts": e.get("ts", time.time()),
+            }
 
     def ingest_tool_call(self, e: Dict[str, Any]) -> None:
         self.tool_calls.append(e)
@@ -297,18 +343,21 @@ class Watcher:
         OrgState.save — whole-file JSON, not JSONL). Rebuilds the roles-by-id
         map (id -> {id, level, department, status}) and re-resolves any
         "Unresolved" level events (the org chart catches up after each
-        hire/fire). The file is re-read only when its size changes."""
+        hire/fire). The file is re-read only when its **content hash** changes
+        (item 8 — a same-size update, e.g. a status flip or an equal-length
+        rename, is not missed)."""
         try:
-            size = os.path.getsize(self.org_chart_path)
+            with open(self.org_chart_path, "rb") as f:
+                raw = f.read()
         except OSError:
             return
-        if self._offsets.get(self.org_chart_path) == size:
+        sig = hashlib.md5(raw).hexdigest()
+        if sig == self._org_chart_sig:
             return
-        self._offsets[self.org_chart_path] = size
+        self._org_chart_sig = sig
         try:
-            with open(self.org_chart_path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-        except (OSError, json.JSONDecodeError):
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return
         roles: Dict[str, Dict[str, Any]] = {}
         for rid, data in (payload.get("roles") or {}).items():
@@ -357,6 +406,8 @@ class Watcher:
                         self.ingest_org_event(e)
                     elif key == "code_edits":
                         self.ingest_code_edit(e)
+                    elif key == "code_volume":
+                        self.ingest_code_volume(e)
                     elif key == "tool_calls":
                         self.ingest_tool_call(e)
                     elif key == "stream":
@@ -367,6 +418,8 @@ class Watcher:
                         self.ingest_efficiency(e)
                     elif key == "efficiency_metrics":
                         self.ingest_s22_efficiency(e)
+                    elif key == "invocations":
+                        self.ingest_invocation(e)
                     else:
                         self.ingest_cycle(e)
             self._poll_transcripts()
@@ -430,6 +483,9 @@ class Watcher:
                     "level_events": self.level_events[-SNAPSHOT_CAP:],
                 },
                 "code_edits": self.code_edits[-SNAPSHOT_CAP:],
+                # item 10: the code-volume log (applied writes' line counts,
+                # segmented by file type).
+                "code_volume": self.code_volume[-SNAPSHOT_CAP:],
                 "tool_calls": self.tool_calls[-SNAPSHOT_CAP:],
                 "cycles": self.cycles[-SNAPSHOT_CAP:],
                 "halt_events": self.halt_events[-SNAPSHOT_CAP:],
@@ -441,6 +497,20 @@ class Watcher:
                 "efficiency_metrics": self.efficiency_metrics,
                 "pods": pods,
                 "stream": stream,
+                # item 6: the org-flow panel — the 8-phase flow, the current
+                # phase (from the latest invocation), the current cycle (from
+                # the latest cycles record), and the active roles in the
+                # current phase (from the invocations log).
+                "org_flow": {
+                    "current_phase": self.current_phase,
+                    "current_cycle": max(
+                        (c.get("cycle", 0) for c in self.cycles), default=0),
+                    "phases": [1, 2, 3, 4, 5, 6, 7, 8],
+                    "active_roles": [
+                        self._active_roles[k]
+                        for k in sorted(self._active_roles)
+                    ],
+                },
             }
 
 

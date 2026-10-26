@@ -227,7 +227,7 @@ canvas {
   color: var(--muted);
 }
 
-/* A3: caption under a chart heading (e.g. the tool-calls -> code-edits link). */
+/* A3: caption under a chart heading (e.g. the tool-calls -> code-volume link). */
 .chart-caption {
   margin: -4px 0 6px;
   font-size: 11px;
@@ -350,6 +350,86 @@ canvas {
 .level-head { background: #4cc9f0; }
 .level-manager { background: #80ed99; }
 .level-ic { background: #b388ff; }
+
+/* item 7: the generic time-series hover tooltip (each series' value at the
+   nearest x, with its legend label + color swatch). */
+.ts-tooltip {
+  position: fixed;
+  z-index: 50;
+  display: none;
+  background: #1b2334;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 11px;
+  max-width: 320px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.ts-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.5;
+}
+.ts-tip-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+}
+.ts-tip-label { color: var(--text); flex: 1; }
+.ts-tip-val { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* item 6: the org-flow panel (the 8-phase flow + current phase + active
+   roles). */
+.org-flow { padding: 6px 0; }
+.org-flow.busy { color: var(--text); }
+.org-stepper {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.org-step {
+  display: inline-block;
+  min-width: 26px;
+  text-align: center;
+  padding: 3px 7px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--card);
+}
+.org-step-done { color: #80ed99; border-color: #2c4a3a; }
+.org-step-current {
+  color: #0b1020;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.org-step-sep { color: var(--muted); font-size: 12px; }
+.org-cycle {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.org-roles { display: flex; flex-direction: column; gap: 4px; }
+.org-role-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+.org-role-id { font-weight: 700; color: var(--text); flex: none; }
+.org-role-dept { color: var(--muted); flex: none; }
+.org-role-task { color: var(--muted); flex: 1; }
+.org-empty { color: var(--muted); font-size: 12px; padding: 4px 0; }
 
 @media (max-width: 900px) {
   main {

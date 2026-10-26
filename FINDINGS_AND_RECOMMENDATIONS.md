@@ -35,23 +35,28 @@
 | 2 | Routing: task-based classifier (task signal drives; code development = MEDIUM) | ✅ done |
 | F1 | Frontend: sub-renderer per panel + memoization per data change + data-bound Event/Efficiency panels | ✅ done |
 | F2 | History: `invocations.jsonl` records `role` + `department` | ✅ done |
-| 4 | Agents chart: current active headcount per department | 🔄 partial — headcount chips in; chart series still cumulative |
-| 7 | Tooltips: generic hover tooltip on `drawTimeSeries` (+ flowchart) | ⬜ pending |
-| 10 | Code volume: file-write log, all role code incl. policies, `departments/` | ⬜ pending |
-| 8 | Roles by hierarchy: investigate manager activity in logs + dashboard-side fix | 🔄 partial — investigation done (no managers in logs); dashboard-side fix pending |
+| 4 | Agents chart: current active headcount per department | ✅ done — headcount chips + the chart series now show net headcount per department |
+| 7 | Tooltips: generic hover tooltip on `drawTimeSeries` | ✅ done |
+| 10 | Code volume: file-write log, all role code incl. policies, `departments/` | ✅ done |
+| 8 | Roles by hierarchy: investigate manager activity in logs + dashboard-side fix | ✅ done — investigation done (no managers in logs); `poll_org_chart` now re-reads on a content hash |
 | 9 | Agents total: show total headcount (not net events) + confirm cap enforced | ✅ done |
-| 6 | Flowchart module: org flow panel (stepper + current phase + roles + task from pod agenda) | ⬜ pending |
+| 6 | Flowchart module: org flow panel (stepper + current phase + roles + task from pod agenda) | ✅ done |
 
 > Status legend: ⬜ pending · 🔄 in progress / partial · ✅ done
 >
-> **Verified this pass:** item 2 is now fully rolled out (code development = MEDIUM, tested in
+> **Verified this pass (frontend chart fixes):** items **4, 6, 7, and 10** are now done — the
+> agents chart series shows net headcount per department (item 4); the generic hover tooltip is on
+> `drawTimeSeries` (item 7); `code_volume` logging + the "Code volume over time" chart are in
+> (item 10); and the org-flow panel (stepper + current phase + active roles + task from the pod
+> agenda) is in (item 6).
+>
+> **Verified in the prior pass:** item 2 is fully rolled out (code development = MEDIUM, tested in
 > `tests/test_complexity.py`); item 9 is done (total headcount net of fires + cap confirmed
 > enforced); item 8's investigation is done (no managers in any run's logs — the org is stuck at
-> bootstrap); item 4 is partial (current headcount per department renders as headcount chips; the
-> chart series is still the cumulative hire/activity series).
+> bootstrap) + the dashboard content-hash fix.
 >
-> **Rolled out earlier:** items 1, 3 (pipeline), 11 + 5 (transcripts, prior pass), and the two
-> new items **F1** (frontend sub-renderers/memoization/data-binding) and **F2** (invocations log
+> **Rolled out earlier:** items 1, 3 (pipeline), 11 + 5 (transcripts), and the two new items
+> **F1** (frontend sub-renderers/memoization/data-binding) and **F2** (invocations log
 > `role`+`department`).
 
 ---
@@ -236,12 +241,14 @@ one series per department is what was requested.
 calls in one series), or (b) current headcount per department (from the org chart) as the
 primary series? These are different metrics.
 
-**Status (verified — partial).** Answered — option b (current active headcount per department).
-The current headcount per department now renders as **headcount chips** in the Agents card
-(`renderHeadcountChips` in `observability/web/app.js`, from `state.agents.by_department`), which
-answers the metric question (how large is the org, and which departments make up a majority of
-the headcount). The **chart series itself is still the cumulative hire + tool-call activity
-series** (the "duplicated" look from the original finding is not fixed) — so item 4 is partial.
+**Rolled out (per your answer 4, option b — current active headcount per department).** The
+current headcount per department renders as **headcount chips** in the Agents card
+(`renderHeadcountChips` in `observability/web/app.js`, from `state.agents.by_department`), and
+the **chart series now shows the net headcount per department over time** — a new
+`buildNetHeadcountSeries` accumulates the hire/fire deltas per department (clamped at 0, matching
+the dashboard's `agents_by_dept`), so the final value per department is the current active
+headcount the chips show. The old "duplicated" cumulative hire + tool-call activity series is
+gone.
 
 ---
 
@@ -301,8 +308,9 @@ headcount) but no managers. So the dashboard is **not** broken — it correctly 
 The pipeline *does* support manager hiring (Phase 4 Plan hires the managers the team objectives
 name; Phase 5 Staff runs the manager branch) — the runs simply never named a manager, so the org
 is stuck at bootstrap (not growing): **likely cause (a) confirmed**, not a stale-file bug. The
-dashboard-side fix (`poll_org_chart` re-read on a content hash / mtime rather than size-only) is
-**still pending**.
+dashboard-side fix is **done**: `poll_org_chart` now re-reads `state/org_chart.json` only when
+its **content hash** (md5 of the bytes) changes — so a same-size update (a status flip
+active→fired, an equal-length rename, ...) is not missed.
 
 ---
 
@@ -372,9 +380,14 @@ renders the stepper + the role/task list.
 context (the prompt), or from the pod agenda / the decomposition objective? The invoke context
 is more granular but noisier.
 
-**Status (verified — pending).** No org-flow panel exists yet (no stepper in
-`observability/web/index.html`, and the snapshot carries no `current_phase` field). Answered per
-your answer 6: the tasks come from the pod agenda / decomposition objective.
+**Rolled out (per your answer 6 — tasks from the pod agenda / decomposition objective).** The
+org-flow panel is in: `observability/dashboard.py` tracks the **current phase** (from the latest
+`invocations.jsonl` record — a phase change resets the active-roles set) + the **active roles in
+that phase** and exposes them in the snapshot's `org_flow` field (current phase, current cycle,
+the 8-phase flow, active roles); `observability/web/app.js::renderOrgFlowPanel` renders the
+**horizontal stepper** (current phase highlighted), the current cycle, and the active roles with
+**their task from the pod agenda / decomposition objective** (matched by role from the active
+pod's `agenda` entries).
 
 ---
 
@@ -390,10 +403,12 @@ series' value at that point with its legend label + color** (so the operator can
 shaded band is which, and the value at any x). Reuse the existing tooltip DOM pattern
 (`bar-tooltip` / `edit-tooltip`).
 
-**Status (verified — pending).** `drawTimeSeries` still only has the `hoverRecords` path (the
-per-edit detail tooltip on the code-edits chart); there is **no generic per-point hover tooltip**
-yet. (Your answer 7: implement the rec as-is; make sure it's included in the flow-chart from
-item 6.)
+**Rolled out (per your answer 7 — implement as-is).** `drawTimeSeries` now has a **generic hover
+tooltip**: on mousemove it finds the nearest time point and lists **each series' value at that
+point with its legend label + color swatch** (so the operator can see which shaded band is which,
+and the value at any x). The old per-edit `hoverRecords` path was removed. It applies to all the
+time-series charts (agents / levels / code volume / tools / errors). The org-flow panel (item 6)
+is a **stepper**, not a time-series chart, so the per-point tooltip pattern does not apply to it.
 
 ---
 
@@ -421,10 +436,15 @@ timeline. The frontend chart becomes a cumulative stacked series by file type (r
 whole repo (including `runtime/`, `prompts/`, etc.)? And is "lines of code" = physical lines
 (including blank) or non-blank lines?
 
-**Status (verified — pending).** No `code_volume` logging exists in the runtime yet (no
-`history/code_volume.jsonl` writer), and the chart is still "Code edits over time" (edit
-attempts, applied vs refused). Answered per your answer 10 (option a): a file-write log of all
-role code (including policies) under `departments/`, physical lines.
+**Rolled out (per your answer 10, option a — file-write log of all role code incl. policies,
+`departments/`, physical lines).** `runtime/history.py::log_code_volume` writes a
+`history/code_volume.jsonl` record (`{ts, role, path, file_type, lines, department}`) for each
+applied write; it is called at every role-code write point — IC self-edits
+(`runtime/dispatch_common.py::_run_self_edits`), head policies (`generate_head_policies`), and
+automation scripts. `observability/dashboard.py` reads the log and exposes it in the snapshot's
+`code_volume` field; `observability/web/app.js::buildCodeVolumeSeries` renders it as a
+**cumulative stacked series by file type**, and the card is now "Code volume over time (lines by
+file type)".
 
 ---
 
@@ -478,9 +498,11 @@ into a **sub-renderer per panel**, each **memoized per data change**:
   (`state.halt_events`, `state.efficiency`), so a panel re-renders exactly when the data it
   displays changes.
 
-> Note: this is a **structure** refactor (sub-renderers + memoization + data binding). It does
-> **not** change the metrics — the agents-chart "current active headcount per department" (item 4),
-> the generic hover tooltips (item 7), and the code-volume chart (item 10) are still pending.
+> Note: this is a **structure** refactor (sub-renderers + memoization + data binding). It did
+> **not** change the metrics at the time — the agents-chart "current active headcount per
+> department" (item 4), the generic hover tooltips (item 7), and the code-volume chart (item 10)
+> were still pending. They have since been rolled out (see their sections above), and each now
+> slots into its own sub-renderer.
 
 ### F2. History — `invocations.jsonl` records `role` + `department`
 
@@ -498,16 +520,15 @@ re-deriving it.
    dashboard looks empty/confused). ✅ done
 3. **Items 1 + 2** — the intake + routing rework (bigger pipeline changes). ✅ both done (item 2's
    tier rework — code development = MEDIUM — is rolled out + tested).
-4. **Items 4, 7, 10** — frontend chart fixes (tooltips, combine, code volume). 🔄 item 4 partial
-   (current headcount per department renders as chips; the chart series is still the cumulative
-   hire/activity series); ⬜ items 7 + 10 pending (the F1 structure refactor —
-   sub-renderers/memoization/data-binding — is ✅ done, so these chart fixes now slot into the
-   sub-renderers).
+4. **Items 4, 7, 10** — frontend chart fixes (tooltips, combine, code volume). ✅ all done (item 4
+   — the chart series now shows net headcount per department; item 7 — the generic hover tooltip
+   is on `drawTimeSeries`; item 10 — `code_volume` logging + the "Code volume over time" chart).
 5. **Items 8, 9** — investigate the org growth + headcount metric (may surface a pipeline bug).
-   ✅ item 9 done (total headcount net of fires + cap confirmed enforced); 🔄 item 8 partial
-   (investigation done: no managers in any run's logs — the org is stuck at bootstrap; the
-   dashboard-side content-hash fix is pending).
-6. **Item 6** — the new flowchart module (largest frontend addition). ⬜ pending
+   ✅ both done (item 9 — total headcount net of fires + cap confirmed enforced; item 8 —
+   investigation done: no managers in any run's logs, the org is stuck at bootstrap; the
+   dashboard-side content-hash fix is in).
+6. **Item 6** — the new flowchart module (largest frontend addition). ✅ done (the org-flow panel:
+   stepper + current phase + active roles + task from the pod agenda).
 
 ---
 
@@ -518,8 +539,8 @@ re-deriving it.
 | 1 | Intake | Keep any Leader clarifying questions (not the goal, at a higher level), or go straight from the `INPUT` goal to Phase 2? | ✅ answered — keep clarification, never re-ask the goal; rolled out |
 | 2 | Routing | Task-based classifier (finer) or role-based with manager-chosen level (coarser)? Is IC code discussion/review MEDIUM? | ✅ answered — task-based; rolled out (code development = MEDIUM, tested) |
 | 3 | `department_caps` | Confirm Phase 2 = *which* departments, Phase 3 = *how many* (two fields, not one)? | ✅ answered — two fields; renamed to `mission_departments`; rolled out |
-| 4 | Agents chart | Combined activity per department, or current headcount per department as the primary series? | ✅ answered — current headcount per dept (your answer 4, option b); 🔄 partial (renders as headcount chips; the chart series is still the cumulative hire/activity series) |
-| 8 | Roles by hierarchy | Should the org have grown past 8 heads + 1 IC (pipeline bug), or is the file stale (dashboard bug)? | ✅ answered — check the logs (your answer 8); 🔄 investigation done: no managers in any run's logs (the org is stuck at bootstrap — the pipeline hires managers only when the plan names them); the dashboard-side content-hash fix is pending |
+| 4 | Agents chart | Combined activity per department, or current headcount per department as the primary series? | ✅ answered — current headcount per dept (your answer 4, option b); done (headcount chips + the chart series now shows net headcount per department) |
+| 8 | Roles by hierarchy | Should the org have grown past 8 heads + 1 IC (pipeline bug), or is the file stale (dashboard bug)? | ✅ answered — check the logs (your answer 8); done (investigation: no managers in any run's logs — the org is stuck at bootstrap; the dashboard-side content-hash fix is in) |
 | 9 | Agents total | Current headcount (capped at 50) with churn separate, or a true cumulative-hires counter? | ✅ answered — total headcount + confirm cap (your answer 9); done (total headcount net of fires; cap confirmed enforced: dept-cap chain ≤ 50 + `MAX_ORG_ROLES=60` backstop) |
-| 10 | Code volume | Only `departments/` or the whole repo? Physical lines or non-blank lines? | ✅ answered — file-write log, `departments/`, physical lines (your answer 10, option a); ⬜ pending |
-| 6 | Flowchart | Task text from the role's latest invoke context, or from the pod agenda / decomposition objective? | ✅ answered — pod agenda / decomposition objective (your answer 6); ⬜ pending |
+| 10 | Code volume | Only `departments/` or the whole repo? Physical lines or non-blank lines? | ✅ answered — file-write log, `departments/`, physical lines (your answer 10, option a); done |
+| 6 | Flowchart | Task text from the role's latest invoke context, or from the pod agenda / decomposition objective? | ✅ answered — pod agenda / decomposition objective (your answer 6); done |

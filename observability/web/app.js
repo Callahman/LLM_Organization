@@ -102,37 +102,11 @@ function drawLegend(ctx, series, w) {
 
 /* Draw cumulative time series — stacked areas or overlaid lines.
  * series: [{label, color, points: [{t, v}]}] with v cumulative. */
-function drawTimeSeries(canvas, series, stacked, emptyMsg, hoverRecords) {
+function drawTimeSeries(canvas, series, stacked, emptyMsg) {
   stacked = stacked !== false;
   const bounds = timeBounds(series);
-  // A4: a custom empty message (e.g. "no edit attempts yet" for the
-  // code-edits chart — a missing file is not "all refused").
+  // A4: a custom empty message (e.g. "no code volume yet").
   if (!bounds) return drawEmpty(canvas, emptyMsg);
-  // A4: hover tooltip with the per-edit detail (path + refusal reason) for
-  // the code-edits chart (hoverRecords = the raw edit records).
-  if (hoverRecords && hoverRecords.length) {
-    canvas.onmousemove = (ev) => {
-      const last = hoverRecords[hoverRecords.length - 1];
-      let tip = $('edit-tooltip');
-      if (!tip) {
-        tip = document.createElement('div');
-        tip.id = 'edit-tooltip';
-        tip.className = 'bar-tooltip';
-        document.body.appendChild(tip);
-      }
-      const detail = last.ok
-        ? last.path + ' — applied'
-        : last.path + ' — refused: ' + (last.error || 'no reason');
-      tip.textContent = detail;
-      tip.style.display = 'block';
-      tip.style.left = (ev.clientX + 12) + 'px';
-      tip.style.top = (ev.clientY + 12) + 'px';
-    };
-    canvas.onmouseleave = () => {
-      const tip = $('edit-tooltip');
-      if (tip) tip.style.display = 'none';
-    };
-  }
   const { ctx, w, h } = prepCanvas(canvas);
   const padL = 34, padB = 20, padT = 14, padR = 8;
   const iw = w - padL - padR, ih = h - padT - padB;
@@ -143,6 +117,43 @@ function drawTimeSeries(canvas, series, stacked, emptyMsg, hoverRecords) {
   for (const s of series) for (const p of s.points) times.add(p.t);
   const ts = Array.from(times).sort((a, b) => a - b);
   const vals = series.map((s) => ts.map((t) => valueAt(s.points, t)));
+
+  // item 7: generic hover tooltip — on mousemove, find the nearest time point
+  // and list each series' value at that point with its legend label + color
+  // (so the operator can see which shaded band is which, and the value at any
+  // x). Reuses the tooltip DOM pattern.
+  canvas.onmousemove = (ev) => {
+    const r = canvas.getBoundingClientRect();
+    const mx = ev.clientX - r.left;
+    let best = ts[0], bestDx = Infinity;
+    for (const t of ts) {
+      const dx = Math.abs(X(t) - mx);
+      if (dx < bestDx) { bestDx = dx; best = t; }
+    }
+    const rows = series.map((s) => ({
+      label: s.label, color: s.color, v: valueAt(s.points, best),
+    }));
+    let tip = $('ts-tooltip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'ts-tooltip';
+      tip.className = 'ts-tooltip';
+      document.body.appendChild(tip);
+    }
+    tip.innerHTML = rows.map((row) =>
+      '<div class="ts-tip-row">' +
+      '<span class="ts-tip-swatch" style="background:' + row.color +
+      '"></span>' +
+      '<span class="ts-tip-label">' + row.label + '</span>' +
+      '<span class="ts-tip-val">' + row.v + '</span></div>').join('');
+    tip.style.display = 'block';
+    tip.style.left = (ev.clientX + 12) + 'px';
+    tip.style.top = (ev.clientY + 12) + 'px';
+  };
+  canvas.onmouseleave = () => {
+    const tip = $('ts-tooltip');
+    if (tip) tip.style.display = 'none';
+  };
 
   let maxV = 1;
   ts.forEach((t, i) => {
@@ -353,6 +364,45 @@ function buildCumulativeSeries(records, keyFn, tsFn) {
   }));
 }
 
+// item 4: the net headcount over time per department (accumulating the
+// hire/fire deltas: hire +1, fire -1, clamped at 0 — matching the dashboard's
+// agents_by_dept). The final value per department = the current active
+// headcount (the metric the headcount chips show).
+function buildNetHeadcountSeries(events) {
+  const map = {};
+  for (const e of events) {
+    const k = e.department || 'leadership';
+    (map[k] = map[k] || []).push({ t: e.ts, d: e.delta || 0 });
+  }
+  return Object.keys(map).sort().map((k, i) => {
+    let v = 0;
+    const points = map[k].map((p) => {
+      v = Math.max(0, v + p.d);
+      return { t: p.t, v };
+    });
+    return { label: k, color: PALETTE[i % PALETTE.length], points };
+  });
+}
+
+// item 10: the code volume over time — total lines of code by file type,
+// cumulative (accumulating the applied writes' physical line counts,
+// segmented by file type).
+function buildCodeVolumeSeries(records) {
+  const map = {};
+  for (const r of records) {
+    const k = r.file_type || '.unknown';
+    (map[k] = map[k] || []).push({ t: r.ts, d: r.lines || 0 });
+  }
+  return Object.keys(map).sort().map((k, i) => {
+    let v = 0;
+    const points = map[k].map((p) => {
+      v += p.d;
+      return { t: p.t, v };
+    });
+    return { label: k, color: PALETTE[i % PALETTE.length], points };
+  });
+}
+
 // A2: distinct color per phase 1–8 (not all beige) so each phase in the
 // cycle-duration bars is recognizable at a glance.
 const PHASE_COLORS = {
@@ -554,14 +604,14 @@ function renderPanel(name, data, renderFn) {
  * drawing was previously inlined in render(); it is now a sub-renderer per
  * panel so each chart is independently memoized). */
 function renderAgentsChart() {
-  // A5: the agents chart shows the cumulative hire/fire series (by department)
-  // AND the activity-over-time series (model calls per dept from tool_calls).
+  // item 4: the current active headcount per department as the primary series
+  // (the net headcount over time — the final value per department = the
+  // current headcount the headcount chips show). This answers "how large is
+  // the org, and which departments make up a majority of the headcount".
   drawTimeSeries(
     $('chart-agents'),
-    buildCumulativeSeries(state.agents.events, (e) => e.department, (e) => e.ts)
-      .concat(buildCumulativeSeries(
-        state.tool_calls, (e) => e.department || 'unknown', (e) => e.ts)),
-    true);
+    buildNetHeadcountSeries(state.agents.events),
+    true, 'no hires yet');
 }
 
 function renderLevelsChart() {
@@ -574,15 +624,12 @@ function renderLevelsChart() {
 }
 
 function renderEditsChart() {
-  // A4: segment the code-edits chart by department, applied/refused within
-  // each department (applied solid, refused striped).
+  // item 10: code volume over time — total lines of code by file type,
+  // cumulative (replacing the edit-attempts chart).
   drawTimeSeries(
     $('chart-edits'),
-    buildCumulativeSeries(
-      state.code_edits,
-      (e) => (e.department || 'unknown') + ' ' + (e.ok ? 'applied' : 'refused'),
-      (e) => e.ts),
-    false, 'no edit attempts yet', state.code_edits);
+    buildCodeVolumeSeries(state.code_volume || []),
+    true, 'no code volume yet');
 }
 
 function renderToolsChart() {
@@ -744,6 +791,58 @@ function renderLoopMetricsPanel() {
   el.innerHTML = parts.join('');
 }
 
+// item 6: the org-flow panel — the 8-phase flow (stepper), the current phase
+// (highlighted), the current cycle, and the active roles in the current phase
+// (their task = the pod agenda / decomposition objective, matched by role).
+function renderOrgFlowPanel() {
+  const el = $('org-flow');
+  if (!el || !state) return;
+  const flow = state.org_flow;
+  if (!flow || !flow.current_phase) {
+    el.textContent = 'no phase activity yet';
+    el.classList.remove('busy');
+    return;
+  }
+  el.classList.add('busy');
+  const phases = flow.phases || [1, 2, 3, 4, 5, 6, 7, 8];
+  const current = flow.current_phase;
+  const cycle = flow.current_cycle || 0;
+  // The active pod's agenda (the roles + their task, matched by role) — the
+  // task source (your answer 6: the pod agenda / decomposition objective).
+  const pods = state.pods || [];
+  const activePod = pods
+    .filter((p) => p.status === 'active')
+    .sort((a, b) => (b.updated || 0) - (a.updated || 0))[0];
+  const agenda = {};
+  if (activePod) {
+    for (const e of activePod.entries) {
+      if (e.kind === 'agenda' && e.role) agenda[e.role] = e.summary || '';
+    }
+  }
+  // The stepper: each phase as a step (done < current, current highlighted,
+  // upcoming > current).
+  const steps = phases.map((ph) => {
+    const cls = ph < current ? 'done' : (ph === current ? 'current' : 'todo');
+    return '<span class="org-step org-step-' + cls + '">' + ph + '</span>';
+  }).join('<span class="org-step-sep">→</span>');
+  // The active roles in the current phase (with their task from the agenda).
+  const roles = flow.active_roles || [];
+  const roleRows = roles.length
+    ? roles.map((r) =>
+        '<div class="org-role-row">' +
+        '<span class="org-role-id">' + r.role + '</span>' +
+        (r.department
+          ? '<span class="org-role-dept">' + r.department + '</span>' : '') +
+        '<span class="org-role-task">' +
+        (agenda[r.role] || '(task from the pod agenda)') + '</span>' +
+        '</div>').join('')
+    : '<div class="org-empty">no active roles in phase ' + current + ' yet</div>';
+  el.innerHTML =
+    '<div class="org-stepper">' + steps + '</div>' +
+    '<div class="org-cycle">cycle ' + cycle + ' · phase ' + current + '</div>' +
+    '<div class="org-roles">' + roleRows + '</div>';
+}
+
 // A6: staleness gauge — seconds since the last stream chunk (the model has
 // been silent for a while). Warns past a threshold (60s: the model is
 // probably stuck or the stream is broken).
@@ -767,16 +866,19 @@ function render() {
   renderPanel('staleness', [state.last_stream_ts, state.ts], renderStaleness);
   // A5: current headcount per department (number chips).
   renderPanel('headcount', state.agents.by_department, renderHeadcountChips);
-  // The agents chart (cumulative hire/fire by department + activity).
-  renderPanel('agents-chart',
-    [state.agents.events, state.tool_calls], renderAgentsChart);
+  // item 4: the agents chart (the current active headcount per department —
+  // the net headcount over time).
+  renderPanel('agents-chart', state.agents.events, renderAgentsChart);
   // Role hierarchy levels: the current counts per level (chips + roster).
   renderPanel('level-chips',
     [state.agents.by_level, state.agents.roles], renderLevelChips);
   // Role hierarchy levels: the cumulative hire/fire series (by level).
   renderPanel('levels-chart', state.agents.level_events, renderLevelsChart);
-  // The code-edits chart (applied/refused by department).
-  renderPanel('edits-chart', state.code_edits, renderEditsChart);
+  // item 6: the org-flow panel (the 8-phase flow + current phase + active
+  // roles, data-bound to state.org_flow + the active pod's agenda).
+  renderPanel('org-flow', [state.org_flow, state.pods], renderOrgFlowPanel);
+  // item 10: the code-volume chart (lines by file type, cumulative).
+  renderPanel('edits-chart', state.code_volume || [], renderEditsChart);
   // The tool-calls chart (by outcome + by department).
   renderPanel('tools-chart', state.tool_calls, renderToolsChart);
   // The cycle-duration bars (phase durations per iteration).

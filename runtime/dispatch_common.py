@@ -412,6 +412,13 @@ def _work_path(ic: Role, task: Dict[str, Any]) -> str:
     return f"departments/{ic.department}/{ic.team}/{task.get('id', 'work')}.md"
 
 
+def _file_type(path: str) -> str:
+    """The file's type (extension, lowercase, with the leading dot) — the
+    segmentation key for the "code volume over time" metric (item 10)."""
+    _, ext = os.path.splitext(str(path))
+    return ext.lower() or ".unknown"
+
+
 def _upward_report(role: Role, children: List[Dict[str, Any]]) -> Dict[str, Any]:
     """A structured upward report: a bounded summary + artifact pointers (not
     the full work). This is how work propagates up the line of command."""
@@ -562,12 +569,28 @@ def _run_self_edits(
     _ic_pre_read(ic, edits, history)
     results = apply_code_edits(ic, edits, log=_self_edit_log(history, ic.id))
     if history is not None:
+        # A path -> content map (for the code-volume log — the written file's
+        # line count). The keys are the (possibly repaired) paths, matching the
+        # results' paths.
+        content_by_path = {
+            str(e.get("path", "")): e.get("content", "")
+            for e in edits if isinstance(e, dict)
+        }
         for r in results:
             history.log_code_edit(
                 ic.id, r["path"], r["ok"],
                 error=r.get("error", ""),
                 department=ic.department,
             )
+            # item 10: log the code volume for each applied write (the written
+            # file's physical line count, segmented by file type).
+            if r.get("ok"):
+                history.log_code_volume(
+                    ic.id, r["path"],
+                    _file_type(r["path"]),
+                    len(str(content_by_path.get(r["path"], "")).splitlines()),
+                    department=ic.department,
+                )
     return results
 
 
@@ -831,6 +854,16 @@ def run_automation(org, leader, eff, backend, approver_fn, history=None,
     if script:
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(script)
+        # item 10: log the automation script's code volume (the written
+        # script's physical line count, segmented by file type) — the script
+        # is role code (written by the IC), so it counts toward the metric.
+        if history is not None:
+            history.log_code_volume(
+                ic.id, script_path,
+                _file_type(script_path),
+                len(script.splitlines()),
+                department=ic.department,
+            )
     org.log_event("automation_script_created", leader.id, ic.id,
                   {"task": task, "script_path": script_path,
                    "reasoning": reasoning})
@@ -1035,6 +1068,7 @@ def generate_head_policies(
     mission_digest: str,
     departments_dir: str = "departments",
     clarifications: Optional[Dict[str, str]] = None,
+    history: Optional[HistoryStore] = None,
 ) -> Dict[str, Dict[str, str]]:
     """Phase 4 (pre-decomposition): every department head — operational AND
     required (HR/Safety/Morality) — is invoked to author its department POLICY
@@ -1084,6 +1118,19 @@ def generate_head_policies(
         )
         if policy:
             _write_policy(head.department, policy, departments_dir)
+            # item 10: log the policy's code volume (the written policy file's
+            # physical line count, segmented by file type) — the policy is role
+            # code (under departments/), so it counts toward the metric.
+            if history is not None:
+                policy_path = os.path.join(
+                    departments_dir, head.department,
+                    f"{head.department.upper()}_POLICY.md")
+                history.log_code_volume(
+                    head.id, policy_path,
+                    _file_type(policy_path),
+                    len(policy.splitlines()),
+                    department=head.department,
+                )
         else:
             # A visible failure state (never silent): the head was invoked for
             # the department policy but returned none (the policy file stays a

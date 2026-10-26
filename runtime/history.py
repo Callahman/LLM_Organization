@@ -164,6 +164,21 @@ class HistoryStore:
              "ok": bool(ok), "error": error, "department": department},
         )
 
+    def log_code_volume(self, role_id: str, path: str, file_type: str,
+                        lines: int, department: str = "") -> str:
+        """Record one applied code write's volume (``history/code_volume.jsonl``)
+        — the source for the "code volume over time" metric (item 10). ``lines``
+        is the number of **physical** lines in the written file; ``file_type`` is
+        the extension (``.md``, ``.py``, ``.json``, ...). Carries ``department``
+        so the dashboard can segment volume by team without re-deriving it from
+        the path."""
+        return self._append(
+            "code_volume.jsonl",
+            {"ts": time.time(), "role": role_id, "path": path,
+             "file_type": file_type, "lines": int(lines),
+             "department": department},
+        )
+
     def log_tool_call(self, stat: Dict[str, Any]) -> str:
         """Record one backend call's stats (``history/tool_calls.jsonl``) —
         ``{ts, role, mode, outcome, error, latency}``; the source for the

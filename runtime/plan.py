@@ -305,6 +305,7 @@ def run_plan(
     head_policies = generate_head_policies(
         backend, org, dept_objectives, digest,
         clarifications=clarifications,
+        history=history,
     )
 
     departments: List[Dict[str, Any]] = []

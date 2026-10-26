@@ -25,12 +25,23 @@
     <div id="role-roster" class="role-roster"></div>
   </div>
   <div class="card">
-    <h2>Code edits over time</h2>
+    <h2>Org flow (phase 1–8)</h2>
+    <p class="chart-caption">The organization's 8-phase flow, the current phase
+      (from the latest invocation), the current cycle, and the active roles in
+      the current phase (their task is the pod agenda / decomposition
+      objective).</p>
+    <div id="org-flow" class="org-flow">no phase activity yet</div>
+  </div>
+  <div class="card">
+    <h2>Code volume over time (lines by file type)</h2>
+    <p class="chart-caption">Total lines of code written by the roles (all role
+      code incl. policies, under <code>departments/</code>), cumulative by file
+      type.</p>
     <canvas id="chart-edits"></canvas>
   </div>
   <div class="card">
     <h2>Tool calls over time (outcome + caller)</h2>
-    <p class="chart-caption">File writes: see the code-edits chart (the model
+    <p class="chart-caption">File writes: see the code-volume chart (the model
       has a single <code>submit_output</code> tool).</p>
     <canvas id="chart-tools"></canvas>
   </div>
