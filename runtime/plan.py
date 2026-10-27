@@ -144,8 +144,18 @@ def _allot_team_caps(org: OrgState, backend, head: Role,
     if err is not None:
         org.log_event("headcount_allotment_failed", head.id, None,
                       {"error": err})
-        return
-    caps = _parse_team_caps(out, teams, int(dept_cap))
+    caps = _parse_team_caps(out, teams, int(dept_cap)) if out else {}
+    # Robust fallback: if the head's allotment failed or returned an empty /
+    # malformed mapping, default to an **even split** of the department cap
+    # across the teams. The cap chain must NOT silently collapse to no caps —
+    # with no team caps the only backstop left is the hard org-size cap.
+    if not caps and teams:
+        per = max(1, int(dept_cap) // len(teams))
+        caps = {t: per for t in teams}
+        org.log_event("team_cap_defaulted", head.id, None,
+                      {"caps": caps,
+                       "reason": "head allotment empty/failed — even-split "
+                                 "default"})
     # 2. Pod B (all managers + the head) finalizes the team caps — the head
     # has final say (the pod deliberates; the head's allotment is the final).
     # The head is a member (like Pod A's leader) so a single-manager
@@ -209,6 +219,12 @@ def run_plan(
     the plan only reaches roles already in the org.
     """
     digest = mission_digest(mission)
+    # Clear the team caps before re-allotting them (multi-cycle: a team that
+    # was removed or renamed in a previous cycle leaves a stale cap in
+    # org.team_caps; the re-allotment below re-adds the caps for the current
+    # teams, so the stale ones are dropped — a stale cap is harmless but the
+    # clear keeps the cap table clean).
+    org.team_caps.clear()
     head_ids = [h.id for h in org.department_heads()]
     # The Leader is invoked with the efficiency panel (per-role /
     # per-department invoke time) so it can act on an inefficient role or
@@ -340,21 +356,40 @@ def run_plan(
             )
         # Hire the managers the team objectives name (the heads->managers
         # chain, through the HR approver). Phase 5 (Staff) invokes them.
+        # A manager that already exists (hired in a previous cycle) is
+        # **re-linked** to the current head/team so its reporting line matches
+        # the plan (the communication gate in the head+manager / manager+IC
+        # pods requires manager.reports_to == head.id) — the same multi-cycle
+        # drift that broke the manager+IC clarification pods for ICs.
         for t_obj in team_objectives:
-            manager = org.get(t_obj.get("manager_id", ""))
-            if manager is None and t_obj.get("manager_id"):
+            manager_id = t_obj.get("manager_id", "")
+            if not manager_id:
+                continue
+            manager = org.get(manager_id)
+            if manager is None:
                 # `team` becomes the team work dir
                 # (departments/<dept>/<team>/). Fall back to the manager_id so
                 # it is NEVER empty — an empty team leaves the ICs with no
                 # concrete work root.
                 _ensure_role(
-                    org, head, t_obj.get("manager_id"), "manager",
+                    org, head, manager_id, "manager",
                     head.department,
-                    t_obj.get("team") or t_obj.get("manager_id", ""),
+                    t_obj.get("team") or manager_id,
                     approver_fn,
                     direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
                     backend=backend, phase=4,
+                    history=history,
                 )
+            elif manager.reports_to != head.id:
+                # Re-link the reused manager to the current head/team (the
+                # communication gate requires manager.reports_to == head.id).
+                # Log the re-link (visible, never silent).
+                org.log_event("manager_relinked", head.id, manager_id,
+                              {"old_reports_to": manager.reports_to,
+                               "new_reports_to": head.id})
+                manager.reports_to = head.id
+                manager.department = head.department
+                manager.team = t_obj.get("team") or manager_id
         # (The head+manager clarification pod runs in Phase 5 (Staff), AFTER
         # the manager decomposes — see run_staff.)
         # the head allots the **team/IC caps** (Phase 4) +:

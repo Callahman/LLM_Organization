@@ -203,11 +203,18 @@ def resolve_role_definition(org: OrgState, role: Role) -> str:
 
 def _check_ic_cap(org: OrgState, new_role: Role,
                   direct_ic_cap: int = DIRECT_IC_CAP) -> None:
+    """The N-IC direct-report cap — enforced for **BOTH** a department head
+    and a manager (previously it returned early for managers, so a manager
+    could hire unlimited ICs — the unbounded IC explosion that drove the org
+    to the hard backstop). The cap bounds each boss's direct ICs so the
+    headcount stays finite even when the team caps are not allocated."""
     if new_role.architype != "ic":
         return
     boss = org.get(new_role.reports_to) if new_role.reports_to else None
-    if boss is None or boss.architype != "department_head":
-        return  # boss is a manager (no cap) or absent
+    if boss is None:
+        return
+    if boss.architype not in ("department_head", "manager"):
+        return
     direct_ics = sum(
         1 for r in org.active_roles()
         if r.architype == "ic" and r.reports_to == boss.id
@@ -215,7 +222,7 @@ def _check_ic_cap(org: OrgState, new_role: Role,
     if direct_ics >= direct_ic_cap:
         raise ResourcingError(
             f"{direct_ic_cap}-IC direct-report cap reached under {boss.id}; "
-            f"hire a manager to organize the ICs"
+            f"reuse an existing IC or hire a manager to organize the ICs"
         )
 
 
@@ -713,6 +720,18 @@ def allot_department_caps(
     if err is not None:
         org.log_event("headcount_allotment_failed", leader.id, None,
                       {"error": err})
+    # Robust fallback: if the leader's allotment failed or returned an empty /
+    # malformed mapping, default to an **even split** of the total across the
+    # departments. The cap chain must NOT silently collapse to no caps — with
+    # no department caps the only backstop left is the hard org-size cap, and
+    # the manager's IC decomposition drives the org straight to it.
+    if not caps and departments:
+        per = max(1, int(total) // len(departments))
+        caps = {d: per for d in departments}
+        org.log_event("headcount_allotment_defaulted", leader.id, None,
+                      {"caps": caps,
+                       "reason": "leader allotment empty/failed — even-split "
+                                 "default"})
     # 2. Pod A (all heads + the leader) finalizes the department caps — the
     # leader has final say (the pod deliberates; the leader's allotment is
     # the final). The leader is a member (like Pod B's head) so a single-head
@@ -765,14 +784,37 @@ def hire(
     approver_fn: Callable[[str, str, Role], Dict[str, str]],
     departments_dir: str = "departments",
     direct_ic_cap: int = DIRECT_IC_CAP,
+    history: Optional[Any] = None,
 ) -> Role:
     """Hire a role through the approval matrix + role-definition resolution +
-    the 3-IC cap + the approver's decision (HR / the Leader)."""
+    the N-IC cap + the **department cap** + the approver's decision (HR / the
+    Leader). ``history`` (optional) gets a headcount snapshot logged on the
+    hire (the dashboard's headcount-over-time plot)."""
     approver_type, ok, reason = required_approver(initiator, new_role)
     if not ok:
         raise ResourcingError(reason)
     def_key = resolve_role_definition(org, new_role)
     _check_ic_cap(org, new_role, direct_ic_cap=direct_ic_cap)
+    # The department cap (the headcount cap chain, top level) — a hire that
+    # would exceed the department's allotted cap is blocked (visible, never
+    # silent). This is a backstop that does NOT depend on the team caps being
+    # allocated: even if the LLM cap allotment collapsed, the department cap
+    # (or its even-split default) keeps the department bounded.
+    dept_cap = org.department_caps.get(new_role.department, 0)
+    if dept_cap:
+        current = sum(
+            1 for r in org.active_roles()
+            if r.department == new_role.department
+        )
+        if current + 1 > dept_cap:
+            org.log_event("department_cap_reached", initiator.id, new_role.id,
+                          {"department": new_role.department, "cap": dept_cap,
+                           "current": current})
+            raise ResourcingError(
+                f"department cap reached ({current}/{dept_cap}) for "
+                f"{new_role.department} — reuse an existing role, fire an "
+                f"unused one, or raise the cap before hiring {new_role.id}"
+            )
     decision = approver_fn(approver_type, "hire", new_role)
     if decision.get("decision") != "approve":
         org.log_event("hire_vetoed", initiator.id, new_role.id, decision)
@@ -784,6 +826,9 @@ def hire(
     org.log_event("hired", initiator.id, new_role.id,
                   {"approver": approver_type, "def_key": def_key,
                    "department": new_role.department})
+    if history is not None:
+        history.log_headcount(len(org.active_roles()), "hire",
+                              new_role.id, new_role.department)
     return new_role
 
 
@@ -865,6 +910,7 @@ def fire(
     approver_fn: Callable[[str, str, Role], Dict[str, str]],
     departments_dir: str = "departments",
     cascade: bool = True,
+    history: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Fire a role through the approval matrix + the approver's decision (HR
     determines whether the firing is needed) + offloading. Required
@@ -903,6 +949,9 @@ def fire(
     org.log_event("fired", initiator.id, target_id,
                   {"approver": approver_type, "offloading": plan,
                    "department": target.department, **detail})
+    if history is not None:
+        history.log_headcount(len(org.active_roles()), "fire",
+                              target_id, target.department)
     return plan
 
 

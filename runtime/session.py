@@ -850,6 +850,12 @@ class Session:
         status = "complete"
         for _ in range(max_iterations):
             self.cycles += 1
+            # The wall-clock start of this iteration (Phases 4-8) — the source
+            # for the cycle-level summary's `duration` (the per-iteration wall
+            # clock, distinct from the efficiency meter's T_total, which is
+            # the sum of recorded phase times and excludes the gaps between
+            # phases).
+            iter_started = time.time()
             # begin the loop iteration (reset the per-iteration
             # accumulators) and capture the active role ids (for N_created).
             self.efficiency.start_iteration()
@@ -882,6 +888,7 @@ class Session:
                 approver_fn=approver_fn,
                 config=self.config,
                 solo=self.solo,
+                history=self.history,
             )
             self.phases[5] = self.phases.get(5, 0) + 1
 
@@ -962,6 +969,19 @@ class Session:
             # E < floor).
             self._finish_efficiency(
                 iter_start_ids, mission_draft, dispatch_results, verdict)
+
+            # Log the **cycle-level** summary (one row per cycle for the
+            # dashboard's org-flow panel — the per-phase rows in
+            # cycles.jsonl make the flow look like it has too many cycles).
+            # `duration` is the wall-clock span of the whole iteration
+            # (Phases 4-8); `phases` is the per-phase breakdown.
+            snap = self.efficiency.last()
+            self.history.log_cycle_summary(
+                self.cycles, iter_started, time.time(),
+                phases=dict(snap["T_p"]) if snap else {},
+                headcount=len(self.org.active_roles()),
+                verdict=verdict,
+            )
 
             if status != "continue":
                 break

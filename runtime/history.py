@@ -212,6 +212,37 @@ class HistoryStore:
              "started": started, "duration": round(ended - started, 3)},
         )
 
+    def log_headcount(self, headcount: int, event: str, role_id: str,
+                      department: str = "") -> str:
+        """Record a headcount snapshot on a resourcing event (hire/fire) —
+        ``history/headcount.jsonl`` (``{ts, headcount, event, role,
+        department}``). The source for the dashboard's headcount-over-time
+        plot: a point on **every** hire and fire, so the plot updates
+        continuously instead of once per phase (the per-phase sampling in
+        ``efficiency_metrics.jsonl`` only moves on a phase boundary)."""
+        return self._append(
+            "headcount.jsonl",
+            {"ts": time.time(), "headcount": int(headcount), "event": event,
+             "role": role_id, "department": department},
+        )
+
+    def log_cycle_summary(self, cycle: int, started: float, ended: float,
+                          phases: Dict[int, float], headcount: int,
+                          verdict: str) -> str:
+        """Record one **cycle-level** summary (``history/cycle_summaries.jsonl``)
+        — ``{ts, cycle, started, ended, duration, phases, headcount,
+        verdict}``. The source for the dashboard's org-flow panel: **one row
+        per cycle** (the per-phase rows in ``cycles.jsonl`` make the flow look
+        like it has too many cycles — a 3-cycle run renders ~15 rows).
+        ``duration`` is the wall-clock span of the whole iteration (Phases
+        4-8), and ``phases`` is the per-phase breakdown (``{phase: seconds}``)."""
+        return self._append(
+            "cycle_summaries.jsonl",
+            {"ts": ended, "cycle": cycle, "started": started, "ended": ended,
+             "duration": round(ended - started, 3), "phases": phases,
+             "headcount": int(headcount), "verdict": verdict},
+        )
+
     # --- halt-event log ----------------------------------------------------
 
     def log_halt(self, department: str, scope: str, reason: str) -> str:
