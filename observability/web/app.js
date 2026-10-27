@@ -837,9 +837,22 @@ function renderOrgFlowPanel() {
         (agenda[r.role] || '(task from the pod agenda)') + '</span>' +
         '</div>').join('')
     : '<div class="org-empty">no active roles in phase ' + current + ' yet</div>';
+  // The cycle-level summaries (one row per cycle, with the per-iteration
+  // wall-clock duration + the per-phase breakdown) — the org-flow panel's
+  // cycle history (one row per cycle, not one row per phase as cycles.jsonl
+  // does, which made the flow look like it had too many cycles).
+  const cycleRows = (flow.cycles || []).slice().reverse().map((c) =>
+    '<div class="org-cycle-row">' +
+    '<span class="org-cycle-id">cycle ' + c.cycle + '</span>' +
+    (c.duration != null
+      ? '<span class="org-cycle-dur">' + c.duration + 's</span>' : '') +
+    (c.headcount != null
+      ? '<span class="org-cycle-hc">' + c.headcount + ' roles</span>' : '') +
+    '</div>').join('');
   el.innerHTML =
     '<div class="org-stepper">' + steps + '</div>' +
     '<div class="org-cycle">cycle ' + cycle + ' · phase ' + current + '</div>' +
+    (cycleRows ? '<div class="org-cycle-history">' + cycleRows + '</div>' : '') +
     '<div class="org-roles">' + roleRows + '</div>';
 }
 

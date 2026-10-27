@@ -185,8 +185,9 @@ def test_allot_department_caps_contains_pod_failure(tmp_path):
 def test_allot_department_caps_contains_allotment_failure(tmp_path):
     """Error containment: the leader's department-cap allotment that fails
     (even after its one corrective retry) is contained — the allotment does
-    NOT raise; the org falls back to the per-manager IC cap (no department
-    caps) and the failure is recorded (a visible org event)."""
+    NOT raise; the caps **default to an even split** of the total (the cap
+    chain must not silently collapse to no caps) and the failure is recorded
+    (a visible org event)."""
     leader = make_leader()
     org = OrgState(history_dir=str(tmp_path))
     org.add_role(_head("head1", "analytics"))
@@ -200,14 +201,18 @@ def test_allot_department_caps_contains_allotment_failure(tmp_path):
     # Must NOT raise — the allotment failure is contained.
     caps = allot_department_caps(org, backend, leader, mission_path,
                                  config={"head_count_total": 10})
-    # No department caps (the org falls back to the per-manager IC cap).
-    assert caps == {}
-    assert org.department_caps == {}
+    # The caps default to an even split of the total (the cap chain does not
+    # collapse to no caps — with no department caps the only backstop left is
+    # the hard org-size cap).
+    assert caps == {"analytics": 10}
+    assert org.department_caps == {"analytics": 10}
     # The corrective retry was attempted (the nudge context was sent).
     assert any(rid == "leader" and "[RETRY]" in c
                for (rid, c) in backend.contexts)
-    # The failure is recorded (a visible org event).
+    # The failure is recorded (a visible org event), and the default is
+    # recorded too.
     assert any(e["kind"] == "headcount_allotment_failed" for e in org.events)
+    assert any(e["kind"] == "headcount_allotment_defaulted" for e in org.events)
 
 
 def test_allot_team_caps_contains_pod_failure(tmp_path):

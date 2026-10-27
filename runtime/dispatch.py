@@ -114,7 +114,7 @@ def dispatch(
     )
     staff = run_staff(
         backend, org, leader, plan,
-        approver_fn=approver_fn, config=config, solo=solo,
+        approver_fn=approver_fn, config=config, solo=solo, history=history,
     )
     result = run_execute(
         backend, org, leader, staff,

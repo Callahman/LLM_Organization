@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from roles.base import Role
-from runtime.org import OrgState
+from runtime.org import OrgState, fire
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
 from runtime.history import HistoryStore
@@ -82,6 +82,7 @@ def run_staff(
     approver_fn=None,
     config: Optional[Dict[str, Any]] = None,
     solo: Optional[SoloTracker] = None,
+    history: Optional[HistoryStore] = None,
 ) -> StaffResult:
     """Run Phase 5 (Staff): the per-team manager workflow (IC decomposition +
     IC hiring). Consumes the ``PlanResult`` from Phase 4 (Plan) and returns a
@@ -126,14 +127,27 @@ def run_staff(
                 # Manager branch: the manager decomposes its team objective
                 # into IC tasks (invoked with the department POLICY + the
                 # bounded mission digest + the clarification pod's outcome
-                # ).
+                # ). The manager is shown the team's **existing ICs** so it
+                # REUSES them (names them in `ic_tasks`) instead of inventing
+                # new ids every cycle — an existing IC it does not reuse is
+                # fired / flagged for firing (below).
+                existing_ics = [
+                    r.id for r in org.active_roles()
+                    if r.architype == "ic" and r.reports_to == manager.id
+                ]
+                mgr_ctx = _manager_ctx(
+                    manager, t_obj.get("objective", ""),
+                    policy=head_policies.get(head.id, {}).get("policy", ""),
+                    digest=digest,
+                    clarification=pod.decision or "")
+                if existing_ics:
+                    mgr_ctx += (
+                        f" EXISTING ICs in your team (REUSE them — name each "
+                        f"one in `ic_tasks` with its task, or it will be "
+                        f"fired as unused; do NOT invent a new id for work an "
+                        f"existing IC can do): {', '.join(existing_ics)}.")
                 mgr_out = backend.invoke(
-                    manager,
-                    _manager_ctx(
-                        manager, t_obj.get("objective", ""),
-                        policy=head_policies.get(head.id, {}).get("policy", ""),
-                        digest=digest,
-                        clarification=pod.decision or ""),
+                    manager, mgr_ctx,
                     reasoning=classify_complexity(5, manager, {}), phase=5)
                 ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
                 # Solo (P4, manager): record the manager's decomposition
@@ -158,7 +172,22 @@ def run_staff(
                     if not ic_id:
                         continue
                     ic = org.get(ic_id)
-                    if ic is None:
+                    if ic is not None:
+                        # Re-link a reused IC to the current manager so its
+                        # reporting line matches the plan (the communication
+                        # gate in run_execute requires ic.reports_to ==
+                        # manager.id). Without this, an IC hired under a
+                        # different manager in a previous cycle breaks the
+                        # manager+IC clarification pod (PodMembershipError).
+                        # Log the re-link (visible, never silent).
+                        if ic.reports_to != manager.id:
+                            org.log_event("ic_relinked", manager.id, ic_id,
+                                          {"old_reports_to": ic.reports_to,
+                                           "new_reports_to": manager.id})
+                            ic.reports_to = manager.id
+                            ic.department = manager.department
+                            ic.team = manager.team
+                    else:
                         if not _team_cap_ok(org, manager.department, manager.team):
                             org.log_event(
                                 "team_cap_reached", manager.id, ic_id,
@@ -171,7 +200,56 @@ def run_staff(
                             manager.department, manager.team, approver_fn,
                             direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
                             backend=backend, phase=5,
+                            history=history,
                         )
+                # Fire / flag the existing ICs the manager did NOT reuse (they
+                # have no current task — the manager's decomposition did not
+                # name them). This keeps the team's headcount bounded across
+                # cycles (the manager reuses its ICs instead of the org
+                # accumulating one new IC per cycle). Goes through HR (a veto
+                # is logged, never swallowed); a missing approver / veto flags
+                # the IC for firing instead (visible, never silent).
+                reused_ids = {
+                    t.get("ic_id", "") for t in ic_tasks
+                    if isinstance(t, dict)
+                }
+                for ic_id in existing_ics:
+                    if ic_id in reused_ids:
+                        continue
+                    ic = org.get(ic_id)
+                    if ic is None or ic.status != "active":
+                        continue
+                    # IC conflict: if this IC was re-linked to a DIFFERENT
+                    # manager in this cycle (another team's decomposition
+                    # named it), it is in use — do not fire it (the re-link to
+                    # the other manager is the resolution).
+                    if ic.reports_to != manager.id:
+                        org.log_event("ic_reused_elsewhere", manager.id, ic_id,
+                                      {"reports_to": ic.reports_to,
+                                       "reason": "named by another team's "
+                                                 "decomposition — in use, "
+                                                 "not fired"})
+                        continue
+                    fired = False
+                    if approver_fn is not None:
+                        try:
+                            fire(org, manager, ic_id, approver_fn,
+                                 history=history)
+                            org.log_event("ic_fired_unused", manager.id, ic_id,
+                                          {"reason": "not reused by the "
+                                                     "manager's decomposition "
+                                                     "(no current task)"})
+                            fired = True
+                        except Exception as e:
+                            org.log_event("ic_flagged_for_firing",
+                                          manager.id, ic_id,
+                                          {"reason": "not reused; firing "
+                                                     "failed: " + str(e)})
+                    if not fired:
+                        org.log_event("ic_flagged_for_firing", manager.id, ic_id,
+                                      {"reason": "not reused by the manager's "
+                                                 "decomposition (no current "
+                                                 "task)"})
                 teams.append({
                     "t_obj": t_obj,
                     "manager": manager,
@@ -183,7 +261,18 @@ def run_staff(
                 ic_id = t_obj.get("ic_id", "")
                 if ic_id:
                     ic = org.get(ic_id)
-                    if ic is None:
+                    if ic is not None:
+                        # Re-link a reused IC to the current head (the
+                        # communication gate requires ic.reports_to ==
+                        # head.id). Log the re-link (visible, never silent).
+                        if ic.reports_to != head.id:
+                            org.log_event("ic_relinked", head.id, ic_id,
+                                          {"old_reports_to": ic.reports_to,
+                                           "new_reports_to": head.id})
+                            ic.reports_to = head.id
+                            ic.department = head.department
+                            ic.team = t_obj.get("team") or ic.team
+                    else:
                         # `team` becomes the team work dir
                         # (departments/<dept>/<team>/). Fall back to the ic_id
                         # so it is NEVER empty — an empty team leaves the IC
@@ -203,6 +292,7 @@ def run_staff(
                                 direct_ic_cap=(config or {}).get(
                                     "direct_ic_cap", 3),
                                 backend=backend, phase=5,
+                                history=history,
                             )
                 teams.append({
                     "t_obj": t_obj,

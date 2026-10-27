@@ -88,6 +88,15 @@ class Watcher:
             # source for the org-flow panel's "current phase" + the active
             # roles in that phase.
             "invocations": os.path.join(h, "invocations.jsonl"),
+            # the headcount-over-time log (a point on every hire and fire) —
+            # the source for the headcount plot that updates continuously
+            # (not just on a phase boundary, as efficiency_metrics.jsonl does).
+            "headcount": os.path.join(h, "headcount.jsonl"),
+            # the cycle-level summaries (one row per cycle, with the
+            # per-iteration wall-clock duration + the per-phase breakdown) —
+            # the source for the org-flow panel (one row per cycle, not one
+            # row per phase as cycles.jsonl does).
+            "cycle_summaries": os.path.join(h, "cycle_summaries.jsonl"),
         }
         self.transcripts_dir = os.path.join(root, "pods", "transcripts")
         # The org's roles (state/org_chart.json — written atomically by
@@ -116,6 +125,13 @@ class Watcher:
         self.tool_calls: List[Dict[str, Any]] = []
         self.cycles: List[Dict[str, Any]] = []
         self.halt_events: List[Dict[str, Any]] = []
+        # the headcount-over-time log (a point on every hire and fire) — the
+        # source for the headcount plot that updates continuously.
+        self.headcount: List[Dict[str, Any]] = []
+        # the cycle-level summaries (one row per cycle, with the
+        # per-iteration wall-clock duration + the per-phase breakdown) — the
+        # source for the org-flow panel (one row per cycle).
+        self.cycle_summaries: List[Dict[str, Any]] = []
         self.pods: Dict[str, Dict[str, Any]] = {}
         # the efficiency panel (per-role / per-department invoke
         # time). The efficiency log appends a *cumulative* snapshot after each
@@ -198,6 +214,19 @@ class Watcher:
 
     def ingest_cycle(self, e: Dict[str, Any]) -> None:
         self.cycles.append(e)
+
+    def ingest_headcount(self, e: Dict[str, Any]) -> None:
+        # the headcount-over-time log (a point on every hire and fire) — the
+        # source for the headcount plot that updates continuously (not just on
+        # a phase boundary).
+        self.headcount.append(e)
+
+    def ingest_cycle_summary(self, e: Dict[str, Any]) -> None:
+        # the cycle-level summaries (one row per cycle, with the
+        # per-iteration wall-clock duration + the per-phase breakdown) — the
+        # source for the org-flow panel (one row per cycle, not one row per
+        # phase as cycles.jsonl does).
+        self.cycle_summaries.append(e)
 
     def ingest_halt(self, e: Dict[str, Any]) -> None:
         self.halt_events.append(e)
@@ -420,6 +449,10 @@ class Watcher:
                         self.ingest_s22_efficiency(e)
                     elif key == "invocations":
                         self.ingest_invocation(e)
+                    elif key == "headcount":
+                        self.ingest_headcount(e)
+                    elif key == "cycle_summaries":
+                        self.ingest_cycle_summary(e)
                     else:
                         self.ingest_cycle(e)
             self._poll_transcripts()
@@ -489,6 +522,15 @@ class Watcher:
                 "tool_calls": self.tool_calls[-SNAPSHOT_CAP:],
                 "cycles": self.cycles[-SNAPSHOT_CAP:],
                 "halt_events": self.halt_events[-SNAPSHOT_CAP:],
+                # the headcount-over-time log (a point on every hire and
+                # fire) — the source for the headcount plot that updates
+                # continuously (not just on a phase boundary).
+                "headcount": self.headcount[-SNAPSHOT_CAP:],
+                # the cycle-level summaries (one row per cycle, with the
+                # per-iteration wall-clock duration + the per-phase
+                # breakdown) — the source for the org-flow panel (one row per
+                # cycle, not one row per phase as cycles.jsonl does).
+                "cycle_summaries": self.cycle_summaries[-SNAPSHOT_CAP:],
                 # the efficiency panel (per-role / per-department
                 # invoke time) — the latest cumulative snapshot.
                 "efficiency": self.efficiency,
@@ -510,6 +552,11 @@ class Watcher:
                         self._active_roles[k]
                         for k in sorted(self._active_roles)
                     ],
+                    # the cycle-level summaries (one row per cycle, with the
+                    # per-iteration wall-clock duration + the per-phase
+                    # breakdown) — the source for the org-flow panel (one row
+                    # per cycle, not one row per phase as cycles.jsonl does).
+                    "cycles": self.cycle_summaries[-SNAPSHOT_CAP:],
                 },
             }
 

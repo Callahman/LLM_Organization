@@ -416,6 +416,24 @@ canvas {
   font-size: 12px;
   margin-bottom: 8px;
 }
+/* the cycle-level summaries (one row per cycle, with the per-iteration
+   wall-clock duration + the role count) — the org-flow panel's cycle history
+   (one row per cycle, not one row per phase). */
+.org-cycle-history {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.org-cycle-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+.org-cycle-id { color: var(--text); font-weight: 700; }
+.org-cycle-dur { color: var(--muted); }
+.org-cycle-hc { color: var(--muted); }
 .org-roles { display: flex; flex-direction: column; gap: 4px; }
 .org-role-row {
   display: flex;

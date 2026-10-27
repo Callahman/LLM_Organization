@@ -667,6 +667,7 @@ def _ensure_role(
     direct_ic_cap: int = 3,
     backend: Optional[LLMBackend] = None,
     phase: int = 4,
+    history: Optional[HistoryStore] = None,
 ) -> Optional[Role]:
     """Get a role by ID, or create + hire it (through the approval matrix) if
     it doesn't exist yet. This is how the dispatch spins up the managers/ICs it
@@ -711,7 +712,7 @@ def _ensure_role(
     )
     try:
         return hire(org, initiator, new_role, approver_fn,
-                    direct_ic_cap=direct_ic_cap)
+                    direct_ic_cap=direct_ic_cap, history=history)
     except Exception as e:
         # Visible: the hire failed (vetoed / cap / approver rejection). The
         # failure is sent back to the initiator so it can update its next
@@ -781,7 +782,7 @@ def _fire_role(org, leader, role_id, reason, approver_fn, history=None):
                              "why": "fire requested but no approver supplied"})
         return None
     try:
-        return fire(org, leader, role_id, approver_fn)
+        return fire(org, leader, role_id, approver_fn, history=history)
     except ResourcingVetoed as e:
         if history is not None:
             history._append("dispatch_skips.jsonl",
