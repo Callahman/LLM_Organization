@@ -138,7 +138,10 @@ class ThinkingBudget:
 
     def __init__(self, max_high: int = 10, reserved_for_decisions: int = 2):
         self.max_high = max_high
-        self.reserved = max(0, min(reserved_for_decisions, max_high))
+        # Cap the reservation so it never consumes ALL the highs (always leave
+        # at least one for non-decision phases) — with a small max_high the
+        # default reservation would otherwise starve every non-decision call.
+        self.reserved = min(reserved_for_decisions, max(0, max_high - 1))
         self.used = 0
 
     @property
@@ -148,12 +151,15 @@ class ThinkingBudget:
     def allow(self, level: Reasoning, phase: Optional[int] = None) -> Reasoning:
         """Return the bounded level: a HIGH within budget is granted (and
         counted); a HIGH beyond the budget falls back to LOW; non-HIGH passes
-        through unchanged. The decide phase (phase 8) may draw on the full
+        through unchanged. The decide phase (phase 8) and unspecified phases
+        (``phase is None`` — isolated budget-only calls) may draw on the full
         budget (including the reserved highs); other phases are capped at
         ``max_high - reserved`` so the final decision always has thinking left."""
         if level is not Reasoning.HIGH:
             return level
-        cap = self.max_high if phase == 8 else (self.max_high - self.reserved)
+        cap = (self.max_high
+               if (phase is None or phase == 8)
+               else (self.max_high - self.reserved))
         if self.used < cap:
             self.used += 1
             return Reasoning.HIGH
