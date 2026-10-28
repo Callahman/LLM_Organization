@@ -131,26 +131,33 @@ def detect_disagreement(outputs: List[Dict[str, Any]]) -> bool:
 
 class ThinkingBudget:
     """Bounds the total number of HIGH (thinking) calls per session. A HIGH
-    request beyond the budget falls back to LOW (a visible, logged fallback)."""
+    request beyond the budget falls back to LOW (a visible, logged fallback).
+    The last ``reserved_for_decisions`` highs are reserved for the decide phase
+    (phase 8) so the final decision always has thinking left (a low-reasoning
+    final decision was the observed failure: the pool was exhausted in Phase 7)."""
 
-    def __init__(self, max_high: int = 10):
+    def __init__(self, max_high: int = 10, reserved_for_decisions: int = 2):
         self.max_high = max_high
+        self.reserved = max(0, min(reserved_for_decisions, max_high))
         self.used = 0
 
     @property
     def remaining(self) -> int:
         return max(0, self.max_high - self.used)
 
-    def allow(self, level: Reasoning) -> Reasoning:
+    def allow(self, level: Reasoning, phase: Optional[int] = None) -> Reasoning:
         """Return the bounded level: a HIGH within budget is granted (and
         counted); a HIGH beyond the budget falls back to LOW; non-HIGH passes
-        through unchanged."""
-        if level is Reasoning.HIGH:
-            if self.used < self.max_high:
-                self.used += 1
-                return Reasoning.HIGH
-            return Reasoning.LOW
-        return level
+        through unchanged. The decide phase (phase 8) may draw on the full
+        budget (including the reserved highs); other phases are capped at
+        ``max_high - reserved`` so the final decision always has thinking left."""
+        if level is not Reasoning.HIGH:
+            return level
+        cap = self.max_high if phase == 8 else (self.max_high - self.reserved)
+        if self.used < cap:
+            self.used += 1
+            return Reasoning.HIGH
+        return Reasoning.LOW
 
 
 class RoutingBackend(LLMBackend):
@@ -191,7 +198,7 @@ class RoutingBackend(LLMBackend):
             if reasoning is not None
             else classify_complexity(log_phase, role, {})
         )
-        granted = self.budget.allow(level)
+        granted = self.budget.allow(level, phase=log_phase)
         if self.history is not None:
             # Log the role's FULL identity (name, level in hierarchy, architype,
             # sub-architype, department, team, personality) — not just the role

@@ -36,6 +36,7 @@ from runtime.plan import PlanResult
 from runtime.dispatch_common import (
     _manager_ctx,
     _decomposition_list,
+    _invoke_decomposition,
     _ensure_role,
     _run_contained_pod,
 )
@@ -146,8 +147,8 @@ def run_staff(
                         f"one in `ic_tasks` with its task, or it will be "
                         f"fired as unused; do NOT invent a new id for work an "
                         f"existing IC can do): {', '.join(existing_ics)}.")
-                mgr_out = backend.invoke(
-                    manager, mgr_ctx,
+                mgr_out = _invoke_decomposition(
+                    backend, manager, mgr_ctx,
                     reasoning=classify_complexity(5, manager, {}), phase=5)
                 ic_tasks = _decomposition_list(mgr_out, "ic_tasks")
                 # Solo (P4, manager): record the manager's decomposition

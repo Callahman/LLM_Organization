@@ -63,7 +63,7 @@ from runtime.pods import (
     run_pod,
     log_devils_advocate_listening,
 )
-from runtime.history import HistoryStore
+from runtime.history import HistoryStore, StreamAggregator
 from runtime.timing import TimingTracker, TimingBackend
 from runtime.efficiency import (
     EfficiencyMeter,
@@ -109,14 +109,22 @@ def build_backend(
     - Wraps that in a ``MemoryBackend`` (per-role isolated memory).
     """
     # Tool-call observability: if the raw backend supports per-call stats
-    # (OpenAIBackend), record each call's outcome to history/tool_calls.jsonl.
-    if hasattr(raw, "on_call"):
-        raw.on_call = history.log_tool_call
+    # (OpenAIBackend), record each call's outcome to history/tool_calls.jsonl
+    # AND flush the stream aggregator for the finished invoke (Rec 6: ONE
+    # bounded stream record per invoke, not one per chunk).
     # Live "model stream" observability: if the raw backend supports per-chunk
-    # streaming (OpenAIBackend), forward each streamed chunk to
-    # history/stream.jsonl (the dashboard's live "model stream" window).
+    # streaming (OpenAIBackend), buffer each streamed chunk in-memory (the
+    # dashboard's live "model stream" window); the chunks are aggregated per
+    # invoke and written to history/stream.jsonl when the invoke's on_call
+    # fires (the per-chunk on-disk log was ~23MB per 91-minute run).
+    aggregator = StreamAggregator(history)
+    if hasattr(raw, "on_call"):
+        def _on_call(stat):
+            history.log_tool_call(stat)
+            aggregator.flush(stat)
+        raw.on_call = _on_call
     if hasattr(raw, "on_stream"):
-        raw.on_stream = history.log_stream
+        raw.on_stream = aggregator.on_chunk
     # Bound the actual backend call: a per-invoke timeout (a visible
     # LLMTimeoutError, never silent) guards the real LLM call.
     timed = TimeoutBackend(
@@ -287,12 +295,16 @@ class Session:
                     transcripts_dir=self.config.get(
                         "pod_transcripts_dir", "pods/transcripts"))
 
-    def _evaluate_progress(self) -> str:
+    def _evaluate_progress(self, has_work: bool = True) -> str:
         # the **reporting pods** (ic→manager, manager→head,
         # head→leader) run BEFORE the leader's synthesis — the child reports
         # to the parent (after work), and the decisions the pods close on are
         # carried up to the leader (the existing `self.pods` carry-over path).
-        self._run_reporting_pods()
+        # When there is NO work (zero dispatch units), there is nothing
+        # to report — skip the reporting pods (they would run 2-member
+        # pods for no reason) and go straight to the leader's synthesis.
+        if has_work:
+            self._run_reporting_pods()
         ctx = EVALUATE_INSTRUCTION
         # include the efficiency breakdown + E + the mandate to keep E
         # high (the most recent finished iteration's metrics).
@@ -939,7 +951,8 @@ class Session:
 
             # Phase 7: evaluate (the leader checks progress against the
             # mission).
-            verdict = self._phase(7, self.cycles, self._evaluate_progress)
+            verdict = self._phase(7, self.cycles, self._evaluate_progress,
+                                  bool(dispatch_results))
             self.phases[7] = self.phases.get(7, 0) + 1
 
             # the same check before Phase 8 (decide) — a

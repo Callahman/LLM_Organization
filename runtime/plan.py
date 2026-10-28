@@ -43,6 +43,7 @@ from runtime.dispatch_common import (
     _efficiency_panel_text,
     _head_ctx,
     _decomposition_list,
+    _invoke_decomposition,
     _ensure_role,
     _fire_role,
     _process_efficiency,
@@ -189,8 +190,9 @@ def run_plan(
     efficiency_panel = ""
     if timing is not None:
         efficiency_panel = _efficiency_panel_text(timing.snapshot())
-    out = backend.invoke(
-        leader, _leader_ctx(digest, head_ids, efficiency_panel=efficiency_panel),
+    out = _invoke_decomposition(
+        backend, leader,
+        _leader_ctx(digest, head_ids, efficiency_panel=efficiency_panel),
         reasoning=classify_complexity(4, leader, {}), phase=4)
     # A single head's leader-replacement proposal (with reasoning) triggers the
     # per-head unanimous vote. The new-leader candidate is supplied by the
@@ -275,11 +277,18 @@ def run_plan(
     # authors its department POLICY + POLICY_SUMMARY. **:** the policy
     # is authored AFTER the leader+head clarification pod, so it reflects the
     # clarified mission (the pod → policy sequencing is strict).
-    head_policies = generate_head_policies(
-        backend, org, dept_objectives, digest,
-        clarifications=clarifications,
-        history=history,
-    )
+    # When the leader's decomposition is empty (no department objectives),
+    # there is no work to dispatch — skip the head policy generation (it would
+    # invoke every head for no reason) and record empty policies (a visible
+    # no-op, never silent).
+    if dept_objectives:
+        head_policies = generate_head_policies(
+            backend, org, dept_objectives, digest,
+            clarifications=clarifications,
+            history=history,
+        )
+    else:
+        head_policies = {}
 
     departments: List[Dict[str, Any]] = []
     for obj in dept_objectives:
@@ -296,8 +305,9 @@ def run_plan(
                      "reason": "head not in the org (never created in Phase 3)"},
                 )
             continue
-        head_out = backend.invoke(
-            head, _head_ctx(head, obj.get("objective", ""), digest),
+        head_out = _invoke_decomposition(
+            backend, head,
+            _head_ctx(head, obj.get("objective", ""), digest),
             reasoning=classify_complexity(4, head, {}), phase=4)
         team_objectives = _decomposition_list(head_out, "team_objectives")
         # Solo (P4, head): record the head's decomposition (out-of-pod work)

@@ -20,6 +20,7 @@ modules import from it.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -29,6 +30,7 @@ from prompts import (
     AUTOMATION_CTX_MID,
     AUTOMATION_CTX_PREFIX,
     AUTOMATION_CTX_SUFFIX,
+    DECOMPOSITION_RETRY_NUDGE,
     HEAD_CTX_DIGEST,
     HEAD_CTX_INSTRUCTION,
     HEAD_CTX_OBJ,
@@ -1040,6 +1042,32 @@ def _check_pod_triggers(
             seed(member.id, pod.id, pod.decision, member.team)
 
 
+def _invoke_decomposition(backend: LLMBackend, role: Role, ctx: str,
+                          reasoning, phase: int) -> Dict[str, Any]:
+    """Invoke a role for a structured ``decomposition`` and, if the
+    ``decomposition`` field came back as a *corrupted string* (the
+    ``nested-type`` warning — not valid JSON, so the recovery in
+    ``_decomposition_list`` cannot parse it), re-invoke **once** with a
+    corrective nudge. A double-encoded but *valid* JSON string is NOT retried
+    (it is recovered in ``_decomposition_list``). The retry is contained: if
+    it fails, the first output is returned (a visible no-op, never a crash).
+    """
+    out = backend.invoke(role, ctx, reasoning=reasoning, phase=phase)
+    rec = (out or {}).get("decomposition")
+    if isinstance(rec, str):
+        try:
+            json.loads(rec)
+        except (json.JSONDecodeError, ValueError):
+            # Corrupted string (the nested-type warning) — one corrective retry.
+            try:
+                out = backend.invoke(
+                    role, ctx + DECOMPOSITION_RETRY_NUDGE,
+                    reasoning=reasoning, phase=phase)
+            except Exception:
+                pass  # containment: the retry failed; keep the first output
+    return out
+
+
 def _decomposition_list(out: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
     """Safely read a list from a role's ``decomposition`` object, tolerating the
     shapes the real LLM free-forms: a dict (canonical), a bare list (the model
@@ -1051,6 +1079,16 @@ def _decomposition_list(out: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
     "no work to dispatch" (visible + logged) instead of an ``AttributeError``
     crash on ``.get(...)``."""
     rec = (out or {}).get("decomposition")
+    # A double-encoded decomposition: the model submitted the `decomposition`
+    # object as a JSON *string* (the forced tool's arguments were stringified).
+    # Recover it by parsing the string back into a dict/list before reading the
+    # key. A string that is not JSON degrades to "no work to dispatch" (visible
+    # + logged, never a crash).
+    if isinstance(rec, str):
+        try:
+            rec = json.loads(rec)
+        except (json.JSONDecodeError, ValueError):
+            return []
     if isinstance(rec, dict):
         val = rec.get(key)
     elif isinstance(rec, list):

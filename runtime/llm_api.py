@@ -202,6 +202,11 @@ class OpenAIBackend(LLMBackend):
         # the backend is driven sequentially, so this is safe. Carried to the
         # tool_calls row so the dashboard can segment calls by phase (A0).
         self._current_phase: Optional[int] = None
+        # The id of the in-flight invoke's stream (set by invoke, read
+        # by _report): carried to the tool-call stat so the stream
+        # aggregator can correlate the buffered chunks to the finished
+        # invoke (Rec 6: ONE bounded stream record per invoke).
+        self._current_stream_id: Optional[str] = None
 
     # --- request building ---------------------------------------------------
 
@@ -568,6 +573,7 @@ class OpenAIBackend(LLMBackend):
                 "role": getattr(role, "id", ""),
                 "department": getattr(role, "department", ""),
                 "phase": self._current_phase,
+                "stream_id": self._current_stream_id,
                 "mode": self.structured,
                 "outcome": outcome,
                 "error": error,
@@ -663,6 +669,7 @@ class OpenAIBackend(LLMBackend):
         # - tool_calls args: the forced submit_output call (the tool path).
         import uuid
         stream_id = uuid.uuid4().hex[:8]
+        self._current_stream_id = stream_id
         role_id = getattr(role, "id", "")
         # Bounded retries on a timeout AND on a truncated output: a
         # Read/Connect/Pool timeout means the request (or its stream) stalled;

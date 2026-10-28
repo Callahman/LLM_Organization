@@ -271,6 +271,20 @@ IC_RETRY_NUDGE = (
     "emit placeholder or dummy calls."
 )
 
+# The corrective-retry nudge for a **corrupted** `decomposition` (the
+# `nested-type` warning — the model submitted the decomposition object as a
+# non-JSON string, so it could not be recovered). Appended to the SAME task's
+# context on one retry. Used by
+# runtime/dispatch_common.py::_invoke_decomposition (the leader / head /
+# manager decompositions).
+DECOMPOSITION_RETRY_NUDGE = (
+    "\n\n[RETRY] Your previous reply's `decomposition` field was a "
+    "corrupted string (not valid JSON) — it could not be read. Set "
+    "`decomposition` to a JSON OBJECT (not a string) whose required key is a "
+    "JSON array of objects. Call the submit_output tool exactly once with ONE "
+    "complete JSON object matching your role's output schema."
+)
+
 # Phase 6 (Execute) — the IC's self-edit correction context (the IC's
 # proposed code edits were REFUSED by the permission layer; it re-proposes
 # them with corrected paths). Used by
