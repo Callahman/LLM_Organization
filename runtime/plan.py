@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from roles.base import Role
-from runtime.org import OrgState, run_leader_replacement_vote, _invoke_contained
+from runtime.org import OrgState, run_leader_replacement_vote
 from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
 from runtime.history import HistoryStore
@@ -73,89 +73,46 @@ class PlanResult:
     departments: List[Dict[str, Any]] = field(default_factory=list)
 
 
-# ---: the headcount cap chain (Phase 4 — the head allots teams) ---
-
-def _allot_team_caps_ctx(head: Role, teams: List[str], dept_cap: int,
-                         team_cap_default: Optional[float] = None) -> str:
-    """The context for the head's team-cap allotment (Phase 4)."""
-    default_hint = ""
-    if team_cap_default is not None:
-        default_hint = (
-            f" The default team cap is {team_cap_default:.0%} of the "
-            f"department cap (a resourcing hint — adjust per team as needed)."
-        )
-    return (
-        f"ORG {head.id}: Phase 4 — allot the team headcount caps for your "
-        f"department. The department cap is {dept_cap}. Allot a cap to each "
-        f"team; the sum of the team caps must be ≤ {dept_cap}."
-        f"{default_hint} Teams: "
-        f"{', '.join(teams) or '(none)'}. Return `team_caps` as a "
-        f"{{team: cap}} mapping."
-    )
-
-
-def _parse_team_caps(out: Dict[str, Any], teams: List[str],
-                     dept_cap: int) -> Dict[str, int]:
-    """Parse the head's `team_caps` output into a {team: cap} mapping,
-    clamping so the sum is ≤ the department cap (a visible note if clamped —
-    never silent)."""
-    raw = out.get("team_caps")
-    caps: Dict[str, int] = {}
-    if isinstance(raw, dict):
-        for team in teams:
-            val = raw.get(team)
-            if isinstance(val, (int, float)) and val > 0:
-                caps[team] = int(val)
-    s = sum(caps.values())
-    if s > dept_cap and caps:
-        scale = dept_cap / s
-        caps = {t: max(1, int(c * scale)) for t, c in caps.items()}
-    return caps
-
+# ---: the headcount cap chain (Phase 4 — the team caps, finalized by Pod B) ---
+# (The head's own LLM allotment of the team caps was removed — the caps are an
+# even-split default, finalized by Pod B in `_allot_team_caps`.)
 
 def _allot_team_caps(org: OrgState, backend, head: Role,
                      team_objectives: List[Dict[str, Any]],
                      config: Optional[Dict[str, Any]] = None) -> None:
-    """the head allots the **team/IC caps** (a cap per team, bounded
-    by the department cap), then **Pod B** (all managers + the head) finalizes
-    them — the **head has final say**. The finalized caps are stored on the
-    org (``org.team_caps``). A no-op if the department has no cap allotted
-    (the org then falls back to the per-manager IC cap).
+    """The **team/IC caps** (a cap per team, bounded by the department cap)
+    default to an **even split** of the department cap across the teams, then
+    **Pod B** (all managers + the head) finalizes them — the **head has final
+    say**. The finalized caps are stored on the org (``org.team_caps``). A
+    no-op if the department has no cap allotted (the org then falls back to
+    the per-manager IC cap).
 
-    **Error containment** (a headcount hiccup must not kill the run): the
-    head's allotment gets one corrective retry, and a final failure is
-    contained (a visible org event; the org falls back to the per-manager IC
-    cap). A Pod B failure is likewise contained (a visible org event; the
-    head's allotment stands — the head has final say, and a headcount pod
-    must not take down the phase it sizes)."""
+    (The head's own LLM allotment of the team caps was removed — the headcount
+    is no longer allotted by the head; the caps are an even-split default,
+    finalized by Pod B.)
+
+    **Error containment** (a headcount hiccup must not kill the run): a Pod B
+    failure is contained (a visible org event; the even-split caps stand — the
+    head has final say, and a headcount pod must not take down the phase it
+    sizes)."""
     dept_cap = org.department_caps.get(head.department, 0)
     if not dept_cap:
         return
     teams = [t.get("team") or t.get("manager_id", "") for t in team_objectives]
-    # 1. The head allots the team caps (a resourcing decision), with one
-    # corrective retry on a failure. The `TEAM_CAP_DEFAULT` knob (if set) is a
-    # resourcing hint in the context. A final failure is contained (a visible
-    # org event; the org falls back to the per-manager IC cap).
-    ctx = _allot_team_caps_ctx(head, teams, int(dept_cap),
-                               (config or {}).get("team_cap_default"))
-    out, err = _invoke_contained(
-        backend, head, ctx,
-        classify_complexity(4, head, {"is_decision": True}), phase=4)
-    if err is not None:
-        org.log_event("headcount_allotment_failed", head.id, None,
-                      {"error": err})
-    caps = _parse_team_caps(out, teams, int(dept_cap)) if out else {}
-    # Robust fallback: if the head's allotment failed or returned an empty /
-    # malformed mapping, default to an **even split** of the department cap
-    # across the teams. The cap chain must NOT silently collapse to no caps —
-    # with no team caps the only backstop left is the hard org-size cap.
-    if not caps and teams:
+    # The team caps default to an **even split** of the department cap across
+    # the teams (the head's own LLM allotment was removed — the headcount is
+    # no longer allotted by the head; the caps are finalized by Pod B below).
+    # The cap chain must NOT silently collapse to no caps — with no team caps
+    # the only backstop left is the hard org-size cap.
+    caps: Dict[str, int] = {}
+    if teams:
         per = max(1, int(dept_cap) // len(teams))
         caps = {t: per for t in teams}
         org.log_event("team_cap_defaulted", head.id, None,
                       {"caps": caps,
-                       "reason": "head allotment empty/failed — even-split "
-                                 "default"})
+                       "reason": "team caps default to an even split of the "
+                                 "department cap (the head's LLM allotment "
+                                 "was removed — Pod B finalizes)"})
     # 2. Pod B (all managers + the head) finalizes the team caps — the head
     # has final say (the pod deliberates; the head's allotment is the final).
     # The head is a member (like Pod A's leader) so a single-manager

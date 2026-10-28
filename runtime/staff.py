@@ -198,7 +198,6 @@ def run_staff(
                         _ensure_role(
                             org, manager, ic_id, "ic",
                             manager.department, manager.team, approver_fn,
-                            direct_ic_cap=(config or {}).get("direct_ic_cap", 3),
                             backend=backend, phase=5,
                             history=history,
                         )
@@ -289,8 +288,6 @@ def run_staff(
                             _ensure_role(
                                 org, head, ic_id, "ic",
                                 head.department, team, approver_fn,
-                                direct_ic_cap=(config or {}).get(
-                                    "direct_ic_cap", 3),
                                 backend=backend, phase=5,
                                 history=history,
                             )

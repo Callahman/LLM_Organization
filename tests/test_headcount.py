@@ -1,27 +1,23 @@
 """the headcount cap chain (top to bottom).
 
 The total cap is in the config (``head_count_total``); the **department caps**
-(allotted by the leader in Phase 3, summing to <= the total) and the **team
-caps** (allotted by the head in Phase 4, summing to <= the department cap) are
+and the **team caps** (a cap per team, summing to <= the department cap) are
 stored on the org so they are queryable at each hire. A hire that would exceed
 a cap is blocked / escalated.
 
-This file tests the cap chain: the parse + clamp helpers, the Phase 3
-allotment (department caps + Pod A), the Phase 5 team-cap check, and the
-``HEAD_COUNT_TOTAL`` config knob.
+(The leader's Phase-3 department-cap allotment and the head's Phase-4 team-cap
+allotment were removed — the headcount is no longer allotted by the leader or
+the head; the team caps are an even-split default, finalized by Pod B.)
+
+This file tests the cap chain: the Phase 5 team-cap check, the Pod B error
+containment, and the ``HEAD_COUNT_TOTAL`` config knob.
 """
 
 from __future__ import annotations
 
 from roles.base import Role
-from roles.leader import make_leader
 from runtime.llm import StubBackend
-from runtime.org import (
-    OrgState,
-    allot_department_caps,
-    _parse_and_clamp_caps,
-)
-from runtime.plan import _parse_team_caps
+from runtime.org import OrgState
 from runtime.staff import _team_cap_ok
 
 
@@ -65,160 +61,12 @@ def test_org_state_has_cap_chain():
     assert org.team_caps == {}
 
 
-# --- Phase 3: the leader allots the department caps --------------------------
-
-def test_parse_and_clamp_caps_parses():
-    # Parses the leader's `department_caps` output into a {department: cap}.
-    out = {"department_caps": {"analytics": 10, "data": 5}}
-    caps = _parse_and_clamp_caps(out, ["analytics", "data"], total=20)
-    assert caps == {"analytics": 10, "data": 5}
-
-
-def test_parse_and_clamp_caps_clamps():
-    # Clamps so the sum of the caps is <= the total cap.
-    out = {"department_caps": {"analytics": 10, "data": 5}}
-    caps = _parse_and_clamp_caps(out, ["analytics", "data"], total=10)
-    assert sum(caps.values()) <= 10
-
-
-def test_parse_and_clamp_caps_ignores_non_dict():
-    # A non-dict `department_caps` is ignored (no caps).
-    out = {"department_caps": "nonsense"}
-    caps = _parse_and_clamp_caps(out, ["analytics"], total=10)
-    assert caps == {}
-
-
-def test_parse_and_clamp_caps_ignores_non_positive():
-    # Non-positive caps are ignored.
-    out = {"department_caps": {"analytics": -1, "data": 0}}
-    caps = _parse_and_clamp_caps(out, ["analytics", "data"], total=10)
-    assert caps == {}
-
-
-def test_allot_department_caps_no_total():
-    # No total cap -> returns {} without invoking the leader or forming a pod.
-    leader = make_leader()
-    org = OrgState(history_dir="history")
-    org.add_role(_head("head1", "analytics"))
-    backend = StubBackend()
-    caps = allot_department_caps(org, backend, leader, "", config={})
-    assert caps == {}
-    assert org.department_caps == {}
-    # The leader was NOT invoked (no caps allotment).
-    assert len(backend.calls) == 0
-
-
-def test_allot_department_caps_stores_and_records(tmp_path, monkeypatch):
-    # With a total cap: the leader allots the department caps, Pod A (all heads
-    # + the leader) finalizes them, the caps are stored on the org, and the
-    # mission addendum is recorded.
-    leader = make_leader()
-    org = OrgState(history_dir=str(tmp_path))
-    org.add_role(_head("head1", "analytics"))
-    org.add_role(_head("head2", "data"))
-    backend = StubBackend()
-    backend.set_script("leader", [
-        {"department_caps": {"analytics": 5, "data": 3}},
-    ])
-    # Capture Pod A (without running it).
-    captured = []
-
-    def fake_run_pod(backend, pod, max_rounds=None, **kw):
-        captured.append(pod)
-        return pod
-
-    monkeypatch.setattr("runtime.org.run_pod", fake_run_pod)
-    mission_path = str(tmp_path / "MISSION.md")
-    with open(mission_path, "w", encoding="utf-8") as f:
-        f.write("# MISSION\n")
-    caps = allot_department_caps(org, backend, leader, mission_path,
-                                 config={"head_count_total": 10})
-    assert caps == {"analytics": 5, "data": 3}
-    # The caps are stored on the org (queryable at each hire).
-    assert org.department_caps == {"analytics": 5, "data": 3}
-    # The mission addendum is recorded.
-    content = open(mission_path, encoding="utf-8").read()
-    assert "Headcount Addendum" in content
-    assert "analytics: 5" in content
-    assert "data: 3" in content
-    # Pod A was formed as a headcount pod (all heads + the leader, the leader
-    # is the starter).
-    assert len(captured) == 1
-    assert captured[0].kind == "headcount"
-    assert captured[0].starter.id == leader.id
-
-
 # --- Error containment (a headcount hiccup must not kill the run) -----------
-
-def test_allot_department_caps_contains_pod_failure(tmp_path):
-    """Error containment: a headcount pod (Pod A) whose member invoke fails
-    (a free-form reply -> OpenAIOutputError) is contained — the allotment does
-    NOT raise; the leader's allotment stands (the leader has final say) and the
-    failure is recorded (a visible org event)."""
-    leader = make_leader()
-    org = OrgState(history_dir=str(tmp_path))
-    org.add_role(_head("head1", "analytics"))
-    org.add_role(_head("head2", "data"))
-    inner = StubBackend()
-    inner.set_script("leader", [
-        {"department_caps": {"analytics": 5, "data": 3}},  # allotment
-        {"summary": "agenda", "agenda": "finalize the caps"},  # pod agenda
-        {"summary": "close", "decision": "caps finalized",
-         "rationale": "ok", "open_items": []},  # pod close
-    ])
-    inner.set_script("head1", [{"summary": "ok with 5"}])
-    # head2's speak fails (a free-form reply -> OpenAIOutputError).
-    backend = _FlakyBackend(inner, fail_roles={"head2"}, fail_times=99)
-    mission_path = str(tmp_path / "MISSION.md")
-    with open(mission_path, "w", encoding="utf-8") as f:
-        f.write("# MISSION\n")
-    # Must NOT raise — the pod failure is contained.
-    caps = allot_department_caps(org, backend, leader, mission_path,
-                                 config={"head_count_total": 10})
-    # The leader's allotment stands (the leader has final say).
-    assert caps == {"analytics": 5, "data": 3}
-    assert org.department_caps == {"analytics": 5, "data": 3}
-    # The failure is recorded (a visible org event).
-    assert any(e["kind"] == "headcount_pod_failed" for e in org.events)
-
-
-def test_allot_department_caps_contains_allotment_failure(tmp_path):
-    """Error containment: the leader's department-cap allotment that fails
-    (even after its one corrective retry) is contained — the allotment does
-    NOT raise; the caps **default to an even split** of the total (the cap
-    chain must not silently collapse to no caps) and the failure is recorded
-    (a visible org event)."""
-    leader = make_leader()
-    org = OrgState(history_dir=str(tmp_path))
-    org.add_role(_head("head1", "analytics"))
-    inner = StubBackend()
-    # The leader's allotment fails (the corrective retry fails too); the pod
-    # then runs fine (the leader recovers).
-    backend = _FlakyBackend(inner, fail_roles={"leader"}, fail_times=2)
-    mission_path = str(tmp_path / "MISSION.md")
-    with open(mission_path, "w", encoding="utf-8") as f:
-        f.write("# MISSION\n")
-    # Must NOT raise — the allotment failure is contained.
-    caps = allot_department_caps(org, backend, leader, mission_path,
-                                 config={"head_count_total": 10})
-    # The caps default to an even split of the total (the cap chain does not
-    # collapse to no caps — with no department caps the only backstop left is
-    # the hard org-size cap).
-    assert caps == {"analytics": 10}
-    assert org.department_caps == {"analytics": 10}
-    # The corrective retry was attempted (the nudge context was sent).
-    assert any(rid == "leader" and "[RETRY]" in c
-               for (rid, c) in backend.contexts)
-    # The failure is recorded (a visible org event), and the default is
-    # recorded too.
-    assert any(e["kind"] == "headcount_allotment_failed" for e in org.events)
-    assert any(e["kind"] == "headcount_allotment_defaulted" for e in org.events)
-
 
 def test_allot_team_caps_contains_pod_failure(tmp_path):
     """Error containment: a team-cap pod (Pod B) whose member invoke fails
     (a free-form reply -> OpenAIOutputError) is contained — the allotment does
-    NOT raise; the head's allotment stands (the head has final say) and the
+    NOT raise; the even-split caps stand (the head has final say) and the
     failure is recorded (a visible org event). A single-manager department also
     forms a valid pod (the head is a member, so the 2-member minimum holds)."""
     from runtime.plan import _allot_team_caps
@@ -231,8 +79,9 @@ def test_allot_team_caps_contains_pod_failure(tmp_path):
                team="pipelines", reports_to="head1")
     org.add_role(mgr)
     inner = StubBackend()
+    # The head is only invoked for Pod B (the LLM allotment was removed) — the
+    # even-split caps (10 // 1 = 10) are the final.
     inner.set_script("head1", [
-        {"team_caps": {"pipelines": 3}},  # allotment
         {"summary": "agenda", "agenda": "finalize the team caps"},  # pod agenda
         {"summary": "speak", "findings": []},  # pod speak (the head is a member)
         {"summary": "close", "decision": "done", "rationale": "ok",
@@ -245,26 +94,10 @@ def test_allot_team_caps_contains_pod_failure(tmp_path):
     # Must NOT raise — the pod failure is contained.
     _allot_team_caps(org, backend, head, team_objectives,
                      config={"head_count_total": 10})
-    # The head's caps stand (the head has final say).
-    assert org.team_caps[("analytics", "pipelines")] == 3
+    # The even-split caps stand (the head has final say — 1 team, cap 10).
+    assert org.team_caps[("analytics", "pipelines")] == 10
     # The failure is recorded (a visible org event).
     assert any(e["kind"] == "headcount_pod_failed" for e in org.events)
-
-
-# --- Phase 4: the head allots the team caps ---------------------------------
-
-def test_parse_team_caps_parses():
-    # Parses the head's `team_caps` output into a {team: cap}.
-    out = {"team_caps": {"pipelines": 4, "reporting": 2}}
-    caps = _parse_team_caps(out, ["pipelines", "reporting"], dept_cap=10)
-    assert caps == {"pipelines": 4, "reporting": 2}
-
-
-def test_parse_team_caps_clamps():
-    # Clamps so the sum of the team caps is <= the department cap.
-    out = {"team_caps": {"pipelines": 4, "reporting": 2}}
-    caps = _parse_team_caps(out, ["pipelines", "reporting"], dept_cap=4)
-    assert sum(caps.values()) <= 4
 
 
 # --- Phase 5: enforce the team/IC cap ----------------------------------------

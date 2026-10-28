@@ -384,6 +384,28 @@ function buildNetHeadcountSeries(events) {
   });
 }
 
+// The headcount series (from `headcount.jsonl` — the actual source, not the
+// agents events). Accumulates the per-department net headcount from each
+// entry's `{ts, event, department}` (`event === "fire" ? -1 : 1`, clamped at
+// 0). Same shape as `buildNetHeadcountSeries`, but driven by the headcount
+// log's `event` field (not the agents events' `delta`).
+function buildHeadcountSeries(entries) {
+  const map = {};
+  for (const e of entries) {
+    const k = e.department || 'leadership';
+    const d = e.event === 'fire' ? -1 : 1;
+    (map[k] = map[k] || []).push({ t: e.ts, d });
+  }
+  return Object.keys(map).sort().map((k, i) => {
+    let v = 0;
+    const points = map[k].map((p) => {
+      v = Math.max(0, v + p.d);
+      return { t: p.t, v };
+    });
+    return { label: k, color: PALETTE[i % PALETTE.length], points };
+  });
+}
+
 // item 10: the code volume over time — total lines of code by file type,
 // cumulative (accumulating the applied writes' physical line counts,
 // segmented by file type).
@@ -608,9 +630,10 @@ function renderAgentsChart() {
   // (the net headcount over time — the final value per department = the
   // current headcount the headcount chips show). This answers "how large is
   // the org, and which departments make up a majority of the headcount".
+  // Built from `headcount.jsonl` (the actual source), not the agents events.
   drawTimeSeries(
     $('chart-agents'),
-    buildNetHeadcountSeries(state.agents.events),
+    buildHeadcountSeries(state.headcount || []),
     true, 'no hires yet');
 }
 
@@ -690,9 +713,19 @@ function renderLevelChips() {
 function renderHeadcountChips() {
   const el = $('headcount-chips');
   if (!el || !state) return;
-  const byDept = state.agents.by_department || {};
+  // Compute the current total + per-department headcount from
+  // `headcount.jsonl` (the latest accumulation of the hire/fire deltas — the
+  // actual source), not the agents snapshot's `by_department`.
+  const byDept = {};
+  for (const e of (state.headcount || [])) {
+    const k = e.department || 'leadership';
+    const d = e.event === 'fire' ? -1 : 1;
+    byDept[k] = Math.max(0, (byDept[k] || 0) + d);
+  }
+  let total = 0;
+  for (const n of Object.values(byDept)) total += n;
   const depts = Object.keys(byDept).sort();
-  el.innerHTML = 'total ' + state.agents.total + ' · ' + depts.map(
+  el.innerHTML = 'total ' + total + ' · ' + depts.map(
     (d) => d + ' ' + byDept[d]).join(' · ');
 }
 
@@ -877,11 +910,12 @@ function render() {
   // A6: staleness gauge — seconds since the last stream chunk, warning past
   // a threshold (the model has been silent for a while).
   renderPanel('staleness', [state.last_stream_ts, state.ts], renderStaleness);
-  // A5: current headcount per department (number chips).
-  renderPanel('headcount', state.agents.by_department, renderHeadcountChips);
-  // item 4: the agents chart (the current active headcount per department —
-  // the net headcount over time).
-  renderPanel('agents-chart', state.agents.events, renderAgentsChart);
+  // A5: current headcount per department (number chips) — built from
+  // `headcount.jsonl` (the actual source).
+  renderPanel('headcount', state.headcount, renderHeadcountChips);
+  // item 4: the headcount chart (the net headcount over time per department)
+  // — built from `headcount.jsonl` (the actual source).
+  renderPanel('agents-chart', state.headcount, renderAgentsChart);
   // Role hierarchy levels: the current counts per level (chips + roster).
   renderPanel('level-chips',
     [state.agents.by_level, state.agents.roles], renderLevelChips);

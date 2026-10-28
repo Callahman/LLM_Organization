@@ -367,7 +367,8 @@ def _mission_departments_to_heads(mission_result: MissionResult) -> List[Dict[st
     return heads
 
 
-def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
+def _ensure_required(org: OrgState, departments_dir: str,
+                     history: Optional[Any] = None) -> List[Role]:
     """Ensure the required departments (hr, safety, morality) exist and are
     marked non-fireable."""
     created = []
@@ -393,6 +394,11 @@ def _ensure_required(org: OrgState, departments_dir: str) -> List[Role]:
         org.log_event("required_department_bootstrapped", None, head.id,
                       {"department": dept})
         created.append(head)
+        # headcount snapshot (a point on every hire, including the required
+        # heads created at bootstrap).
+        if history is not None:
+            history.log_headcount(len(org.active_roles()), "hire",
+                                  head.id, head.department)
     return created
 
 
@@ -423,7 +429,8 @@ _DA_POLICY = (
 )
 
 
-def _ensure_devils_advocate(org: OrgState, leader: Role) -> Optional[Role]:
+def _ensure_devils_advocate(org: OrgState, leader: Role,
+                            history: Optional[Any] = None) -> Optional[Role]:
     """Ensure the devil's advocate role is always created (even if
     the leader omits it from the proposal). It reports **directly** to the
     leader (a red-team auditor, not a `department_head` of a working
@@ -469,6 +476,11 @@ def _ensure_devils_advocate(org: OrgState, leader: Role) -> Optional[Role]:
         f.write(_DA_POLICY)
     org.log_event("devils_advocate_bootstrapped", leader.id, da.id,
                   {"reports_to": leader.id, "policy_path": da_policy_path})
+    # headcount snapshot (a point on every hire, including the devil's
+    # advocate created at bootstrap).
+    if history is not None:
+        history.log_headcount(len(org.active_roles()), "hire",
+                              da.id, da.department)
     return da
 
 
@@ -482,6 +494,7 @@ def bootstrap(
     additive: bool = False,
     head_retry_budget: int = 3,
     bootstrap_timeout_seconds: Optional[float] = None,
+    history: Optional[Any] = None,
 ) -> List[Role]:
     """Phase 3: Leader proposes department heads → HR redundancy review →
     registry creation → directories. Required departments are always present.
@@ -587,18 +600,26 @@ def bootstrap(
                       {"required": head.is_required,
                        "department": head.department})
         created.append(head)
+        # headcount snapshot (the dashboard's headcount-over-time plot — a
+        # point on every hire, including the heads created at bootstrap).
+        if history is not None:
+            history.log_headcount(len(org.active_roles()), "hire",
+                                  head.id, head.department)
 
     # Required departments are always spun up (and cannot be fired).
-    created.extend(_ensure_required(org, departments_dir))
+    created.extend(_ensure_required(org, departments_dir, history=history))
     # the devil's advocate role is always created (even if the
     # leader omits it) — it reports directly to the leader.
-    da = _ensure_devils_advocate(org, leader)
+    da = _ensure_devils_advocate(org, leader, history=history)
     if da is not None:
         created.append(da)
     return created
 
 
-# ---: the headcount cap chain (Phase 3 — the leader allots depts) ---
+# ---: contained invoke (one corrective retry — error containment) ---
+# (The Phase-3 department-cap allotment — `allot_department_caps` + Pod A —
+# was removed: the headcount is no longer allotted by the leader. Only the
+# contained invoke below remains.)
 
 def _invoke_contained(backend, role: Role, ctx: str, reasoning,
                       phase: Optional[int]) -> Tuple[Optional[Dict[str, Any]],
@@ -619,160 +640,6 @@ def _invoke_contained(backend, role: Role, ctx: str, reasoning,
             return None, (f"{type(e).__name__}: {e} "
                           f"(corrective retry failed: {type(e2).__name__}: "
                           f"{e2})")
-
-
-def _allot_caps_ctx(leader: Role, departments: List[str], total: int,
-                    department_cap_default: Optional[float] = None) -> str:
-    """The context for the leader's department-cap allotment (Phase 3)."""
-    default_hint = ""
-    if department_cap_default is not None:
-        default_hint = (
-            f" The default department cap is {department_cap_default:.0%} of "
-            f"the total (a resourcing hint — adjust per department as needed)."
-        )
-    return (
-        f"ORG {leader.id}: PHASE 3 (Org bootstrap) — NUMERIC CAP ALLOTMENT. "
-        f"This is the Phase-3 numeric cap allotment: a {{department name -> "
-        f"integer cap}} mapping. It is NOT the Phase-2 `mission_departments` "
-        f"(the department LIST — which departments the mission needs, in "
-        f"priority order). Do not re-propose the department list here; only "
-        f"allot a numeric headcount cap to each department that already "
-        f"exists. The total cap is {total} (the max number of roles the org "
-        f"may have). Allot a cap to each department (a % of the total, or an "
-        f"absolute count); the sum of the department caps must be ≤ {total}."
-        f"{default_hint} "
-        f"Departments (already created in Phase 3): {', '.join(departments) or '(none)'}. "
-        f"Return `department_caps` as a {{department: integer cap}} mapping "
-        f"(e.g. {{\"analytics\": 10, \"data\": 5}})."
-    )
-
-
-def _parse_and_clamp_caps(out: Dict[str, Any], departments: List[str],
-                          total: int) -> Dict[str, int]:
-    """Parse the leader's `department_caps` output into a {department: cap}
-    mapping, clamping so the sum is ≤ the total cap (a visible note if
-    clamped — never silent)."""
-    raw = out.get("department_caps")
-    caps: Dict[str, int] = {}
-    if isinstance(raw, dict):
-        for dept in departments:
-            val = raw.get(dept)
-            if isinstance(val, (int, float)) and val > 0:
-                caps[dept] = int(val)
-    s = sum(caps.values())
-    if s > total and caps:
-        scale = total / s
-        caps = {d: max(1, int(c * scale)) for d, c in caps.items()}
-    return caps
-
-
-def _record_headcount_addendum(mission_path: str, total: int,
-                               caps: Dict[str, int]) -> None:
-    """Append a **headcount addendum** to the mission (the org-level headcount
-    record: the total cap + the department caps)."""
-    if not mission_path:
-        return
-    try:
-        with open(mission_path, "a", encoding="utf-8") as f:
-            f.write("\n## Headcount Addendum (Phase 3)\n\n")
-            f.write(f"- total cap: {total}\n")
-            for dept, cap in caps.items():
-                f.write(f"- {dept}: {cap}\n")
-    except OSError:
-        pass
-
-
-def allot_department_caps(
-    org: OrgState,
-    backend,
-    leader: Role,
-    mission_path: str,
-    config: Optional[Dict[str, Any]] = None,
-) -> Dict[str, int]:
-    """Phase 3 (after bootstrap): the leader allots the **department caps**
-    (a cap per department, bounded by the total cap), then **Pod A** (all
-    `department_head`s + the leader) finalizes them — the **leader has final
-    say**. The finalized caps are stored on the org + recorded in the **mission
-    addendum**. Returns the finalized `{department: cap}` mapping (empty if no
-    total cap is set — the org then falls back to the per-manager IC cap).
-
-    **Error containment** (a headcount hiccup must not kill the run): the
-    leader's allotment gets one corrective retry, and a final failure is
-    contained (a visible org event; the org falls back to the per-manager IC
-    cap). A Pod A failure is likewise contained (a visible org event; the
-    leader's allotment stands — the leader has final say, and a headcount pod
-    must not take down the phase it sizes)."""
-    total = (config or {}).get("head_count_total")
-    if not total:
-        return {}
-    heads = org.department_heads()
-    departments = [h.department for h in heads]
-    # 1. The leader allots the department caps (a resourcing decision), with
-    # one corrective retry on a failure. The `DEPARTMENT_CAP_DEFAULT` knob (if
-    # set) is a resourcing hint in the context. A final failure is contained
-    # (a visible org event; the org falls back to the per-manager IC cap).
-    ctx = _allot_caps_ctx(leader, departments, int(total),
-                          (config or {}).get("department_cap_default"))
-    out, err = _invoke_contained(
-        backend, leader, ctx,
-        classify_complexity(3, leader, {"is_decision": True}), phase=3)
-    caps = _parse_and_clamp_caps(out, departments, int(total)) if out else {}
-    if err is not None:
-        org.log_event("headcount_allotment_failed", leader.id, None,
-                      {"error": err})
-    # Robust fallback: if the leader's allotment failed or returned an empty /
-    # malformed mapping, default to an **even split** of the total across the
-    # departments. The cap chain must NOT silently collapse to no caps — with
-    # no department caps the only backstop left is the hard org-size cap, and
-    # the manager's IC decomposition drives the org straight to it.
-    if not caps and departments:
-        per = max(1, int(total) // len(departments))
-        caps = {d: per for d in departments}
-        org.log_event("headcount_allotment_defaulted", leader.id, None,
-                      {"caps": caps,
-                       "reason": "leader allotment empty/failed — even-split "
-                                 "default"})
-    # 2. Pod A (all heads + the leader) finalizes the department caps — the
-    # leader has final say (the pod deliberates; the leader's allotment is
-    # the final). The leader is a member (like Pod B's head) so a single-head
-    # org still forms a valid pod (the 2-member minimum). Any pod failure
-    # (membership or a member's malformed reply) is contained (a visible org
-    # event; the leader's allotment stands).
-    if heads:
-        # The leader is not a member of `org.roles` — add it so Pod A can be
-        # formed (starter = the leader).
-        roles_with_leader = {**org.roles, leader.id: leader}
-        try:
-            pod = form_pod(
-                roles_with_leader, leader.id,
-                [leader.id] + [h.id for h in heads],
-                f"Finalize the headcount per department (total cap {int(total)})",
-                # Pod A is a headcount deliberation (all heads + the leader) —
-                # the heads are peers (not in one reporting line), so skip the
-                # communication gate (cross_team) and relax the size bound (it
-                # can legitimately exceed the 6-member working-group bound).
-                cross_team=True,
-                max_roles=12,
-                kind="headcount",
-            )
-            # the devil's advocate "listens" to Pod A (all heads + the
-            # leader) — visible, never silent.
-            log_devils_advocate_listening(org, pod, roles_with_leader)
-            run_pod(backend, pod,
-                    max_rounds=(config or {}).get("headcount_pod_rounds"),
-                    transcripts_dir=(config or {}).get(
-                        "pod_transcripts_dir", "pods/transcripts"),
-                    phase=3)
-        except Exception as e:
-            # A pod failure (a membership issue, or a head's malformed /
-            # free-form reply) is contained — a visible org event; the
-            # leader's allotment stands (the leader has final say).
-            org.log_event("headcount_pod_failed", leader.id, None,
-                          {"error": str(e)})
-    # 3. Store on the org + record in the mission addendum.
-    org.department_caps = caps
-    _record_headcount_addendum(mission_path, int(total), caps)
-    return caps
 
 
 # --- Hire / fire -----------------------------------------------------------

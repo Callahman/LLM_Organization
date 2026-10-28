@@ -54,7 +54,7 @@ from roles.base import Role
 from runtime.llm import LLMBackend, MemoryBackend, TimeoutBackend
 from runtime.intake import run_intake, IntakeResult
 from runtime.mission import run_mission, MissionResult, load_mission
-from runtime.org import OrgState, bootstrap, allot_department_caps
+from runtime.org import OrgState, bootstrap
 from runtime import dispatch
 from runtime import plan, staff, execute
 from runtime.pods import (
@@ -820,16 +820,12 @@ class Session:
                 additive=revisit,
                 bootstrap_timeout_seconds=self.config.get(
                     "bootstrap_timeout_seconds",
-                    self.config.get("ic_timeout_seconds")))
+                    self.config.get("ic_timeout_seconds")),
+                history=self.history)
             p3_ended = time.time()
             self.org.write_events()
-            # the leader allots the **department caps** + **Pod A**
-            # (all heads + the leader, the leader has final say) — the
-            # department headcount is finalized + recorded in the mission
-            # addendum (before the Phase 4 plan allots the team caps).
-            allot_department_caps(
-                self.org, self.backend, self.leader, mission_path,
-                config=self.config)
+            # (The leader's Phase-3 department-cap allotment + Pod A was
+            # removed — the headcount is no longer allotted by the leader.)
             # checkpoint after Phase 3 — a crash in Phase 4
             # loses at most the current iteration's hires, not the
             # bootstrapped org.
