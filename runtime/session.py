@@ -63,7 +63,7 @@ from runtime.pods import (
     run_pod,
     log_devils_advocate_listening,
 )
-from runtime.history import HistoryStore, StreamAggregator
+from runtime.history import HistoryStore
 from runtime.timing import TimingTracker, TimingBackend
 from runtime.efficiency import (
     EfficiencyMeter,
@@ -109,22 +109,17 @@ def build_backend(
     - Wraps that in a ``MemoryBackend`` (per-role isolated memory).
     """
     # Tool-call observability: if the raw backend supports per-call stats
-    # (OpenAIBackend), record each call's outcome to history/tool_calls.jsonl
-    # AND flush the stream aggregator for the finished invoke (Rec 6: ONE
-    # bounded stream record per invoke, not one per chunk).
+    # (OpenAIBackend), record each call's outcome to history/tool_calls.jsonl.
     # Live "model stream" observability: if the raw backend supports per-chunk
-    # streaming (OpenAIBackend), buffer each streamed chunk in-memory (the
-    # dashboard's live "model stream" window); the chunks are aggregated per
-    # invoke and written to history/stream.jsonl when the invoke's on_call
-    # fires (the per-chunk on-disk log was ~23MB per 91-minute run).
-    aggregator = StreamAggregator(history)
+    # streaming (OpenAIBackend), forward each streamed chunk to
+    # history/stream.jsonl (the dashboard's live "model stream" window). The
+    # per-chunk text is capped (log_stream's max_chars) so the live window
+    # stays useful while the file is bounded (the uncapped per-chunk log was
+    # ~23MB per 91-minute run).
     if hasattr(raw, "on_call"):
-        def _on_call(stat):
-            history.log_tool_call(stat)
-            aggregator.flush(stat)
-        raw.on_call = _on_call
+        raw.on_call = history.log_tool_call
     if hasattr(raw, "on_stream"):
-        raw.on_stream = aggregator.on_chunk
+        raw.on_stream = history.log_stream
     # Bound the actual backend call: a per-invoke timeout (a visible
     # LLMTimeoutError, never silent) guards the real LLM call.
     timed = TimeoutBackend(

@@ -187,19 +187,22 @@ class HistoryStore:
 
     def log_stream(self, stream_id: str, role_id: str, model: str,
                    kind: str, text: str, label: str = "",
-                   reasoning: str = "") -> str:
+                   reasoning: str = "", max_chars: int = 200) -> str:
         """Record one chunk of a model call's streamed output
         (``history/stream.jsonl``) — ``{ts, stream_id, role, model, kind,
         text, label, reasoning}``; ``kind`` is ``thinking`` / ``content`` /
         ``tool_call``. ``label`` is the role's full label (id · sub_architype
         · (personality) · department); ``reasoning`` is the level actually
         used (HIGH/MEDIUM/LOW). The source for the dashboard's live "model
-        stream" window (short-term)."""
+        stream" window (short-term). The per-chunk ``text`` is capped at
+        ``max_chars``: the dashboard accumulates chunks per kind, so capping
+        the chunk text keeps the live window useful while bounding the file
+        (the 91-minute run's uncapped per-chunk log was ~23MB)."""
         return self._append(
             "stream.jsonl",
             {"ts": time.time(), "stream_id": stream_id, "role": role_id,
-             "model": model, "kind": kind, "text": text, "label": label,
-             "reasoning": reasoning},
+             "model": model, "kind": kind, "text": text[:max_chars],
+             "label": label, "reasoning": reasoning},
         )
 
     def log_cycle(self, phase: int, cycle: int, started: float,
@@ -317,69 +320,3 @@ class HistoryStore:
             "moved_to_archive": self.apply_window(),
             "deleted_from_archive": self.enforce_archive_cap(),
         }
-
-
-class StreamAggregator:
-    """Aggregates streamed chunks per invoke and writes ONE bounded record per
-    invoke to ``history/stream.jsonl`` (instead of one record per chunk, which
-    was ~23MB per 91-minute run). The dashboard's live window still gets every
-    chunk in-memory via :meth:`on_chunk`; only the on-disk log is aggregated.
-
-    Per-kind text (``thinking`` / ``content`` / ``tool_call``) is capped at
-    ``max_chars`` both in memory and on disk (a ``<kind>_truncated`` marker
-    carries the original length). The buffer is flushed when the corresponding
-    invoke's ``on_call`` fires (:meth:`flush`)."""
-
-    def __init__(self, store: "HistoryStore", max_chars: int = 4000):
-        self.store = store
-        self.max_chars = max_chars
-        self._buffers: Dict[str, Dict[str, Any]] = {}
-        self._lock = threading.Lock()
-
-    def on_chunk(self, stream_id: str, role_id: str, model: str, kind: str,
-                 text: str, label: str = "", reasoning: str = "") -> None:
-        """Buffer a streamed chunk (in-memory, for the live dashboard)."""
-        with self._lock:
-            buf = self._buffers.get(stream_id)
-            if buf is None:
-                buf = self._buffers[stream_id] = {
-                    "role": role_id,
-                    "model": model,
-                    "label": label,
-                    "reasoning": reasoning,
-                    "kinds": {},
-                }
-            # Cap per-kind growth at max_chars (bounds memory + disk).
-            cur = buf["kinds"].get(kind, "")
-            if len(cur) < self.max_chars:
-                buf["kinds"][kind] = cur + text
-
-    def flush(self, stat: Dict[str, Any]) -> None:
-        """Write ONE bounded record for the invoke whose ``on_call`` fired
-        (correlated by ``stream_id``). A no-op when the stat carries no
-        ``stream_id`` or the buffer is already empty."""
-        stream_id = stat.get("stream_id")
-        if not stream_id:
-            return
-        with self._lock:
-            buf = self._buffers.pop(stream_id, None)
-        if buf is None:
-            return
-        rec: Dict[str, Any] = {
-            "ts": stat.get("ts"),
-            "stream_id": stream_id,
-            "role": buf["role"],
-            "model": buf["model"],
-            "label": buf["label"],
-            "reasoning": buf["reasoning"],
-            "phase": stat.get("phase"),
-            "outcome": stat.get("outcome"),
-            "kinds": {},
-        }
-        for kind, text in buf["kinds"].items():
-            if len(text) > self.max_chars:
-                rec["kinds"][kind] = text[: self.max_chars]
-                rec["kinds"][kind + "_truncated"] = len(text)
-            else:
-                rec["kinds"][kind] = text
-        self.store._append("stream.jsonl", rec)
