@@ -36,8 +36,12 @@ from runtime.mission import MissionResult
 from runtime.complexity import classify_complexity
 from runtime.pods import form_pod, run_pod, log_devils_advocate_listening
 
-# Required departments (spun up at bootstrap; cannot be fired).
-REQUIRED_DEPARTMENTS = ("hr", "safety", "morality")
+# Required departments (spun up at bootstrap; cannot be fired). A single
+# **governance** supervisor (safety + morality + HR resourcing consolidated)
+# runs at the end of each iteration's work, listens to the pods, and interrupts
+# on misbehavior (the existing safety/morality BAU-halt, now driven by this one
+# department).
+REQUIRED_DEPARTMENTS = ("governance",)
 
 # 3-IC direct-report cap for a non-manager (department head without a manager).
 DIRECT_IC_CAP = 3
@@ -101,17 +105,40 @@ class OrgState:
 
     def log_event(self, kind: str, initiator: Optional[str], target: Optional[str],
                   detail: Optional[Dict[str, Any]] = None) -> None:
-        self.events.append(
-            {"kind": kind, "initiator": initiator, "target": target,
-             "detail": detail or {}, "ts": time.time()}
-        )
+        """Record one org event (a hire / fire / a pod / a veto / a policy / a
+        replacement vote / a halt). The event is appended to the in-memory
+        ``self.events`` list **and** written to
+        ``<history_dir>/org_events.jsonl`` **in real-time** (a line on every
+        event) — the same append-on-every-event pattern the headcount log uses
+        (``HistoryStore.log_headcount``), so the dashboard's org-event stream
+        and any crash-recovery reader see hires immediately, not only at a
+        checkpoint. The in-memory list is preserved for in-run consumers +
+        tests."""
+        event = {
+            "kind": kind, "initiator": initiator, "target": target,
+            "detail": detail or {}, "ts": time.time(),
+        }
+        self.events.append(event)
+        # Real-time append (mirrors HistoryStore.log_headcount -> _append): a
+        # line on every event, so a crash mid-phase never loses the hires.
+        path = os.path.join(self.history_dir, "org_events.jsonl")
+        os.makedirs(self.history_dir, exist_ok=True)
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except OSError as e:
+            # Visible, never silent: a disk hiccup on the event log must not
+            # take down the phase (the in-memory event is still recorded).
+            print(f"[org] failed to append org event: {e}", file=sys.stderr)
 
     def write_events(self) -> str:
-        os.makedirs(self.history_dir, exist_ok=True)
+        """Flush the pending org events. Now a **no-op flush**: events are
+        already written to ``<history_dir>/org_events.jsonl`` in real-time by
+        ``log_event`` (the headcount-process pattern), so this only clears the
+        in-memory buffer (kept for in-run consumers + tests). Kept so the
+        existing checkpoint call sites don't error. Returns the events path
+        (unchanged contract)."""
         path = os.path.join(self.history_dir, "org_events.jsonl")
-        with open(path, "a", encoding="utf-8") as f:
-            for e in self.events:
-                f.write(json.dumps(e, ensure_ascii=False) + "\n")
         self.events = []
         return path
 
@@ -369,8 +396,12 @@ def _mission_departments_to_heads(mission_result: MissionResult) -> List[Dict[st
 
 def _ensure_required(org: OrgState, departments_dir: str,
                      history: Optional[Any] = None) -> List[Role]:
-    """Ensure the required departments (hr, safety, morality) exist and are
-    marked non-fireable."""
+    """Ensure the required governance department (the consolidated
+    safety + morality + HR supervisor) exists and is marked non-fireable.
+
+    The governance head runs at the end of each iteration's work, listens to
+    the pods, and interrupts on misbehavior (the existing safety/morality
+    BAU-halt, now driven by this one department)."""
     created = []
     for dept in REQUIRED_DEPARTMENTS:
         existing = [
@@ -385,7 +416,9 @@ def _ensure_required(org: OrgState, departments_dir: str,
             architype="department_head",
             sub_architype=f"head_of_{dept}",
             department=dept,
-            mandate=f"Head of {dept.upper()}.",
+            mandate=(f"Head of GOVERNANCE (safety + morality + HR resourcing "
+                     f"consolidated). Runs at the end of each iteration's work, "
+                     f"listens to the pods, and interrupts on misbehavior."),
             is_required=True,
             output_schema=worker_output_schema("department_head"),
         )

@@ -13,6 +13,35 @@ the leader's clarifying questions).
 """
 
 # ---------------------------------------------------------------------------
+# Shared output rules (appended to the large-output prompts)
+# ---------------------------------------------------------------------------
+
+# Shared OUTPUT-BATCHING + COMPLETENESS rule. Appended to every prompt that
+# asks for a large structured output (the leader's department decomposition,
+# the head's team decomposition, the manager's IC decomposition, the IC work
+# output, the policy generation, the pod decision). A long output that is
+# truncated mid-way (the model hits the max-token cap) is a *transient*
+# failure (the bounded retry re-invokes the same role), but the role should be
+# told to manage its own output so the work is not lost: keep each item short
+# and complete, list every item (never drop one to fit), and if it cannot fit,
+# finish what it has started and flag the remaining items in a `remaining`
+# field so the line of command knows the list is incomplete (visible, never
+# silent).
+OUTPUT_BATCHING_RULE = (
+    "OUTPUT RULES (large output — manage it so the work is not lost):\n"
+    "- Keep each item SHORT and COMPLETE (one concise sentence per item; "
+    "no prose, no nested detail — the structured field carries the data).\n"
+    "- List EVERY item. Never drop an item to fit the output — a missing "
+    "item is a silent failure. If the full list is too long, finish every "
+    "item you can and put the ones you could not fit in a `remaining` array "
+    "(so the line of command knows the list is incomplete, not that they "
+    "were never needed).\n"
+    "- If you sense you are running out of space, STOP mid-item cleanly "
+    "(complete the current item, then flag the rest in `remaining`) — do "
+    "not emit a partial, corrupt item.\n"
+)
+
+# ---------------------------------------------------------------------------
 # Phase 1 (Intake)
 # ---------------------------------------------------------------------------
 

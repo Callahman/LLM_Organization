@@ -1,7 +1,7 @@
 """Unit tests for `runtime/org.py` — org bootstrap + resourcing
 ( Definition of Done).
 
-Bootstrapping a 3-department org (HR + Safety + Morality required) creates the
+Bootstrapping an org (with a single required governance department) creates the
 right directories/policies; a redundant hire is vetoed by HR; a firing of a
 team produces an offloading plan that names the automations preserved and the
 team continuing their validation; a hire adopts an existing role definition or
@@ -67,21 +67,19 @@ def test_bootstrap_creates_required_departments(tmp_path):
                             mission_path="MISSION.md")
     created = bootstrap(org, backend, leader, mission, _approve_all,
                         departments_dir=str(tmp_path))
-    # The proposed head + the three required departments are present.
+    # The proposed head + the required governance department are present.
     assert org.get("head_analytics") is not None
-    for dept in ("hr", "safety", "morality"):
-        assert any(r.department == dept and r.architype == "department_head"
-                   for r in org.active_roles())
-    # The required departments are marked non-fireable.
-    for dept in ("hr", "safety", "morality"):
-        head = [r for r in org.active_roles()
-                if r.department == dept and r.architype == "department_head"][0]
-        assert head.is_required
+    assert any(r.department == "governance" and r.architype == "department_head"
+               for r in org.active_roles())
+    # The required governance department is marked non-fireable.
+    head = [r for r in org.active_roles()
+            if r.department == "governance" and r.architype == "department_head"][0]
+    assert head.is_required
     # Directories + policy markdowns were created.
     assert os.path.isdir(os.path.join(str(tmp_path), "analytics"))
     assert os.path.isfile(
         os.path.join(str(tmp_path), "analytics", "ANALYTICS_POLICY.md"))
-    assert os.path.isdir(os.path.join(str(tmp_path), "hr"))
+    assert os.path.isdir(os.path.join(str(tmp_path), "governance"))
 
 
 def test_bootstrap_accepts_leader_departments_shape(tmp_path):
@@ -115,12 +113,12 @@ def test_bootstrap_accepts_leader_departments_shape(tmp_path):
     for slug in ("business_development_revenue", "engineering_data_ml",
                  "finance_compliance"):
         assert org.get(f"head_{slug}") is not None
-    # The required departments are present (the leader's 'HR' is folded into
-    # the required hr department and marked non-fireable).
-    for dept in ("hr", "safety", "morality"):
-        head = [r for r in org.active_roles()
-                if r.department == dept and r.architype == "department_head"][0]
-        assert head.is_required
+    # The required governance department is present and marked non-fireable
+    # (the leader's 'HR' proposal becomes a regular head_hr; the consolidated
+    # required department is governance).
+    head = [r for r in org.active_roles()
+            if r.department == "governance" and r.architype == "department_head"][0]
+    assert head.is_required
 
 
 def test_bootstrap_accepts_fallback_head_list_shape(tmp_path):
@@ -148,10 +146,9 @@ def test_bootstrap_accepts_fallback_head_list_shape(tmp_path):
     # The operational heads were created (free-text names normalized to slugs).
     for slug in ("revenue_business_development", "engineering_delivery"):
         assert org.get(f"head_{slug}") is not None
-    # The required departments are present.
-    for dept in ("hr", "safety", "morality"):
-        assert any(r.department == dept and r.architype == "department_head"
-                   for r in org.active_roles())
+    # The required governance department is present.
+    assert any(r.department == "governance" and r.architype == "department_head"
+               for r in org.active_roles())
 
 
 def test_redundant_hire_vetoed_by_hr(tmp_path):
@@ -230,7 +227,8 @@ def test_required_department_cannot_be_fired(tmp_path):
     bootstrap(org, backend, leader, mission, _approve_all,
               departments_dir=str(tmp_path))
     try:
-        fire(org, leader, "head_hr", _approve_all, departments_dir=str(tmp_path))
+        fire(org, leader, "head_governance", _approve_all,
+             departments_dir=str(tmp_path))
         raise AssertionError("expected ResourcingError")
     except ResourcingError as e:
         assert "required" in str(e)

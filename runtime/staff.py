@@ -20,7 +20,7 @@ The shared helpers live in ``runtime/dispatch_common.py``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from roles.base import Role
 from runtime.org import OrgState, fire
@@ -39,6 +39,7 @@ from runtime.dispatch_common import (
     _invoke_decomposition,
     _ensure_role,
     _run_contained_pod,
+    safe_form_pod,
 )
 
 
@@ -84,6 +85,7 @@ def run_staff(
     config: Optional[Dict[str, Any]] = None,
     solo: Optional[SoloTracker] = None,
     history: Optional[HistoryStore] = None,
+    halt_fn: Optional[Callable[[str, str, str], None]] = None,
 ) -> StaffResult:
     """Run Phase 5 (Staff): the per-team manager workflow (IC decomposition +
     IC hiring). Consumes the ``PlanResult`` from Phase 4 (Plan) and returns a
@@ -108,23 +110,25 @@ def run_staff(
                 # IC tasks reflect the clarified team mission), and is
                 # **contained** (a pod failure is logged, never takes down the
                 # phase).
-                pod = form_pod(
+                pod = safe_form_pod(
                     org.roles, head.id, [head.id, manager.id],
                     f"Clarify the team's mission (team "
                     f"{t_obj.get('team') or manager.team})",
                     kind="clarification",
+                    org=org, backend=backend, initiator=head, phase=5,
                 )
-                # the devil's advocate "listens" to the head+manager
-                # clarification pod (the head is a member — visible, never
-                # silent).
-                log_devils_advocate_listening(org, pod, org.roles)
-                _run_contained_pod(backend, org, pod,
-                                   max_rounds=(config or {}).get(
-                                       "clarification_pod_rounds"),
-                                   transcripts_dir=(config or {}).get(
-                                       "pod_transcripts_dir",
-                                       "pods/transcripts"),
-                                   phase=5)
+                if pod is not None:
+                    # the devil's advocate "listens" to the head+manager
+                    # clarification pod (the head is a member — visible, never
+                    # silent).
+                    log_devils_advocate_listening(org, pod, org.roles)
+                    _run_contained_pod(backend, org, pod,
+                                       max_rounds=(config or {}).get(
+                                           "clarification_pod_rounds"),
+                                       transcripts_dir=(config or {}).get(
+                                           "pod_transcripts_dir",
+                                           "pods/transcripts"),
+                                       phase=5, halt_fn=halt_fn)
                 # Manager branch: the manager decomposes its team objective
                 # into IC tasks (invoked with the department POLICY + the
                 # bounded mission digest + the clarification pod's outcome
@@ -140,7 +144,7 @@ def run_staff(
                     manager, t_obj.get("objective", ""),
                     policy=head_policies.get(head.id, {}).get("policy", ""),
                     digest=digest,
-                    clarification=pod.decision or "")
+                    clarification=(pod.decision if pod else ""))
                 if existing_ics:
                     mgr_ctx += (
                         f" EXISTING ICs in your team (REUSE them — name each "

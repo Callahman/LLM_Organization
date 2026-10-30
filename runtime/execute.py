@@ -22,7 +22,7 @@ pointers); no tier is skipped. The shared helpers live in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from roles.base import Role
 from runtime.org import OrgState
@@ -39,6 +39,7 @@ from runtime.dispatch_common import (
     _apply_ic_self_edits,
     _check_pod_triggers,
     _run_contained_pod,
+    safe_form_pod,
 )
 
 
@@ -69,6 +70,7 @@ def run_execute(
     ic_timeout_seconds: Optional[float] = None,
     config: Optional[Dict[str, Any]] = None,
     solo: Optional[SoloTracker] = None,
+    halt_fn: Optional[Callable[[str, str, str], None]] = None,
 ) -> ExecuteResult:
     """Run Phase 6 (Execute): the per-IC work + self-edits + the A/B/C pod
     triggers + the upward report. Consumes the ``StaffResult`` from Phase 5
@@ -103,19 +105,25 @@ def run_execute(
                     # task. It runs BEFORE the IC's work (the work
                     # reflects the clarified task), and is **contained** (a pod
                     # failure is logged, never takes down the phase).
-                    pod = form_pod(
+                    # ``cross_team=True``: a manager working group that reaches
+                    # a sibling-team IC relaxes only the communication gate
+                    # (the 1-tier-spread bound still applies).
+                    pod = safe_form_pod(
                         org.roles, manager.id, [manager.id, ic.id],
                         f"Clarify the IC's task (task "
                         f"{str(task.get('task', ''))[:80]})",
+                        cross_team=True,
                         kind="clarification",
+                        org=org, backend=backend, initiator=manager, phase=6,
                     )
-                    _run_contained_pod(backend, org, pod,
-                                       max_rounds=(config or {}).get(
-                                           "clarification_pod_rounds"),
-                                       transcripts_dir=(config or {}).get(
-                                           "pod_transcripts_dir",
-                                           "pods/transcripts"),
-                                       phase=6)
+                    if pod is not None:
+                        _run_contained_pod(backend, org, pod,
+                                           max_rounds=(config or {}).get(
+                                               "clarification_pod_rounds"),
+                                           transcripts_dir=(config or {}).get(
+                                               "pod_transcripts_dir",
+                                               "pods/transcripts"),
+                                           phase=6, halt_fn=halt_fn)
                     ic_out, ic_err = _invoke_ic(
                         backend, ic,
                         _ic_ctx(
@@ -123,7 +131,7 @@ def run_execute(
                             policy_summary=head_policies.get(
                                 head.id, {}).get("policy_summary", ""),
                             digest=digest,
-                            clarification=pod.decision or ""),
+                            clarification=(pod.decision if pod else "")),
                         reasoning=classify_complexity(6, ic, {}),
                         timeout=ic_timeout_seconds, phase=6)
                     if ic_err is not None:
@@ -142,39 +150,47 @@ def run_execute(
                     # the manager sets up the pod (kind="collaboration", capped
                     # iterations). The pod's outcome is carried into the IC's
                     # work (the IC retries with the collaboration).
+                    # ``cross_team=True``: a manager working group that reaches
+                    # a sibling-team IC relaxes only the communication gate.
                     _collaborate = ic_out.get("collaborate")
                     if _collaborate:
-                        collab_pod = form_pod(
+                        collab_pod = safe_form_pod(
                             org.roles, manager.id, [manager.id, ic.id],
                             f"Collaboration needed (IC {ic.id}): "
                             f"{str(_collaborate)[:80]}",
+                            cross_team=True,
                             kind="collaboration",
+                            org=org, backend=backend, initiator=manager,
+                            phase=6,
                         )
-                        _run_contained_pod(
-                            backend, org, collab_pod,
-                            max_rounds=(config or {}).get(
-                                "collaboration_pod_rounds"),
-                            phase=6)
-                        # The collaboration pod is surfaced in `pods_out` (the
-                        # leader's synthesis + the session's pod records) —
-                        # its run is contained, but the pod itself (membership
-                        # + decision) is recorded like the A/B/C trigger pods.
-                        if pods_out is not None:
-                            pods_out.append(collab_pod)
-                        # The IC retries its work with the collaboration pod's
-                        # outcome (the collaboration plan).
-                        _ic_retry, _ic_retry_err = _invoke_ic(
-                            backend, ic,
-                            _ic_ctx(
-                                ic, task.get("task", ""),
-                                policy_summary=head_policies.get(
-                                    head.id, {}).get("policy_summary", ""),
-                                digest=digest,
-                                clarification=collab_pod.decision or ""),
-                            reasoning=classify_complexity(6, ic, {}),
-                            timeout=ic_timeout_seconds, phase=6)
-                        if _ic_retry_err is None:
-                            ic_out = _ic_retry
+                        if collab_pod is not None:
+                            _run_contained_pod(
+                                backend, org, collab_pod,
+                                max_rounds=(config or {}).get(
+                                    "collaboration_pod_rounds"),
+                                phase=6, halt_fn=halt_fn)
+                            # The collaboration pod is surfaced in `pods_out`
+                            # (the leader's synthesis + the session's pod
+                            # records) — its run is contained, but the pod
+                            # itself (membership + decision) is recorded like
+                            # the A/B/C trigger pods.
+                            if pods_out is not None:
+                                pods_out.append(collab_pod)
+                            # The IC retries its work with the collaboration
+                            # pod's outcome (the collaboration plan).
+                            _ic_retry, _ic_retry_err = _invoke_ic(
+                                backend, ic,
+                                _ic_ctx(
+                                    ic, task.get("task", ""),
+                                    policy_summary=head_policies.get(
+                                        head.id, {}).get("policy_summary", ""),
+                                    digest=digest,
+                                    clarification=(collab_pod.decision
+                                                  or "")),
+                                reasoning=classify_complexity(6, ic, {}),
+                                timeout=ic_timeout_seconds, phase=6)
+                            if _ic_retry_err is None:
+                                ic_out = _ic_retry
                     # Keep the full IC outputs for the pod triggers
                     # (disagreement detection needs the recommendations, not
                     # just the upward reports).
@@ -215,6 +231,7 @@ def run_execute(
                     starter_in_members=True,
                     config=config,
                     phase=6,
+                    halt_fn=halt_fn,
                 )
                 # The manager's upward report: a bounded summary of the IC work
                 # below it.
@@ -269,6 +286,7 @@ def run_execute(
                     starter_in_members=False,
                     config=config,
                     phase=6,
+                    halt_fn=halt_fn,
                 )
                 # The IC's bounded summary + artifact pointer.
                 team_reports.append(_upward_report(ic, [

@@ -63,6 +63,7 @@ from runtime.pods import (
     run_pod,
     log_devils_advocate_listening,
 )
+from runtime.dispatch_common import safe_form_pod
 from runtime.history import HistoryStore
 from runtime.timing import TimingTracker, TimingBackend
 from runtime.efficiency import (
@@ -257,18 +258,21 @@ class Session:
             parent = roles.get(parent_id)
             if parent is None:
                 continue
-            pod = form_pod(
+            pod = safe_form_pod(
                 roles, parent.id, [parent.id, role.id],
                 f"{role.id} reports to {parent.id} (status / results / "
                 f"fire-replace-keep decisions + headcount changes)",
                 kind="reporting",
+                org=self.org, backend=self.backend, initiator=parent, phase=7,
             )
-            # the devil's advocate "listens" to a reporting pod when
-            # the parent is a head (visible, never silent).
-            log_devils_advocate_listening(self.org, pod, roles)
-            run_pod(self.backend, pod, max_rounds=max_rounds, phase=7,
-                    transcripts_dir=self.config.get(
-                        "pod_transcripts_dir", "pods/transcripts"))
+            if pod is not None:
+                # the devil's advocate "listens" to a reporting pod when
+                # the parent is a head (visible, never silent).
+                log_devils_advocate_listening(self.org, pod, roles)
+                run_pod(self.backend, pod, max_rounds=max_rounds, phase=7,
+                        transcripts_dir=self.config.get(
+                            "pod_transcripts_dir", "pods/transcripts"),
+                        org=self.org, halt_fn=self.halt_bau)
         # head→leader: each (operational) department head reports to the
         # leader. The required governance heads (hr / safety / morality) are
         # skipped — like the Phase 4 clarification pod, the leader+head working
@@ -277,18 +281,22 @@ class Session:
         for head in self.org.department_heads():
             if head.is_required:
                 continue
-            pod = form_pod(
+            pod = safe_form_pod(
                 roles, self.leader.id, [self.leader.id, head.id],
                 f"{head.id} reports to {self.leader.id} (status / results / "
                 f"fire-replace-keep decisions + headcount changes)",
                 kind="reporting",
+                org=self.org, backend=self.backend, initiator=self.leader,
+                phase=7,
             )
-            # the devil's advocate "listens" to the head→leader pod
-            # (the leader is a member — visible, never silent).
-            log_devils_advocate_listening(self.org, pod, roles)
-            run_pod(self.backend, pod, max_rounds=max_rounds, phase=7,
-                    transcripts_dir=self.config.get(
-                        "pod_transcripts_dir", "pods/transcripts"))
+            if pod is not None:
+                # the devil's advocate "listens" to the head→leader pod
+                # (the leader is a member — visible, never silent).
+                log_devils_advocate_listening(self.org, pod, roles)
+                run_pod(self.backend, pod, max_rounds=max_rounds, phase=7,
+                        transcripts_dir=self.config.get(
+                            "pod_transcripts_dir", "pods/transcripts"),
+                        org=self.org, halt_fn=self.halt_bau)
 
     def _evaluate_progress(self, has_work: bool = True) -> str:
         # the **reporting pods** (ic→manager, manager→head,
@@ -881,6 +889,7 @@ class Session:
                 config=self.config,
                 solo=self.solo,
                 timing=self.timing,
+                halt_fn=self.halt_bau,
             )
             self.phases[4] = self.phases.get(4, 0) + 1
 
@@ -892,6 +901,7 @@ class Session:
                 config=self.config,
                 solo=self.solo,
                 history=self.history,
+                halt_fn=self.halt_bau,
             )
             self.phases[5] = self.phases.get(5, 0) + 1
 
@@ -910,6 +920,7 @@ class Session:
                 ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
                 config=self.config,
                 solo=self.solo,
+                halt_fn=self.halt_bau,
             )
             dispatch_results = exec_result.reports
             self.phases[6] = self.phases.get(6, 0) + 1
@@ -919,14 +930,28 @@ class Session:
                              {"dispatches": len(dispatch_results),
                               "thinking_budget_remaining":
                                   self.thinking_budget.remaining})
+            # The governance supervisor (the consolidated safety + morality +
+            # HR supervisor) reviews every pod as it closes — the review runs
+            # inside `run_pod` (Task 2), so a pod that misbehaves is interrupted
+            # in real time (a governance_interrupt org event + the halt) rather
+            # than after the phase. No separate loop is needed here.
 
-            # A Safety/Morality halt during the work (Phases 4-6) (the only
-            # BAU halt).
+            # A halt during the work (Phases 4-6) (the only BAU halt). Now
+            # driven by the consolidated governance department (safety +
+            # morality + HR).
             if phase4_halt_fn is not None:
                 halt = phase4_halt_fn()
                 if halt:
                     self.halt_bau(halt["department"], halt["scope"], halt["reason"])
                     self.queue_user_input({"kind": "safety_morality_halt", **halt})
+                    # A real-time governance_interrupt org event (the
+                    # consolidated safety + morality + HR supervisor
+                    # interrupted the work).
+                    self.org.log_event(
+                        "governance_interrupt", None, None,
+                        {"department": halt["department"],
+                         "scope": halt["scope"],
+                         "reason": halt["reason"]})
 
             # a GLOBAL Safety/Morality halt stops work
             # before Phase 7 (evaluate) — the halt is CONSUMED, not just

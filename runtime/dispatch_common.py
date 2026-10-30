@@ -24,7 +24,7 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from prompts import (
     AUTOMATION_CTX_MID,
@@ -55,6 +55,7 @@ from prompts import (
     LEADER_CTX_DIGEST,
     LEADER_CTX_INSTRUCTION,
     LEADER_CTX_NO_INVENT,
+    OUTPUT_BATCHING_RULE,
     MANAGER_CTX_CLAR_PREFIX,
     MANAGER_CTX_DIGEST,
     MANAGER_CTX_INSTRUCTION,
@@ -122,7 +123,8 @@ def mission_digest(mission: Dict[str, Any]) -> str:
 def _run_contained_pod(backend: LLMBackend, org: OrgState, pod: Pod,
                        max_rounds: Optional[int] = None,
                        phase: int = 4,
-                       transcripts_dir: Optional[str] = None) -> None:
+                       transcripts_dir: Optional[str] = None,
+                       halt_fn: Optional[Callable[[str, str, str], None]] = None) -> None:
     """Run a clarification pod with **containment**: a backend
     failure inside the pod is logged (visible, never silent) and the phase
     continues (the pod's decision stays empty). A clarification pod must not
@@ -130,16 +132,103 @@ def _run_contained_pod(backend: LLMBackend, org: OrgState, pod: Pod,
     round count (an explicit ``max_rounds`` overrides it).
 
     The pod is always **formed** by the caller (so its membership is validated
-    + recorded); only its **run** is contained here.
+    + recorded); only its **run** is contained here. When ``org`` is present
+    (it always is here), the governance supervisor reviews the pod as it
+    closes (Task 2) — a halt raised by the review propagates to the caller.
     """
     try:
         run_pod(backend, pod, max_rounds=max_rounds, phase=phase,
-                transcripts_dir=transcripts_dir)
+                transcripts_dir=transcripts_dir, org=org, halt_fn=halt_fn)
     except Exception as e:
         org.log_event(
             "pod_failed", pod.starter.id, None,
             {"pod": pod.id, "kind": pod.kind, "error": str(e)},
         )
+
+
+def safe_form_pod(
+    roles: Dict[str, Role],
+    starter_id: str,
+    member_ids: List[str],
+    topic: str,
+    *,
+    org: OrgState,
+    backend: Optional[LLMBackend],
+    initiator: Role,
+    cross_team: bool = False,
+    kind: str = "execution",
+    min_roles: int = tiers.POD_MIN_ROLES,
+    max_roles: int = tiers.POD_MAX_ROLES,
+    phase: int = 6,
+) -> Optional[Pod]:
+    """Form a pod with **containment**: a membership failure (or any error)
+    is logged visibly (an org event), a correction is sent back to the
+    **initiator** (the role that formed the pod) so it can proceed, and the pod
+    is skipped (returns ``None``). A pod-forming failure must never take down
+    the phase it is part of.
+
+    ``cross_team`` relaxes only the communication gate (the size / 1-tier-spread
+    bound still applies) — pass it for manager-initiated working groups that
+    reach across teams.
+    """
+    try:
+        return form_pod(
+            roles, starter_id, member_ids, topic,
+            cross_team=cross_team, kind=kind,
+            min_roles=min_roles, max_roles=max_roles,
+        )
+    except Exception as e:
+        # Visible: the pod-forming failure is logged + the initiator is
+        # corrected (never silent). Broad ``Exception`` per "all exceptions".
+        _send_pod_failure_to_initiator(
+            org, initiator, starter_id, member_ids, topic, kind,
+            f"{type(e).__name__}: {e}", backend, phase,
+        )
+        return None
+
+
+def _send_pod_failure_to_initiator(
+    org: OrgState,
+    initiator: Role,
+    starter_id: str,
+    member_ids: List[str],
+    topic: str,
+    kind: str,
+    error: str,
+    backend: Optional[LLMBackend],
+    phase: int,
+) -> None:
+    """Send a pod-forming failure back to the **initiator** (the manager that
+    tried to form the pod) so it can update its next steps (proceed without the
+    pod / note the failure in its upward report). The failure is logged visibly
+    (an org event) and the initiator is re-invoked with a correction context
+    (it must not assume the pod deliberated or produced a decision).
+
+    Sibling of ``_send_hire_failure_to_initiator``. Best-effort: a failure in
+    the corrective re-invoke is not fatal (the pod already failed to form; the
+    org event records it)."""
+    org.log_event("pod_form_failed", initiator.id, None,
+                  {"starter": starter_id, "members": member_ids,
+                   "topic": topic, "kind": kind, "error": error})
+    if backend is None:
+        return
+    ctx = (
+        f"YOUR POD FAILED TO FORM: your attempt to form a {kind} pod with "
+        f"members {member_ids} (topic: {topic[:80]}) FAILED ({error}). The "
+        f"pod does NOT exist — you CANNOT assume it deliberated or produced a "
+        f"decision. Update your next steps: (1) proceed WITHOUT the pod (do "
+        f"the work / make the decision on your own); (2) note the failed pod "
+        f"in your upward report so the line of command knows the "
+        f"collaboration did not happen."
+    )
+    try:
+        backend.invoke(initiator, ctx,
+                       reasoning=classify_complexity(phase, initiator, {}),
+                       phase=phase)
+    except Exception:
+        # The corrective re-invoke failing is not fatal (the pod already
+        # failed to form; the org event records it).
+        pass
 
 
 def _leader_ctx(digest: str, head_ids: List[str],
@@ -154,6 +243,9 @@ def _leader_ctx(digest: str, head_ids: List[str],
     # department.
     if efficiency_panel:
         base += " " + efficiency_panel
+    # The shared output-batching + completeness rule (the leader's department
+    # decomposition is a large structured output).
+    base += " " + OUTPUT_BATCHING_RULE
     return base
 
 
@@ -272,7 +364,8 @@ def _head_ctx(head: Role, objective: str, digest: str) -> str:
         HEAD_CTX_PREFIX + head.id +
         HEAD_CTX_OBJ + objective +
         HEAD_CTX_DIGEST + digest +
-        HEAD_CTX_INSTRUCTION
+        HEAD_CTX_INSTRUCTION +
+        " " + OUTPUT_BATCHING_RULE
     )
 
 
@@ -301,7 +394,8 @@ def _manager_ctx(manager: Role, objective: str, policy: str = "",
         clarification_line +
         MANAGER_CTX_DIGEST + (digest or "(none)") +
         MANAGER_CTX_POLICY + (policy or "(none)") +
-        MANAGER_CTX_INSTRUCTION
+        MANAGER_CTX_INSTRUCTION +
+        " " + OUTPUT_BATCHING_RULE
     )
 
 
@@ -350,7 +444,8 @@ def _ic_ctx(ic: Role, task: str, policy_summary: str = "",
         clarification_line +
         IC_CTX_INSTRUCTION_PREFIX + team_root +
         IC_CTX_INSTRUCTION_MID + team_root +
-        IC_CTX_INSTRUCTION_SUFFIX
+        IC_CTX_INSTRUCTION_SUFFIX +
+        " " + OUTPUT_BATCHING_RULE
     )
 
 
@@ -381,7 +476,8 @@ def _policy_ctx(head: Role, mission_digest: str, existing_policy: str,
         POLICY_CTX_DIRECTIVE + directive +
         clarification_line +
         POLICY_CTX_EXISTING + (existing_policy or "(none yet)") +
-        POLICY_CTX_INSTRUCTION
+        POLICY_CTX_INSTRUCTION +
+        " " + OUTPUT_BATCHING_RULE
     )
 
 
@@ -919,6 +1015,7 @@ def _check_pod_triggers(
     starter_in_members: bool = True,
     config: Optional[Dict[str, Any]] = None,
     phase: int = 4,
+    halt_fn: Optional[Callable[[str, str, str], None]] = None,
 ) -> None:
     """The pods A/B/C multi-trigger — form a pod when any trigger fires:
 
@@ -976,7 +1073,7 @@ def _check_pod_triggers(
     run_pod(backend, pod, max_rounds=(config or {}).get("pod_max_rounds", 3),
             transcripts_dir=transcripts_dir,
             budget_tokens=(config or {}).get("context_budget_tokens", 4000),
-            phase=phase)
+            phase=phase, org=org, halt_fn=halt_fn)
     # Write the pod's transcript (pods/transcripts/) + its decision artifact
     # (pods/artifacts/).
     write_transcripts(pod, transcripts_dir=transcripts_dir)
@@ -1028,7 +1125,7 @@ def _check_pod_triggers(
                         max_rounds=(config or {}).get("pod_max_rounds", 3),
                         transcripts_dir=transcripts_dir,
                         budget_tokens=(config or {}).get("context_budget_tokens", 4000),
-                        phase=phase)
+                        phase=phase, org=org, halt_fn=halt_fn)
                 write_transcripts(chained, transcripts_dir=transcripts_dir)
                 write_decision_artifact(chained, artifacts_dir=artifacts_dir)
         else:

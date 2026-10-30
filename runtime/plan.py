@@ -23,7 +23,7 @@ The shared helpers live in ``runtime/dispatch_common.py``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from roles.base import Role
 from runtime.org import OrgState, run_leader_replacement_vote
@@ -50,6 +50,7 @@ from runtime.dispatch_common import (
     run_automation,
     _run_contained_pod,
     generate_head_policies,
+    safe_form_pod,
 )
 
 
@@ -80,7 +81,8 @@ class PlanResult:
 
 def _allot_team_caps(org: OrgState, backend, head: Role,
                      team_objectives: List[Dict[str, Any]],
-                     config: Optional[Dict[str, Any]] = None) -> None:
+                     config: Optional[Dict[str, Any]] = None,
+                     halt_fn: Optional[Callable[[str, str, str], None]] = None) -> None:
     """The **team/IC caps** (a cap per team, bounded by the department cap)
     default to an **even split** of the department cap across the teams, then
     **Pod B** (all managers + the head) finalizes them — the **head has final
@@ -143,7 +145,7 @@ def _allot_team_caps(org: OrgState, backend, head: Role,
                     max_rounds=(config or {}).get("headcount_pod_rounds"),
                     transcripts_dir=(config or {}).get(
                         "pod_transcripts_dir", "pods/transcripts"),
-                    phase=4)
+                    phase=4, org=org, halt_fn=halt_fn)
         except Exception as e:
             # A pod failure (a membership issue, or a manager's malformed /
             # free-form reply) is contained — a visible org event; the head's
@@ -167,6 +169,7 @@ def run_plan(
     config: Optional[Dict[str, Any]] = None,
     solo: Optional[SoloTracker] = None,
     timing: Optional[TimingTracker] = None,
+    halt_fn: Optional[Callable[[str, str, str], None]] = None,
 ) -> PlanResult:
     """Run Phase 4 (Plan): the leader decomposition + the per-department head
     workflow (policies, team decomposition, manager hiring). Returns a
@@ -242,6 +245,14 @@ def run_plan(
                 {"reason": "leader produced no department_objectives (empty "
                            "Phase 4 decomposition)"},
             )
+    # Force the governance department to be processed last (the consolidated
+    # safety + morality + HR supervisor reviews the iteration's work after the
+    # operational departments).
+    if dept_objectives:
+        def _governance_last(obj):
+            head = org.get(obj.get("head_id", ""))
+            return 1 if (head and head.department == "governance") else 0
+        dept_objectives = sorted(dept_objectives, key=_governance_last)
 
     # the **leader+head clarification pods** (per operational
     # department) — a 2-member parent+child pod that clarifies the
@@ -256,22 +267,24 @@ def run_plan(
         head = org.get(obj.get("head_id", ""))
         if head is None or head.is_required:
             continue
-        pod = form_pod(
+        pod = safe_form_pod(
             roles_with_leader, leader.id, [leader.id, head.id],
             f"Clarify the department's mission (department {head.department})",
             kind="clarification",
+            org=org, backend=backend, initiator=leader, phase=4,
         )
-        # the devil's advocate "listens" to the leader+head pod
-        # (visible, never silent).
-        log_devils_advocate_listening(org, pod, roles_with_leader)
-        _run_contained_pod(backend, org, pod,
-                           max_rounds=(config or {}).get(
-                               "clarification_pod_rounds"),
-                           transcripts_dir=(config or {}).get(
-                               "pod_transcripts_dir", "pods/transcripts"),
-                           phase=4)
-        if pod.decision:
-            clarifications[head.id] = pod.decision
+        if pod is not None:
+            # the devil's advocate "listens" to the leader+head pod
+            # (visible, never silent).
+            log_devils_advocate_listening(org, pod, roles_with_leader)
+            _run_contained_pod(backend, org, pod,
+                               max_rounds=(config or {}).get(
+                                   "clarification_pod_rounds"),
+                               transcripts_dir=(config or {}).get(
+                                   "pod_transcripts_dir", "pods/transcripts"),
+                               phase=4, halt_fn=halt_fn)
+            if pod.decision:
+                clarifications[head.id] = pod.decision
 
     # Pre-decomposition: every department head (operational AND required)
     # authors its department POLICY + POLICY_SUMMARY. **:** the policy
@@ -362,7 +375,8 @@ def run_plan(
         # the head allots the **team/IC caps** (Phase 4) +:
         # **Pod B** (all managers + the head) finalizes them (the head has final
         # say).
-        _allot_team_caps(org, backend, head, team_objectives, config)
+        _allot_team_caps(org, backend, head, team_objectives, config,
+                          halt_fn=halt_fn)
         departments.append({
             "head": head,
             "objective": obj.get("objective", ""),

@@ -81,10 +81,9 @@ def test_bootstrap_creates_proposed_departments(tmp_path):
     # The proposed departments were created (free-text names -> slugs).
     assert org.get("head_data_engineering") is not None
     assert org.get("head_analytics") is not None
-    # The required governance departments are always present.
-    for dept in ("hr", "safety", "morality"):
-        assert any(r.department == dept and r.architype == "department_head"
-                   for r in org.active_roles())
+    # The required governance department is always present.
+    assert any(r.department == "governance" and r.architype == "department_head"
+               for r in org.active_roles())
 
 
 def test_bootstrap_falls_back_to_org_recommendation(tmp_path):

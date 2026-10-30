@@ -18,13 +18,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from org import tiers
 from org.tiers import DEVILS_ADVOCATE_ROLE
 from prompts import (
+    OUTPUT_BATCHING_RULE,
     POD_CTX_AGENDA_LABEL,
     POD_CTX_ARTIFACTS_LABEL,
     POD_CTX_HEADER_DASH,
@@ -205,6 +207,87 @@ def log_devils_advocate_listening(org, pod: Pod,
                "pod_members": [m.id for m in pod.members]})
 
 
+def governance_head(roles: Dict[str, Role]) -> Optional[Role]:
+    """The consolidated governance supervisor (the required ``governance``
+    department head — safety + morality + HR resourcing). ``None`` when there
+    is no governance head (e.g. a run that started before the consolidation)."""
+    for r in roles.values():
+        if getattr(r, "architype", "") == "department_head" \
+                and getattr(r, "department", "") == "governance" \
+                and getattr(r, "is_required", False):
+            return r
+    return None
+
+
+def log_governance_listening(org, pod: Pod,
+                             roles: Dict[str, Role]) -> None:
+    """Log the governance supervisor's "listening" to a pod in the audit
+    ( — visible, never silent). The governance head (the consolidated
+    safety + morality + HR supervisor) observes every pod so it can interrupt
+    on misbehavior (the existing safety/morality BAU-halt, now driven by this
+    one department). A no-op when there is no governance head (or when
+    ``org`` has no ``log_event``)."""
+    gov = governance_head(roles)
+    if gov is None:
+        return
+    log_event = getattr(org, "log_event", None)
+    if log_event is None:
+        return
+    log_event("governance_listening", gov.id, pod.id,
+              {"topic": pod.topic, "kind": pod.kind,
+               "pod_members": [m.id for m in pod.members]})
+
+
+def governance_review_pod(backend, org, pod: Pod,
+                          roles: Dict[str, Role],
+                          halt_fn: Optional[Callable[[str, str, str], None]] = None,
+                          ) -> Optional[Dict[str, Any]]:
+    """The governance supervisor's post-pod review (the consolidated safety +
+    morality + HR supervisor listens to the pod's decision and interrupts on
+    misbehavior). A bounded, low-complexity invoke of the governance head with
+    the pod's decision. If the governance head flags out-of-policy behavior, it
+    interrupts: a real-time ``governance_interrupt`` org event is logged and the
+    halt is raised (scoped or global). Returns the governance head's review
+    (a dict) or ``None`` when there is no governance head (or the review is a
+    no-op)."""
+    gov = governance_head(roles)
+    if gov is None:
+        return None
+    # The governance head's review context (the pod's decision + the pod's
+    # topic + the members).
+    ctx = (
+        "GOVERNANCE REVIEW: you are the governance supervisor (safety + "
+        "morality + HR). Listen to this pod's decision and decide whether the "
+        "behavior is out of policy. Pod topic: " + pod.topic +
+        ". Pod members: " + ", ".join(m.id for m in pod.members) +
+        ". Pod decision: " + (pod.decision or "(none)") +
+        ". If the behavior is out of policy, set `interrupt` to true, "
+        "`scope` to 'scoped' or 'global', and `reason` to a one-sentence "
+        "explanation. Otherwise set `interrupt` to false."
+    )
+    # A bounded, low-complexity invoke of the governance head.
+    try:
+        out = backend.invoke(gov, ctx, reasoning="low", phase=7)
+    except Exception as e:
+        # Visible, never silent: a governance review failure must not take down
+        # the phase.
+        print(f"[governance] review failed: {e}", file=sys.stderr)
+        return None
+    # Parse the governance head's review.
+    review = out if isinstance(out, dict) else {}
+    if review.get("interrupt"):
+        # Interrupt: log a real-time governance_interrupt org event + raise the
+        # halt (scoped or global).
+        scope = review.get("scope", "scoped")
+        reason = review.get("reason", "out-of-policy behavior")
+        org.log_event("governance_interrupt", gov.id, pod.id,
+                      {"scope": scope, "reason": reason,
+                       "pod_topic": pod.topic})
+        if halt_fn is not None:
+            halt_fn("governance", scope, reason)
+    return review
+
+
 def _pod_ctx(pod: Pod, kind: str, prior: str = "",
              budget_tokens: int = 4000) -> str:
     """Build a pod member's context. Starts with "POD" so the routing backend
@@ -229,6 +312,9 @@ def _pod_ctx(pod: Pod, kind: str, prior: str = "",
         )
     if prior:
         header_parts.append(POD_CTX_PRIOR_LABEL + prior)
+    # The shared output-batching + completeness rule (the pod's decision is a
+    # large structured output).
+    header_parts.append(OUTPUT_BATCHING_RULE)
     agenda = "\n".join(header_parts)
     # The bounded part: the transcript entries (speak + carried_decision).
     summaries: List[Tuple[str, str]] = []
@@ -244,7 +330,9 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
             transcripts_dir: Optional[str] = None,
             pod_wall_clock_seconds: float = 600.0,
             budget_tokens: int = 4000,
-            phase: int = 4) -> Pod:
+            phase: int = 4,
+            org: Optional[Any] = None,
+            halt_fn: Optional[Callable[[str, str, str], None]] = None) -> Pod:
     """Run a pod's conversation:
 
     1. the **starter** sets the agenda (it manages the conversation);
@@ -252,6 +340,13 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
        is a **deadlock** and closes the pod; a round with **disagreement**
        (conflicting recommendations) uses "thinking" (HIGH);
     3. the **starter** always closes, producing the decision.
+
+    **Governance (Task 2):** when ``org`` is supplied, the consolidated
+    governance supervisor (safety + morality + HR) **listens** to the pod's
+    decision as soon as the pod closes and **interrupts** on out-of-policy
+    behavior (a real-time ``governance_interrupt`` org event + the halt, scoped
+    or global, via ``halt_fn``). A no-op when ``org`` is not supplied (the pod
+    is run outside a session, e.g. a unit test).
 
     ** (capped iterations):** the round count is **capped** — if
     ``max_rounds`` is not given, it defaults to the pod's **kind**
@@ -330,6 +425,13 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
         "kind": "close", "role": pod.starter.id, "decision": pod.decision,
         "rationale": pod.rationale, "open_items": pod.open_items,
     })
+    # Governance (Task 2): after the pod closes, the consolidated governance
+    # supervisor (safety + morality + HR) listens to the pod's decision and
+    # interrupts on out-of-policy behavior (a real-time governance_interrupt
+    # org event + the halt). A no-op when `org` is not supplied.
+    if org is not None:
+        log_governance_listening(org, pod, org.roles)
+        governance_review_pod(backend, org, pod, org.roles, halt_fn=halt_fn)
     return pod
 
 
