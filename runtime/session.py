@@ -64,8 +64,12 @@ from runtime.pods import (
     log_devils_advocate_listening,
 )
 from runtime.dispatch_common import safe_form_pod
+from runtime.atomic import atomic_write_json
 from runtime.history import HistoryStore
 from runtime.timing import TimingTracker, TimingBackend
+from runtime.checkpoint import (
+    WorkItemTracker, CheckpointBackend, VERIFY_WORK_PREAMBLE,
+)
 from runtime.efficiency import (
     EfficiencyMeter,
     compute_m_satisfaction,
@@ -173,6 +177,21 @@ class Session:
         # attributes, e.g. save_state / load_state / seed_cross_team).
         self.timing = TimingTracker(history_dir=history_dir)
         self.backend = TimingBackend(self.backend, self.timing)
+        # work-item checkpointing — the WorkItemTracker records per-phase
+        # work-item progress (completed departments / teams / ICs + the in-
+        # progress one); it is persisted into state/checkpoint.json (the
+        # recovery state) and, on resume, seeded so completed work items are
+        # skipped (exact next-role resumption). The CheckpointBackend wraps the
+        # chain (outermost) so every invoke is counted and the N-action
+        # checkpoint fires every N invokes (a light progress marker).
+        self.work_items = WorkItemTracker()
+        self._current_phase: int = 1
+        self.backend = CheckpointBackend(
+            self.backend,
+            every_n=self.config.get("checkpoint_every_n_actions", 5),
+            verify_preamble=VERIFY_WORK_PREAMBLE,
+        )
+        self.backend.on_checkpoint = self._maybe_action_checkpoint
         # the efficiency meter — instruments the Phase 3-8 loop
         # per iteration (T_total, T_p3..T_p8, T_dept, T_role, H_peak, C,
         # N_created), computes the efficiency score E (M_satisfaction /
@@ -644,31 +663,53 @@ class Session:
         pre-crash state requires to be recoverable."""
         return {self.leader.id, *self.org.roles.keys()}
 
-    def _checkpoint(self, phase: int, cycle: int) -> str:
+    def _checkpoint(self, phase: int, cycle: int, full: bool = True) -> str:
         """Write a mid-run checkpoint: persist the org chart
         + each role's memory + the event log, then record the phase/cycle
-        reached in `state/checkpoint.json` (`{"phase", "cycle", "ts"}`). A
-        crash after this point loses at most the work done since — the current
-        iteration's hires, not the whole run. The checkpoint file itself is
-        written atomically (tmp + `os.replace`). Returns the checkpoint path."""
+        reached (plus the work-item recovery state) in `state/checkpoint.json`.
+        A crash after this point loses at most the work done since — the
+        current work item, not the whole phase. The checkpoint file itself is
+        written atomically (tmp + `os.replace`). Returns the checkpoint path.
+
+        ``full`` (default True) controls whether the heavy state (org chart +
+        role memory + events) is persisted. The work-item / phase-boundary
+        checkpoints use ``full=True`` (the primary recovery points); the N-action
+        progress marker (``_maybe_action_checkpoint``) uses ``full=False`` so it
+        is cheap to write every N invokes (it records only the phase/cycle +
+        work-item state — the heavy state is persisted at the next work-item /
+        phase-boundary checkpoint)."""
         org_chart_path = self.config.get("org_chart_path", "state/org_chart.json")
         memory_dir = self.config.get("memory_dir", "state/role_memory")
         checkpoint_path = self.config.get("checkpoint_path", "state/checkpoint.json")
-        self.org.save(org_chart_path)
-        # prune stale (fired) roles' memories before saving —
-        # only the active role ids (the current org's role ids + the leader)
-        # are persisted.
-        self.backend.save_state(memory_dir,
-                                active_role_ids=self._active_role_ids())
-        self.org.write_events()
+        if full:
+            self.org.save(org_chart_path)
+            # prune stale (fired) roles' memories before saving —
+            # only the active role ids (the current org's role ids + the leader)
+            # are persisted.
+            self.backend.save_state(memory_dir,
+                                    active_role_ids=self._active_role_ids())
+            self.org.write_events()
         parent = os.path.dirname(checkpoint_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        tmp = checkpoint_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"phase": phase, "cycle": cycle, "ts": time.time()}, f)
-        os.replace(tmp, checkpoint_path)
-        return checkpoint_path
+        # the checkpoint payload: the existing {phase, cycle, ts} + the work-item
+        # recovery state (completed_work_items + current_work_item) + the action
+        # count (the N-action cadence's progress marker).
+        payload = {"phase": phase, "cycle": cycle, "ts": time.time(),
+                   "action_count": getattr(self.backend, "action_count", 0)}
+        payload.update(self.work_items.snapshot())
+        # Atomic (tmp + os.replace), falling back to a direct write if the DSH
+        # sandbox denies the rename (a denied rename must not take down the run
+        # — the checkpoint is still persisted).
+        return atomic_write_json(checkpoint_path, payload)
+
+    def _maybe_action_checkpoint(self) -> None:
+        """The N-action checkpoint callback (fired by the CheckpointBackend
+        every N invokes). Writes a **light** progress marker (full=False) so it
+        is cheap to write frequently — it records the current phase/cycle + the
+        work-item state, but not the heavy org chart / memory / events (those
+        are persisted at the work-item / phase-boundary checkpoints)."""
+        self._checkpoint(self._current_phase, self.cycles, full=False)
 
     # --- The self-improving loop (bounded) ---------------------------------
 
@@ -678,6 +719,10 @@ class Session:
         logged even if the phase fails (a visible, measurable crash), and the
         original exception still propagates."""
         started = time.time()
+        # the current phase (for the N-action checkpoint callback — the
+        # CheckpointBackend fires _maybe_action_checkpoint every N invokes and
+        # needs to know which phase to record).
+        self._current_phase = phase
         try:
             return fn(*args, **kwargs)
         finally:
@@ -699,6 +744,7 @@ class Session:
         max_iterations: int = 3,
         revisit: bool = False,
         resume_from_phase: int = 1,
+        work_items_state: Optional[Dict[str, Any]] = None,
     ) -> SessionResult:
         """Run the pipeline: Phases 1-3 run **once** (intake, mission, org
         bootstrap), then Phases 4-8 **iterate** (plan, staff, execute,
@@ -723,6 +769,17 @@ class Session:
         # actions the Leader takes). Stored so the Phase 6 efficiency action
         # can call it.
         self._approver_fn = approver_fn
+        # work-item checkpointing — seed the work-item tracker from the
+        # checkpoint's recovery state (so completed work items are skipped on
+        # resume — exact next-role resumption). The in-progress work item is
+        # NOT seeded (it is re-run from scratch, per option (i)). The
+        # CheckpointBackend's `resuming` flag is set so the verify-work
+        # preamble is prepended to prompts (scoped to the resumed phase).
+        if work_items_state is not None:
+            self.work_items.seed(
+                work_items_state.get("completed_work_items", {}),
+            )
+            self.backend.resuming = True
         memory_dir = self.config.get("memory_dir", "state/role_memory")
         org_chart_path = self.config.get("org_chart_path", "state/org_chart.json")
         mission_path = self.config.get("mission_path", "MISSION.md")
@@ -861,6 +918,15 @@ class Session:
         status = "complete"
         for _ in range(max_iterations):
             self.cycles += 1
+            # work-item checkpointing — a new loop iteration (Phases 4-8)
+            # re-runs from scratch (the self-improving loop), so the previous
+            # iteration's completed work items must NOT carry over: a
+            # department already planned last iteration is re-planned this
+            # one (skipping it would dispatch zero work and escalate a no-op
+            # cycle). The resume seed (from a crashed run's checkpoint) is
+            # consumed by the FIRST iteration only.
+            if self.cycles > 1:
+                self.work_items.reset()
             # The wall-clock start of this iteration (Phases 4-8) — the source
             # for the cycle-level summary's `duration` (the per-iteration wall
             # clock, distinct from the efficiency meter's T_total, which is
@@ -889,9 +955,13 @@ class Session:
                 config=self.config,
                 solo=self.solo,
                 timing=self.timing,
+                work_items=self.work_items,
                 halt_fn=self.halt_bau,
             )
             self.phases[4] = self.phases.get(4, 0) + 1
+            # phase-boundary checkpoint floor — a crash in Phase 5 loses at
+            # most Phase 5's work (not Phase 4's).
+            self._checkpoint(4, self.cycles, full=True)
 
             # Phase 5: Staff (the per-team manager workflow — IC
             # decomposition + IC hiring).
@@ -901,9 +971,13 @@ class Session:
                 config=self.config,
                 solo=self.solo,
                 history=self.history,
+                work_items=self.work_items,
                 halt_fn=self.halt_bau,
             )
             self.phases[5] = self.phases.get(5, 0) + 1
+            # phase-boundary checkpoint floor — a crash in Phase 6 loses at
+            # most Phase 6's work (not Phase 5's).
+            self._checkpoint(5, self.cycles, full=True)
 
             # Phase 6: Execute (the per-IC work + self-edits + the A/B/C pod
             # triggers + the upward report). The formed pods accumulate in
@@ -920,10 +994,14 @@ class Session:
                 ic_timeout_seconds=self.config.get("ic_timeout_seconds"),
                 config=self.config,
                 solo=self.solo,
+                work_items=self.work_items,
                 halt_fn=self.halt_bau,
             )
             dispatch_results = exec_result.reports
             self.phases[6] = self.phases.get(6, 0) + 1
+            # phase-boundary checkpoint floor — a crash in Phase 7 loses at
+            # most Phase 7's work (not Phase 6's).
+            self._checkpoint(6, self.cycles, full=True)
             # Solo (P6): record the execute + the thinking-budget remainder so
             # the dashboard can show the budget.
             self.solo.record("p6", "Phase 6: execute", self.cycles, "dispatch",
@@ -974,6 +1052,9 @@ class Session:
             verdict = self._phase(7, self.cycles, self._evaluate_progress,
                                   bool(dispatch_results))
             self.phases[7] = self.phases.get(7, 0) + 1
+            # phase-boundary checkpoint floor — a crash in Phase 8 loses at
+            # most Phase 8's work (not Phase 7's).
+            self._checkpoint(7, self.cycles, full=True)
 
             # the same check before Phase 8 (decide) — a
             # global halt does not run the continue/complete decision.

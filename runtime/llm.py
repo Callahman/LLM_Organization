@@ -19,6 +19,7 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from runtime.context import RoleMemory, assemble_prompt
+from runtime.atomic import atomic_write_json
 
 
 class Reasoning(Enum):
@@ -293,10 +294,11 @@ class MemoryBackend(LLMBackend):
         saved = 0
         for role_id, memory in self.role_memories.items():
             path = os.path.join(directory, f"{role_id}.json")
-            tmp = os.path.join(directory, f"{role_id}.json.tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(memory.to_dict(), f, ensure_ascii=False, indent=2)
-            os.replace(tmp, path)
+            # Atomic (tmp + os.replace), falling back to a direct write if the
+            # DSH sandbox denies the rename (a denied rename must not take down
+            # the run — the memory is still persisted).
+            atomic_write_json(path, memory.to_dict(),
+                              ensure_ascii=False, indent=2)
             saved += 1
         return saved
 

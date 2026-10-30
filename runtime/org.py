@@ -35,6 +35,7 @@ from roles.worker import worker_output_schema
 from runtime.mission import MissionResult
 from runtime.complexity import classify_complexity
 from runtime.pods import form_pod, run_pod, log_devils_advocate_listening
+from runtime.atomic import atomic_write_json
 
 # Required departments (spun up at bootstrap; cannot be fired). A single
 # **governance** supervisor (safety + morality + HR resourcing consolidated)
@@ -151,18 +152,14 @@ class OrgState:
         the JSON goes to `path + ".tmp"` first, then `os.replace` swaps it in —
         a crash mid-write leaves the previous good chart intact (no partial
         JSON). Returns the path written."""
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
         payload = {
             "roles": {rid: r.to_dict() for rid, r in self.roles.items()},
             "role_definitions": self.role_definitions,
         }
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-        return path
+        # Atomic (tmp + os.replace), falling back to a direct write if the DSH
+        # sandbox denies the rename (a denied rename must not take down the run
+        # — the chart is still persisted).
+        return atomic_write_json(path, payload, ensure_ascii=False, indent=2)
 
     @classmethod
     def load(cls, path: str = "state/org_chart.json",

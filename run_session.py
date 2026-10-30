@@ -98,14 +98,19 @@ def _decide_run_mode(args, mission_path, checkpoint_path):
 
     The default mode is **revisit** (``run_session.py`` defaults to
     ``--revisit`` when no mode flag is given). Returns
-    ``(mode, resume_point, resume_from_phase)`` where:
+    ``(mode, resume_point, resume_from_phase, work_items_state)`` where:
 
     - ``mode`` is ``"fresh"`` or ``"revisit"``.
     - ``resume_point`` is a string describing where the run starts (for the
       visible log).
     - ``resume_from_phase`` is the phase to start from (1 for a fresh run or a
       revisit with no checkpoint; 4 for a revisit from a checkpoint at phase 3
-      or 4, which skips Phases 1-3).
+      or later, which skips Phases 1-3).
+    - ``work_items_state`` is the checkpoint's work-item recovery state
+      (``{"completed_work_items", "current_work_item"}``) for a resume from a
+      checkpoint, or ``None`` for a fresh run / a revisit with no checkpoint.
+      ``Session.run`` seeds the work-item tracker from it (so completed work
+      items are skipped on resume — exact next-role resumption).
 
     Precedence:
     1. ``--fresh`` (explicit) -> fresh.
@@ -114,15 +119,23 @@ def _decide_run_mode(args, mission_path, checkpoint_path):
     4. no checkpoint -> revisit from the last phase (re-clarify from Phase 1).
     """
     if getattr(args, "fresh", False):
-        return "fresh", "Phase 1 (fresh, --forced)", 1
+        return "fresh", "Phase 1 (fresh, --forced)", 1, None
     if not os.path.exists(mission_path):
-        return "fresh", "Phase 1 (fresh, no MISSION.md)", 1
+        return "fresh", "Phase 1 (fresh, no MISSION.md)", 1, None
     if os.path.exists(checkpoint_path):
         cp_phase, cp_cycle = 3, 0
+        work_items_state = None
         try:
             with open(checkpoint_path, encoding="utf-8") as f:
                 cp = json.load(f)
             cp_phase, cp_cycle = cp.get("phase", 3), cp.get("cycle", 0)
+            # the work-item recovery state (completed departments / teams /
+            # ICs + the in-progress one) — seeded into the work-item tracker
+            # so completed work items are skipped on resume.
+            work_items_state = {
+                "completed_work_items": cp.get("completed_work_items", {}),
+                "current_work_item": cp.get("current_work_item"),
+            }
         except (OSError, ValueError) as e:
             # Visible: a corrupt / unreadable checkpoint is not silently
             # ignored — the operator sees it and knows the run falls back to
@@ -130,14 +143,15 @@ def _decide_run_mode(args, mission_path, checkpoint_path):
             print(f"[checkpoint] corrupt/unreadable checkpoint at "
                   f"{checkpoint_path} ({e}) — falling back to the default "
                   f"resume point (phase 3)")
-        # A checkpoint at phase 3 or 4 -> resume from Phase 4 (skip Phases
-        # 1-3; the org + mission are loaded, the dispatch continues).
+        # A checkpoint at phase 3 or later -> resume from Phase 4 (skip
+        # Phases 1-3; the org + mission are loaded, the dispatch continues,
+        # and the completed work items are skipped).
         resume_from_phase = 4 if cp_phase >= 3 else cp_phase + 1
         return ("revisit",
                 f"checkpoint phase {cp_phase}, cycle {cp_cycle}",
-                resume_from_phase)
+                resume_from_phase, work_items_state)
     return ("revisit",
-            "last phase (no checkpoint, re-clarify from Phase 1)", 1)
+            "last phase (no checkpoint, re-clarify from Phase 1)", 1, None)
 
 
 def main() -> None:
@@ -211,10 +225,15 @@ def main() -> None:
     # no mode flag is given).
     mission_path = config.get("mission_path", "MISSION.md")
     checkpoint_path = config.get("checkpoint_path", "state/checkpoint.json")
-    run_mode, resume_point, resume_from_phase = _decide_run_mode(
-        args, mission_path, checkpoint_path)
+    run_mode, resume_point, resume_from_phase, work_items_state = \
+        _decide_run_mode(args, mission_path, checkpoint_path)
     print(f"[run-mode] mode={run_mode}, resume from: {resume_point}, "
           f"resume_from_phase={_phase_label(resume_from_phase)}")
+    if work_items_state:
+        _completed = work_items_state.get("completed_work_items", {})
+        _n_completed = sum(len(v) for v in _completed.values())
+        print(f"[run-mode] resuming with {_n_completed} completed work "
+              f"item(s) — they will be skipped (exact next-role resumption)")
 
     # a fresh run clears the generated state first (visible, never
     # silent) — the same wipe logic as `reset_org --yes`, so a run with no
@@ -254,8 +273,12 @@ def main() -> None:
         max_iterations=config.get("max_iterations", 2),
         revisit=(run_mode == "revisit"),
         # the resume-from phase (a revisit from a checkpoint at phase 3
-        # or 4 skips Phases 1-3 and resumes from Phase 4).
+        # or later skips Phases 1-3 and resumes from Phase 4).
         resume_from_phase=resume_from_phase,
+        # the work-item recovery state (completed departments / teams / ICs +
+        # the in-progress one) — seeded into the work-item tracker so
+        # completed work items are skipped on resume.
+        work_items_state=work_items_state,
     )
 
     print("=== Session complete ===")

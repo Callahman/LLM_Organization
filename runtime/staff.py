@@ -33,6 +33,7 @@ from runtime.pods import (
     log_devils_advocate_listening,
 )
 from runtime.plan import PlanResult
+from runtime.checkpoint import WorkItemTracker
 from runtime.dispatch_common import (
     _manager_ctx,
     _decomposition_list,
@@ -85,11 +86,17 @@ def run_staff(
     config: Optional[Dict[str, Any]] = None,
     solo: Optional[SoloTracker] = None,
     history: Optional[HistoryStore] = None,
+    work_items: Optional[WorkItemTracker] = None,
     halt_fn: Optional[Callable[[str, str, str], None]] = None,
 ) -> StaffResult:
     """Run Phase 5 (Staff): the per-team manager workflow (IC decomposition +
     IC hiring). Consumes the ``PlanResult`` from Phase 4 (Plan) and returns a
     ``StaffResult`` for Phase 6 (Execute) to consume.
+
+    ``work_items`` (optional) is the session's work-item tracker; when supplied,
+    each team is marked started/completed in the per-team loop so a crash
+    mid-phase checkpoints the completed teams (exact next-role resumption skips
+    them on resume).
 
     ``approver_fn`` (optional) lets the staff hire the ICs it decomposes onto
     when they don't exist yet (the managers->ICs chain); without it, the staff
@@ -102,6 +109,19 @@ def run_staff(
         head = dept["head"]
         teams: List[Dict[str, Any]] = []
         for t_obj in dept["team_objectives"]:
+            # work-item checkpointing — the team's stable key (the manager id,
+            # or the head-directed ic_id when there is no manager). Marked
+            # started/completed so a crash mid-team checkpoints the completed
+            # teams (on resume, completed teams are skipped).
+            team_key = t_obj.get("manager_id") or t_obj.get("ic_id") or ""
+            # work-item checkpointing — skip this team if it is already
+            # completed (a resume from a checkpoint). Its ICs are already
+            # hired (on disk), so re-running it would only duplicate work.
+            if work_items is not None and team_key \
+                    and work_items.is_completed(5, team_key):
+                continue
+            if work_items is not None and team_key:
+                work_items.mark_started(5, team_key, "team")
             manager = org.get(t_obj.get("manager_id", ""))
             if manager is not None:
                 # the **head+manager clarification pod** (per team) —
@@ -305,6 +325,9 @@ def run_staff(
                          "task": t_obj.get("objective", "")},
                     ],
                 })
+            # work-item checkpointing — mark this team completed.
+            if work_items is not None and team_key:
+                work_items.mark_completed(5, team_key)
         departments.append({
             "head": head,
             "objective": dept["objective"],

@@ -35,7 +35,7 @@ from prompts import (
     POD_CTX_PRIOR_LABEL,
 )
 from roles.base import Role
-from runtime.llm import LLMBackend
+from runtime.llm import LLMBackend, Reasoning
 from runtime.complexity import pod_levels
 from runtime.coerce import as_str_list
 from runtime.context import bounded_assembly
@@ -267,7 +267,7 @@ def governance_review_pod(backend, org, pod: Pod,
     )
     # A bounded, low-complexity invoke of the governance head.
     try:
-        out = backend.invoke(gov, ctx, reasoning="low", phase=7)
+        out = backend.invoke(gov, ctx, reasoning=Reasoning.LOW, phase=7)
     except Exception as e:
         # Visible, never silent: a governance review failure must not take down
         # the phase.

@@ -31,6 +31,7 @@ from runtime.complexity import classify_complexity
 from runtime.history import HistoryStore
 from runtime.pods import SoloTracker, form_pod
 from runtime.staff import StaffResult
+from runtime.checkpoint import WorkItemTracker
 from runtime.dispatch_common import (
     _ic_ctx,
     _work_path,
@@ -70,12 +71,18 @@ def run_execute(
     ic_timeout_seconds: Optional[float] = None,
     config: Optional[Dict[str, Any]] = None,
     solo: Optional[SoloTracker] = None,
+    work_items: Optional[WorkItemTracker] = None,
     halt_fn: Optional[Callable[[str, str, str], None]] = None,
 ) -> ExecuteResult:
     """Run Phase 6 (Execute): the per-IC work + self-edits + the A/B/C pod
     triggers + the upward report. Consumes the ``StaffResult`` from Phase 5
     (Staff) and returns an ``ExecuteResult`` (the leader's view — the same
     shape the old ``dispatch`` returned).
+
+    ``work_items`` (optional) is the session's work-item tracker; when supplied,
+    each IC is marked started/completed in the per-IC loop so a crash mid-phase
+    checkpoints the completed ICs (exact next-role resumption skips them on
+    resume).
 
     ``pods_out`` (optional) collects the pods formed by the A/B/C triggers
     (for the leader's synthesis + the session's pod records).
@@ -100,6 +107,17 @@ def run_execute(
                     ic = org.get(task.get("ic_id", ""))
                     if ic is None:
                         continue
+                    # work-item checkpointing — skip this IC if it is already
+                    # completed (a resume from a checkpoint). Its work is
+                    # already done (on disk), so re-running it would only
+                    # duplicate work.
+                    if work_items is not None and work_items.is_completed(6, ic.id):
+                        continue
+                    # work-item checkpointing — mark this IC started (the
+                    # checkpoint's recovery state; on resume, completed ICs are
+                    # skipped, so a crash mid-IC re-runs only this IC).
+                    if work_items is not None:
+                        work_items.mark_started(6, ic.id, "ic")
                     # the **manager+ic clarification pod** (per IC) —
                     # a 2-member parent+child pod that clarifies the IC's
                     # task. It runs BEFORE the IC's work (the work
@@ -221,6 +239,10 @@ def run_execute(
                     # validated against the role's scope + the org's artifact
                     # rules; a refusal is logged, never swallowed).
                     _apply_ic_self_edits(ic, ic_out, history, backend, phase=6)
+                    # work-item checkpointing — mark this IC completed (the
+                    # checkpoint's recovery state).
+                    if work_items is not None:
+                        work_items.mark_completed(6, ic.id)
                 # The pods A/B/C multi-trigger (disagreement / cross-team /
                 # routing rule). The manager + the ICs involved form the pod;
                 # its decision is carried all three ways.
@@ -242,6 +264,15 @@ def run_execute(
                 ic = org.get(ic_tasks[0].get("ic_id", "")) if ic_tasks else None
                 if ic is None:
                     continue
+                # work-item checkpointing — skip this IC if it is already
+                # completed (a resume from a checkpoint). Its work is already
+                # done (on disk), so re-running it would only duplicate work.
+                if work_items is not None and work_items.is_completed(6, ic.id):
+                    continue
+                # work-item checkpointing — mark this IC started (the
+                # checkpoint's recovery state).
+                if work_items is not None:
+                    work_items.mark_started(6, ic.id, "ic")
                 ic_out, ic_err = _invoke_ic(
                     backend, ic,
                     _ic_ctx(
@@ -277,6 +308,10 @@ def run_execute(
                 # against the role's scope + the org's artifact rules; a
                 # refusal is logged, never swallowed).
                 _apply_ic_self_edits(ic, ic_out, history, backend, phase=6)
+                # work-item checkpointing — mark this IC completed (the
+                # checkpoint's recovery state).
+                if work_items is not None:
+                    work_items.mark_completed(6, ic.id)
                 # The pods A/B/C multi-trigger (the head is the starter, not
                 # in the members).
                 _check_pod_triggers(

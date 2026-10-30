@@ -18,6 +18,8 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
+from runtime.atomic import safe_rename
+
 
 # The role-hierarchy level derived from the architype (Leader/Head/Manager/IC)
 # — the "level in hierarchy" the invocations log records alongside the architype.
@@ -95,7 +97,10 @@ class HistoryStore:
         n = 1
         while os.path.exists(f"{base}.{n}{ext}"):
             n += 1
-        os.replace(path, f"{base}.{n}{ext}")
+        # os.replace, falling back to copy+remove if the DSH sandbox denies the
+        # rename (rotation is maintenance — a denied rename must not crash the
+        # append path).
+        safe_rename(path, f"{base}.{n}{ext}")
 
     # --- invocation (reasoning) log ----------------------------------------
 
@@ -290,7 +295,10 @@ class HistoryStore:
             old = files[moved]
             src = os.path.join(self.history_dir, old)
             dst = os.path.join(self.archives_dir, old)
-            os.replace(src, dst)
+            # os.replace, falling back to copy+remove if the DSH sandbox denies
+            # the rename (the archive window is maintenance — a denied rename
+            # must not crash the end-of-run maintain()).
+            safe_rename(src, dst)
             moved += 1
         return moved
 

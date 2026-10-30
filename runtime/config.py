@@ -108,6 +108,12 @@ ENV_TO_CONFIG: Dict[str, Tuple[str, Any]] = {
     # Session's Execute phase reads and hands to the A/B/C trigger check
     # (dispatch_common._check_pod_triggers).
     "ROUTING_RULES": ("pod_routing_rules", _parse_routing_rules),
+    # the **N-action checkpoint cadence** — the work-item checkpoint (the
+    # mid-phase checkpoint) fires every N backend actions (default 5). The
+    # phase-boundary checkpoint (the end-of-phase checkpoint) always fires.
+    # Plumbed to `checkpoint_every_n_actions` (read by the Session's
+    # CheckpointBackend; the code default is 5 in runtime/session.py).
+    "CHECKPOINT_EVERY_N_ACTIONS": ("checkpoint_every_n_actions", int),
 }
 
 # The ``LLM_*`` keys read directly by ``make_backend`` (not mapped here, but

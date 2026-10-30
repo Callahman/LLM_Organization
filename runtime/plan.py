@@ -31,6 +31,7 @@ from runtime.llm import LLMBackend
 from runtime.complexity import classify_complexity
 from runtime.history import HistoryStore
 from runtime.timing import TimingTracker
+from runtime.checkpoint import WorkItemTracker
 from runtime.pods import (
     SoloTracker,
     form_pod,
@@ -169,11 +170,17 @@ def run_plan(
     config: Optional[Dict[str, Any]] = None,
     solo: Optional[SoloTracker] = None,
     timing: Optional[TimingTracker] = None,
+    work_items: Optional[WorkItemTracker] = None,
     halt_fn: Optional[Callable[[str, str, str], None]] = None,
 ) -> PlanResult:
     """Run Phase 4 (Plan): the leader decomposition + the per-department head
     workflow (policies, team decomposition, manager hiring). Returns a
     ``PlanResult`` for Phase 5 (Staff) to consume.
+
+    ``work_items`` (optional) is the session's work-item tracker; when supplied,
+    each department is marked started/completed in the per-department loop so a
+    crash mid-phase checkpoints the completed departments (exact next-role
+    resumption skips them on resume).
 
     ``approver_fn`` (optional) lets the plan hire the managers it decomposes
     onto when they don't exist yet (the heads->managers chain); without it,
@@ -318,6 +325,16 @@ def run_plan(
                      "reason": "head not in the org (never created in Phase 3)"},
                 )
             continue
+        # work-item checkpointing — skip this department if it is already
+        # completed (a resume from a checkpoint). Its managers are already
+        # hired (on disk), so re-running it would only duplicate work.
+        if work_items is not None and work_items.is_completed(4, head.id):
+            continue
+        # work-item checkpointing — mark this department started (the
+        # checkpoint's recovery state; on resume, completed departments are
+        # skipped, so a crash mid-department re-runs only this department).
+        if work_items is not None:
+            work_items.mark_started(4, head.id, "department")
         head_out = _invoke_decomposition(
             backend, head,
             _head_ctx(head, obj.get("objective", ""), digest),
@@ -382,6 +399,10 @@ def run_plan(
             "objective": obj.get("objective", ""),
             "team_objectives": team_objectives,
         })
+        # work-item checkpointing — mark this department completed (the
+        # checkpoint's recovery state).
+        if work_items is not None:
+            work_items.mark_completed(4, head.id)
     return PlanResult(
         digest=digest,
         dept_objectives=dept_objectives,
