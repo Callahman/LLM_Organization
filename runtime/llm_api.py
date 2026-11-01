@@ -53,7 +53,9 @@ TOOL_DESCRIPTION = (
     "Submit your structured output for this task. Call this tool exactly "
     "once; its arguments are your complete output and must match your "
     "role's output schema. Do not emit placeholder, dummy, or partial "
-    "calls: your first call must be your complete final answer."
+    "calls: your first call must be your complete final answer. Do not "
+    "answer in plain prose or text: this tool call is the ONLY acceptable "
+    "output — never a free-form sentence or a 'Closed: ...' summary."
 )
 
 # The known nested keys that must be JSON objects (dicts) — the Phase-2/3/4
@@ -272,7 +274,11 @@ class OpenAIBackend(LLMBackend):
                   "role's output schema. Do NOT emit placeholder, "
                   "dummy, or partial tool calls: your FIRST "
                   f"{TOOL_NAME} call must be your complete final "
-                  "answer (a single JSON object)." + directive)
+                  "answer (a single JSON object). Do NOT answer in "
+                  "plain prose or text: the ONLY acceptable output "
+                  f"is the {TOOL_NAME} tool call — never a "
+                  "free-form sentence, a 'Closed: ...' summary, or "
+                  "any reply that is not the tool call." + directive)
         return {
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -424,21 +430,26 @@ class OpenAIBackend(LLMBackend):
     def _parse(data: Dict[str, Any], finish_reason: str = "") -> Tuple[Dict[str, Any], str]:
         """Extract the shared output envelope from a chat completion reply.
 
-        Returns ``(envelope, outcome)`` where outcome is ``"tool_call"`` or
-        ``"content_fallback"``. Preferred: the ``submit_output`` tool call's
-        JSON arguments. A model (a known Qwen3 quirk, via KoboldCpp jinja
-        tools) can call the forced tool TWICE in one reply — a placeholder /
-        dummy call followed by the real one — so the **last** parseable
-        ``submit_output`` envelope wins (the model's final answer comes
-        last); if none parses, the first parse failure is raised (visible,
-        never silent) — flagged ``truncated=True`` when the failure is a
-        truncation (the stream ended mid-JSON: ``finish_reason`` is
-        ``"length"`` or the parse is truncation-shaped on a plausible,
+        Returns ``(envelope, outcome)`` where outcome is ``"tool_call"``,
+        ``"content_fallback"``, or ``"prose_recovered"``. Preferred: the
+        ``submit_output`` tool call's JSON arguments. A model (a known Qwen3
+        quirk, via KoboldCpp jinja tools) can call the forced tool TWICE in
+        one reply — a placeholder / dummy call followed by the real one — so
+        the **last** parseable ``submit_output`` envelope wins (the model's
+        final answer comes last); if none parses, the first parse failure is
+        raised (visible, never silent) — flagged ``truncated=True`` when the
+        failure is a truncation (the stream ended mid-JSON: ``finish_reason``
+        is ``"length"`` or the parse is truncation-shaped on a plausible,
         unbalanced JSON prefix), which the bounded retry loop in ``invoke``
         treats as transient. Fallback: plain JSON ``content`` (a server that
         ignored the tool), or a call the model wrote as **text** inside
         ``content`` (a fenced JSON block or an embedded JSON object, via
-        ``_recover_tool_call``).
+        ``_recover_tool_call``). If the model ignored the tool AND the content
+        is **pure prose** (no JSON at all) — a truncation-shaped prefix still
+        raises (retried) — a valid envelope is **recovered** (the prose as the
+        bounded ``summary``, ``confidence`` 0.0, an ``error`` marker) and the
+        outcome is ``"prose_recovered"`` (a visible note + a safe fallback,
+        never a crash).
         """
         message = data["choices"][0]["message"]
         last_envelope: Optional[Dict[str, Any]] = None
@@ -486,12 +497,31 @@ class OpenAIBackend(LLMBackend):
             raise first_err
         truncated = OpenAIBackend._is_truncation(content, finish_reason,
                                                  content_err)
-        note = (OpenAIBackend._truncation_note(content, finish_reason)
-                if truncated else "")
-        raise OpenAIOutputError(
-            f"reply has no {TOOL_NAME} tool call and no JSON object content"
-            f"{note}: {content[:300]!r}"
-        , truncated=truncated)
+        if truncated:
+            # A truncation (the stream ended mid-JSON): raise so the bounded
+            # retry loop in invoke retries (existing behavior — a truncation
+            # is transient, unlike a malformed shape).
+            note = OpenAIBackend._truncation_note(content, finish_reason)
+            raise OpenAIOutputError(
+                f"reply has no {TOOL_NAME} tool call and no JSON object "
+                f"content{note}: {content[:300]!r}"
+            , truncated=True)
+        # Not a truncation: the model did not honor the forced submit_output
+        # contract (no tool call, no JSON) — it answered in pure prose (or
+        # returned nothing). Recover a valid envelope so the run does not
+        # crash (a visible note + a safe fallback, never a crash — the
+        # codebase's pattern): the prose becomes the `summary` (bounded; empty
+        # if there was no prose) and the confidence is 0.0 + an `error` marker
+        # (exactly the safe-fallback shape validate_and_quarantine uses for an
+        # invalid envelope). The visible note + the audit-trail record are
+        # logged from invoke (which has the role); the outcome
+        # `prose_recovered` signals it.
+        return {
+            "summary": " ".join(content.split())[:600] if content.strip()
+                      else "",
+            "confidence": 0.0,
+            "error": "prose_not_tool_call",
+        }, "prose_recovered"
 
     @staticmethod
     def _recover_tool_call(content: str) -> Optional[Dict[str, Any]]:
@@ -588,13 +618,19 @@ class OpenAIBackend(LLMBackend):
             pass  # observability must never break the pipeline
 
     def _error_type(self, outcome: str, error: str) -> Optional[str]:
-        """Classify a failure (`timeout|truncation|parse|transport|other`) so
-        the dashboard can segment failures without pattern-matching the
-        free-form `error` string (A0). `None` on a successful call."""
+        """Classify a failure (`timeout|truncation|parse|transport|quarantined|
+        prose_recovered|other`) so the dashboard can segment failures without
+        pattern-matching the free-form `error` string (A0). `None` on a
+        successful call."""
         if outcome in ("tool_call", "content_fallback"):
             return None
         if outcome == "quarantined":
             return "quarantined"  # a dropped malformed tool_call
+        if outcome == "prose_recovered":
+            # the model answered in prose (no tool call, no JSON) — a valid
+            # envelope was recovered; a distinct, non-fatal error type so the
+            # dashboard can segment it from hard parse failures.
+            return "prose_recovered"
         e = (error or "").lower()
         if "timeout" in e or "timed out" in e:
             return "timeout"
@@ -796,6 +832,25 @@ class OpenAIBackend(LLMBackend):
                     # An invalid envelope: record it as an error (not the
                     # standard success row) and return the safe fallback.
                     self._report(role, "error", t0, error="; ".join(events))
+                    return out
+                if outcome == "prose_recovered":
+                    # Fix 1 + Fix 3: the model answered in pure prose (no
+                    # submit_output tool call, no JSON) — it did not honor the
+                    # forced tool contract. A valid envelope was recovered (the
+                    # prose as the bounded `summary`, confidence 0.0 + an
+                    # `error` marker). Log a visible note + record it in the
+                    # audit trail as a distinct `prose_recovered` event, so the
+                    # dashboard's errors chart can show the count of prose
+                    # recoveries per run ("noisier than normal" is measurable).
+                    print(
+                        f"[llm] model emitted pure prose (no {TOOL_NAME} tool "
+                        f"call, no JSON) from {role_id} — recovered a valid "
+                        f"envelope (visible note, never silent).",
+                        file=sys.stderr,
+                    )
+                    self._report(role, "prose_recovered", t0,
+                                 error=(f"pure prose (no {TOOL_NAME} tool "
+                                        f"call, no JSON) from {role_id}"))
                     return out
                 if any("quarantined malformed tool_call" in ev for ev in events):
                     # A quarantined tool_call: record it in the audit trail

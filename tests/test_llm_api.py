@@ -485,11 +485,16 @@ def test_fallback_to_json_content_when_tool_ignored(monkeypatch):
     assert out["confidence"] == 0.2
 
 
-def test_non_json_content_raises_visible(monkeypatch):
+def test_non_json_content_recovers_valid_envelope(monkeypatch):
+    # Fix 1: the model answered in pure prose (no tool call, no JSON) — a
+    # valid envelope is recovered (the prose as the bounded `summary`,
+    # confidence 0.0 + an `error` marker) instead of a crash.
     _install_fake_httpx(monkeypatch, _content_reply("I cannot comply."))
     backend = OpenAIBackend(model="m", base_url="http://x/v1")
-    with pytest.raises(OpenAIOutputError):
-        backend.invoke(_role(), "ctx")
+    out = backend.invoke(_role(), "ctx")
+    assert out["summary"] == "I cannot comply."
+    assert out["confidence"] == 0.0
+    assert out["error"] == "prose_not_tool_call"
 
 
 def test_malformed_tool_arguments_raise_visible(monkeypatch):
@@ -504,11 +509,31 @@ def test_malformed_tool_arguments_raise_visible(monkeypatch):
         backend.invoke(_role(), "ctx")
 
 
-def test_no_tool_call_and_no_content_raises_visible(monkeypatch):
+def test_no_tool_call_and_no_content_recovers_empty_envelope(monkeypatch):
+    # Fix 1: no tool call and no content — an empty valid envelope is
+    # recovered (empty `summary`, confidence 0.0 + an `error` marker) instead
+    # of a crash.
     _install_fake_httpx(monkeypatch, _content_reply(""))
     backend = OpenAIBackend(model="m", base_url="http://x/v1")
-    with pytest.raises(OpenAIOutputError):
-        backend.invoke(_role(), "ctx")
+    out = backend.invoke(_role(), "ctx")
+    assert out["summary"] == ""
+    assert out["confidence"] == 0.0
+    assert out["error"] == "prose_not_tool_call"
+
+
+def test_prose_recovery_is_reported(monkeypatch):
+    # Fix 3: a prose recovery is recorded in the audit trail as a distinct
+    # `prose_recovered` event (via on_call), with a distinct `error_type`, so
+    # the dashboard's errors chart can show the count of prose recoveries per
+    # run ("noisier than normal" is measurable).
+    _install_fake_httpx(monkeypatch, _content_reply("Closed: the schema change."))
+    rows = []
+    backend = OpenAIBackend(model="m", base_url="http://x/v1")
+    backend.on_call = rows.append
+    out = backend.invoke(_role(), "ctx")
+    assert out["error"] == "prose_not_tool_call"
+    assert any(r.get("outcome") == "prose_recovered" for r in rows)
+    assert any(r.get("error_type") == "prose_recovered" for r in rows)
 
 
 # --- the Phase-4 failure: a placeholder tool call + the real one -----------------

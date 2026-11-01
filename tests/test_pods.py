@@ -113,6 +113,33 @@ def test_deadlock_detection(tmp_path):
     assert "deadlock" in pod.closed_reason
 
 
+def test_pod_close_failure_is_contained():
+    # Fix 2: a close invoke failure is visible, never fatal — the pod closes
+    # with a low-confidence, empty decision (a visible `invoke_failed` note in
+    # the transcript) instead of taking down the whole session.
+    roles = _roles()
+    pod = pods.form_pod(roles, "ic1", ["ic1", "mgr1"], "schema change")
+
+    class _CloseFailsBackend:
+        """A backend whose close invoke raises (to test Fix 2 containment)."""
+        def invoke(self, role, context, reasoning=None, phase=None, **kwargs):
+            if ": close" in context:
+                raise RuntimeError("simulated close failure")
+            if ": agenda" in context:
+                return {"summary": "agenda set", "agenda": "decide"}
+            return {"summary": "speak summary"}
+
+    backend = _CloseFailsBackend()
+    # Must NOT raise (Fix 2 containment).
+    pods.run_pod(backend, pod, max_rounds=1)
+    # The pod closed with a low-confidence, empty decision.
+    assert pod.decision == ""
+    assert "close failed" in pod.rationale
+    assert "close failed" in pod.closed_reason
+    # A visible note is in the transcript.
+    assert any(e.get("kind") == "invoke_failed" for e in pod.transcript)
+
+
 # ---: pod context & lifecycle bounding ----------------
 
 

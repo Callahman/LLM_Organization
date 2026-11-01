@@ -312,6 +312,17 @@ def _pod_ctx(pod: Pod, kind: str, prior: str = "",
         )
     if prior:
         header_parts.append(POD_CTX_PRIOR_LABEL + prior)
+    # Fix 4: a close-step nudge (the Phase-7 crash happened on the close
+    # invoke, where the model answered in prose instead of calling the tool).
+    # Restate, right at the close, that the ONLY acceptable output is the
+    # submit_output tool call — never a 'Closed: ...' sentence.
+    if kind == "close":
+        header_parts.append(
+            "Close by calling the submit_output tool with the decision, "
+            "rationale, and open_items. Do NOT answer in plain prose or "
+            "text: a 'Closed: ...' sentence is not an acceptable output — "
+            "the tool call is the only thing that counts."
+        )
     # The shared output-batching + completeness rule (the pod's decision is a
     # large structured output).
     header_parts.append(OUTPUT_BATCHING_RULE)
@@ -369,14 +380,27 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
     # bumped into a member).
     originator_level, member_level = pod_levels(phase, pod.starter, pod.members)
     # 1. The starter (originator) sets the agenda.
-    out = backend.invoke(pod.starter,
-                         _pod_ctx(pod, "agenda", budget_tokens=budget_tokens),
-                         reasoning=originator_level, phase=phase)
-    pod.agenda = str(out.get("agenda", ""))
-    pod.transcript.append({
-        "kind": "agenda", "role": pod.starter.id,
-        "summary": str(out.get("summary", "")),
-    })
+    # Fix 2: an agenda invoke failure is visible, never fatal (a visible note
+    # in the transcript + the pod continues with an empty agenda) — the same
+    # "a visible note + a safe fallback, never a crash" pattern the codebase
+    # uses elsewhere (governance_review_pod, _devils_advocate_verdict).
+    try:
+        out = backend.invoke(pod.starter,
+                             _pod_ctx(pod, "agenda",
+                                      budget_tokens=budget_tokens),
+                             reasoning=originator_level, phase=phase)
+    except Exception as e:
+        pod.agenda = ""
+        pod.transcript.append({
+            "kind": "invoke_failed", "role": pod.starter.id,
+            "summary": f"agenda invoke failed: {type(e).__name__}: {e}",
+        })
+    else:
+        pod.agenda = str(out.get("agenda", ""))
+        pod.transcript.append({
+            "kind": "agenda", "role": pod.starter.id,
+            "summary": str(out.get("summary", "")),
+        })
     if transcripts_dir:
         write_transcripts(pod, transcripts_dir)
 
@@ -394,9 +418,21 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
             break
         this_round: List[tuple] = []
         for member in pod.members:
-            out = backend.invoke(member,
-                                 _pod_ctx(pod, "speak", budget_tokens=budget_tokens),
-                                 reasoning=member_level, phase=phase)
+            # Fix 2: a speak invoke failure is visible, never fatal (a visible
+            # note in the transcript + the member's turn is skipped with an
+            # empty summary, so the round + deadlock detection still proceed).
+            try:
+                out = backend.invoke(member,
+                                     _pod_ctx(pod, "speak",
+                                              budget_tokens=budget_tokens),
+                                     reasoning=member_level, phase=phase)
+            except Exception as e:
+                pod.transcript.append({
+                    "kind": "invoke_failed", "role": member.id, "round": round,
+                    "summary": f"speak invoke failed: {type(e).__name__}: {e}",
+                })
+                this_round.append((member.id, ""))
+                continue
             summary = str(out.get("summary", ""))
             this_round.append((member.id, summary))
             pod.transcript.append({
@@ -413,18 +449,35 @@ def run_pod(backend: LLMBackend, pod: Pod, max_rounds: Optional[int] = None,
 
     # 3. The starter (originator) always closes, producing the decision — at
     # `originator_level` (one level higher than the members).
-    out = backend.invoke(pod.starter,
-                         _pod_ctx(pod, "close", budget_tokens=budget_tokens),
-                         reasoning=originator_level, phase=phase)
-    pod.decision = str(out.get("decision", ""))
-    pod.rationale = str(out.get("rationale", ""))
-    pod.open_items = as_str_list(out.get("open_items", []))
-    if not pod.closed_reason:
-        pod.closed_reason = "closed by starter"
-    pod.transcript.append({
-        "kind": "close", "role": pod.starter.id, "decision": pod.decision,
-        "rationale": pod.rationale, "open_items": pod.open_items,
-    })
+    # Fix 2: a close invoke failure is visible, never fatal (a visible note in
+    # the transcript + the pod closes with a low-confidence, empty decision so
+    # the (partial) decision can still be carried up the line — the pod
+    # terminates instead of taking down the whole session).
+    try:
+        out = backend.invoke(pod.starter,
+                             _pod_ctx(pod, "close",
+                                      budget_tokens=budget_tokens),
+                             reasoning=originator_level, phase=phase)
+    except Exception as e:
+        pod.decision = ""
+        pod.rationale = f"close failed: {type(e).__name__}: {e}"
+        pod.open_items = []
+        pod.closed_reason = f"close failed: {type(e).__name__}"
+        pod.transcript.append({
+            "kind": "invoke_failed", "role": pod.starter.id,
+            "decision": pod.decision, "rationale": pod.rationale,
+            "open_items": pod.open_items,
+        })
+    else:
+        pod.decision = str(out.get("decision", ""))
+        pod.rationale = str(out.get("rationale", ""))
+        pod.open_items = as_str_list(out.get("open_items", []))
+        if not pod.closed_reason:
+            pod.closed_reason = "closed by starter"
+        pod.transcript.append({
+            "kind": "close", "role": pod.starter.id, "decision": pod.decision,
+            "rationale": pod.rationale, "open_items": pod.open_items,
+        })
     # Governance (Task 2): after the pod closes, the consolidated governance
     # supervisor (safety + morality + HR) listens to the pod's decision and
     # interrupts on out-of-policy behavior (a real-time governance_interrupt
